@@ -111,6 +111,9 @@ th { color:#87918e; font-weight:600; }
 .user-message { margin-left:38px; border-radius:11px 11px 2px 11px; padding:11px; background:#1d2b28; color:#fff; font-size:11px; line-height:1.55; }
 .assistant-message { display:flex; gap:8px; margin-top:15px; font-size:11px; line-height:1.55; }
 .assistant-message p { margin:2px 0 10px; color:#59635f; }
+.validation-error { margin:0 0 10px; padding:10px 11px; border:1px solid #efb4ad; border-radius:10px; background:#fff3f1; color:#8f2f25; }
+.validation-error b { font-size:10px; }
+.validation-error p { margin:4px 0 0; color:#8f2f25; font-size:9px; line-height:1.5; overflow-wrap:anywhere; }
 .change-plan { border:1px solid #d9dfdc; border-radius:12px; overflow:hidden; box-shadow:0 6px 20px #223a3110; }
 .plan-head { display:flex; justify-content:space-between; padding:11px 12px; background:#fafbfb; border-bottom:1px solid #e6eae8; }
 .plan-head span { border-radius:20px; padding:2px 7px; font-size:8px; }
@@ -127,6 +130,10 @@ th { color:#87918e; font-weight:600; }
 .prompt-box textarea { border:0; outline:0; resize:none; width:100%; min-height:57px; font-size:11px; }
 .prompt-box>div { display:flex; justify-content:space-between; align-items:center; color:#929b98; font-size:9px; }
 .prompt-box button { width:27px; height:27px; border:0; border-radius:8px; background:var(--ink); color:#fff; }
+.fixture-failure-shell { display:grid; place-content:center; gap:18px; padding:32px; background:#eef2f0; }
+.fixture-failure-shell>.brand { justify-content:center; }
+.fixture-failure-panel { max-width:620px; display:flex; gap:12px; padding:20px; border:1px solid #efb4ad; border-radius:14px; background:#fff; box-shadow:0 18px 55px #24372f14; }
+.fixture-failure-panel p { color:#8f2f25; line-height:1.6; overflow-wrap:anywhere; }
 @keyframes rise { from { transform:translateY(7px); opacity:0 } }
 
 @media (max-width:1050px) {

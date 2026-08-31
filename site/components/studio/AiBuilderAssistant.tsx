@@ -7,6 +7,7 @@ interface AiBuilderAssistantProps {
   datasetName: string;
   changeSet: ChangeSet;
   status: ChangeSetUiStatus;
+  validationError: string | null;
   onPreview: () => void;
   onApply: () => void;
   onCancelPreview: () => void;
@@ -23,6 +24,7 @@ export function AiBuilderAssistant({
   datasetName,
   changeSet,
   status,
+  validationError,
   onPreview,
   onApply,
   onCancelPreview,
@@ -40,6 +42,12 @@ export function AiBuilderAssistant({
           <span className="ai-mark small">✦</span>
           <div>
             <p>我已检查数据结构和当前画布，建议执行以下变更：</p>
+            {validationError && (
+              <div className="validation-error" role="alert">
+                <b>无法执行变更</b>
+                <p>{validationError}</p>
+              </div>
+            )}
             <div className="change-plan">
               <div className="plan-head"><b>变更计划</b><span className={status === "applied" ? "done" : status}>{statusLabels[status]}</span></div>
               <ol>

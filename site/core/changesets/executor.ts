@@ -1,18 +1,60 @@
 import type { AppNode, AppPage, AppSpec, ChangeOperation, ChangeSet } from "@/core/models";
+import {
+  appSpecSchema,
+  changeSetSchema,
+  componentPropsSchemas,
+  formatSchemaIssues,
+  StudioValidationError,
+} from "@/core/schemas";
 
 export interface ChangeSetPreview {
   appSpec: AppSpec;
+  changeSetId: string;
   operationIds: string[];
+}
+
+interface ChangeSetHistoryEntry {
+  appSpec: AppSpec;
+  changeSetId: string;
 }
 
 export interface ChangeSetExecutionState {
   present: AppSpec;
-  history: AppSpec[];
+  preview: ChangeSetPreview | null;
+  history: ChangeSetHistoryEntry[];
   appliedChangeSetIds: string[];
 }
 
-export function createExecutionState(appSpec: AppSpec): ChangeSetExecutionState {
-  return { present: structuredClone(appSpec), history: [], appliedChangeSetIds: [] };
+function nodeEntries(node: AppNode): AppNode[] {
+  return [node, ...(node.children?.flatMap(nodeEntries) ?? [])];
+}
+
+function allNodes(appSpec: AppSpec): AppNode[] {
+  return appSpec.pages.flatMap((page) => nodeEntries(page.root));
+}
+
+function duplicateIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  ids.forEach((id) => (seen.has(id) ? duplicates.add(id) : seen.add(id)));
+  return [...duplicates];
+}
+
+function assertUniqueNodeIds(appSpec: AppSpec) {
+  const duplicates = duplicateIds(allNodes(appSpec).map((node) => node.id));
+  if (duplicates.length) {
+    throw new StudioValidationError("AppSpec 节点 ID 校验失败", [
+      `发现重复节点 ID：${duplicates.join("、")}`,
+    ]);
+  }
+}
+
+function findNode(root: AppNode, nodeId: string): AppNode | undefined {
+  if (root.id === nodeId) return root;
+  for (const child of root.children ?? []) {
+    const match = findNode(child, nodeId);
+    if (match) return match;
+  }
 }
 
 function updateNode(
@@ -34,7 +76,6 @@ function updateNode(
 
 function removeNode(node: AppNode, nodeId: string): [AppNode, boolean] {
   if (!node.children) return [node, false];
-
   if (node.children.some((child) => child.id === nodeId)) {
     return [{ ...node, children: node.children.filter((child) => child.id !== nodeId) } as AppNode, true];
   }
@@ -49,26 +90,18 @@ function removeNode(node: AppNode, nodeId: string): [AppNode, boolean] {
 }
 
 function updatePage(appSpec: AppSpec, pageId: string, updater: (page: AppPage) => AppPage): AppSpec {
-  let found = false;
-  const pages = appSpec.pages.map((page) => {
-    if (page.id !== pageId) return page;
-    found = true;
-    return updater(page);
-  });
-  if (!found) throw new Error(`找不到页面：${pageId}`);
-  return { ...appSpec, pages };
+  return { ...appSpec, pages: appSpec.pages.map((page) => page.id === pageId ? updater(page) : page) };
 }
 
-function applyOperation(appSpec: AppSpec, operation: ChangeOperation): AppSpec {
+function applyOperationUnchecked(appSpec: AppSpec, operation: ChangeOperation): AppSpec {
   return updatePage(appSpec, operation.pageId, (page) => {
     if (operation.type === "removeNode") {
-      const [root, changed] = removeNode(page.root, operation.nodeId);
-      if (!changed) throw new Error(`找不到待删除组件：${operation.nodeId}`);
+      const [root] = removeNode(page.root, operation.nodeId);
       return { ...page, root };
     }
 
     const targetId = operation.type === "addNode" ? operation.parentId : operation.nodeId;
-    const [root, changed] = updateNode(page.root, targetId, (node) => {
+    const [root] = updateNode(page.root, targetId, (node) => {
       if (operation.type === "addNode") {
         const children = [...(node.children ?? [])];
         children.splice(operation.position ?? children.length, 0, structuredClone(operation.node));
@@ -76,36 +109,129 @@ function applyOperation(appSpec: AppSpec, operation: ChangeOperation): AppSpec {
       }
       return { ...node, props: { ...node.props, ...operation.props } } as AppNode;
     });
-    if (!changed) throw new Error(`找不到变更目标：${targetId}`);
     return { ...page, root };
   });
 }
 
-export function previewChangeSet(appSpec: AppSpec, changeSet: ChangeSet): ChangeSetPreview {
+function validateOperationTarget(appSpec: AppSpec, operation: ChangeOperation) {
+  const page = appSpec.pages.find((candidate) => candidate.id === operation.pageId);
+  if (!page) {
+    throw new StudioValidationError("ChangeSet 目标校验失败", [
+      `操作“${operation.label}”引用了不存在的页面：${operation.pageId}`,
+    ]);
+  }
+
+  if (operation.type === "addNode") {
+    if (!findNode(page.root, operation.parentId)) {
+      throw new StudioValidationError("ChangeSet 目标校验失败", [
+        `操作“${operation.label}”引用了不存在的父组件：${operation.parentId}`,
+      ]);
+    }
+    const currentIds = new Set(allNodes(appSpec).map((node) => node.id));
+    const addedIds = nodeEntries(operation.node).map((node) => node.id);
+    const repeatedInsideNode = duplicateIds(addedIds);
+    const repeatedInApp = addedIds.filter((id) => currentIds.has(id));
+    const duplicates = [...new Set([...repeatedInsideNode, ...repeatedInApp])];
+    if (duplicates.length) {
+      throw new StudioValidationError("ChangeSet 节点 ID 校验失败", [
+        `操作“${operation.label}”包含重复节点 ID：${duplicates.join("、")}`,
+      ]);
+    }
+    return;
+  }
+
+  const target = findNode(page.root, operation.nodeId);
+  if (!target) {
+    throw new StudioValidationError("ChangeSet 目标校验失败", [
+      `操作“${operation.label}”引用了不存在的组件：${operation.nodeId}`,
+    ]);
+  }
+  if (operation.type === "removeNode" && page.root.id === operation.nodeId) {
+    throw new StudioValidationError("ChangeSet 目标校验失败", ["不能删除页面根节点"]);
+  }
+  if (operation.type === "updateNodeProps") {
+    const result = componentPropsSchemas[target.type].safeParse({ ...target.props, ...operation.props });
+    if (!result.success) {
+      throw new StudioValidationError(
+        `组件“${operation.nodeId}”属性校验失败`,
+        formatSchemaIssues(result.error, target.type),
+      );
+    }
+  }
+}
+
+function parseAppSpec(appSpec: AppSpec): AppSpec {
+  const result = appSpecSchema.safeParse(appSpec);
+  if (!result.success) {
+    throw new StudioValidationError("AppSpec Schema 校验失败", formatSchemaIssues(result.error, "AppSpec"));
+  }
+  assertUniqueNodeIds(result.data);
+  return result.data;
+}
+
+function parseChangeSet(changeSet: ChangeSet): ChangeSet {
+  const result = changeSetSchema.safeParse(changeSet);
+  if (!result.success) {
+    throw new StudioValidationError("ChangeSet Schema 校验失败", formatSchemaIssues(result.error, "ChangeSet"));
+  }
+  return result.data;
+}
+
+export function validateChangeSetAgainstAppSpec(appSpec: AppSpec, changeSet: ChangeSet): AppSpec {
+  let working = structuredClone(parseAppSpec(appSpec));
+  const parsedChangeSet = parseChangeSet(changeSet);
+
+  for (const operation of parsedChangeSet.operations) {
+    validateOperationTarget(working, operation);
+    working = applyOperationUnchecked(working, operation);
+    assertUniqueNodeIds(working);
+  }
+
+  return parseAppSpec(working);
+}
+
+export function createExecutionState(appSpec: AppSpec): ChangeSetExecutionState {
+  return { present: parseAppSpec(appSpec), preview: null, history: [], appliedChangeSetIds: [] };
+}
+
+export function previewChangeSet(
+  state: ChangeSetExecutionState,
+  changeSet: ChangeSet,
+): ChangeSetExecutionState {
+  const appSpec = validateChangeSetAgainstAppSpec(state.present, changeSet);
   return {
-    appSpec: changeSet.operations.reduce(applyOperation, structuredClone(appSpec)),
-    operationIds: changeSet.operations.map((operation) => operation.id),
+    ...state,
+    preview: {
+      appSpec,
+      changeSetId: changeSet.id,
+      operationIds: changeSet.operations.map((operation) => operation.id),
+    },
   };
+}
+
+export function cancelPreview(state: ChangeSetExecutionState): ChangeSetExecutionState {
+  return { ...state, preview: null };
 }
 
 export function applyChangeSet(
   state: ChangeSetExecutionState,
   changeSet: ChangeSet,
 ): ChangeSetExecutionState {
-  if (state.appliedChangeSetIds.includes(changeSet.id)) return state;
-  const preview = previewChangeSet(state.present, changeSet);
+  const nextAppSpec = validateChangeSetAgainstAppSpec(state.present, changeSet);
   return {
-    present: preview.appSpec,
-    history: [...state.history, state.present],
+    present: nextAppSpec,
+    preview: null,
+    history: [...state.history, { appSpec: state.present, changeSetId: changeSet.id }],
     appliedChangeSetIds: [...state.appliedChangeSetIds, changeSet.id],
   };
 }
 
 export function undoLastChange(state: ChangeSetExecutionState): ChangeSetExecutionState {
   const previous = state.history.at(-1);
-  if (!previous) return state;
+  if (!previous) return { ...state, preview: null };
   return {
-    present: previous,
+    present: previous.appSpec,
+    preview: null,
     history: state.history.slice(0, -1),
     appliedChangeSetIds: state.appliedChangeSetIds.slice(0, -1),
   };

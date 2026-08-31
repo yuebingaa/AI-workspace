@@ -1,4 +1,5 @@
 import type { AppNode, AppPage, ChangeSet, DataProduct, DataRecipe, DataTableProps } from "@/core/models";
+import { changeSetSchema, dataProductSchema, formatSchemaIssues } from "@/core/schemas";
 
 const chartValues = [46, 62, 54, 78, 68, 92, 83, 104, 96, 118, 109, 132];
 const chartLabels = chartValues.map((_, index) => `${index + 1}月`);
@@ -107,7 +108,7 @@ const appSpec = {
   ],
 } satisfies DataProduct["appSpec"];
 
-export const demoRecipe: DataRecipe = {
+const rawDemoRecipe: DataRecipe = {
   id: "recipe_east_anomalies",
   name: "华东异常订单与复购分析",
   sourceDatasetId: "dataset_retail_orders",
@@ -119,12 +120,12 @@ export const demoRecipe: DataRecipe = {
   ],
 };
 
-export const demoDataProduct: DataProduct = {
+const rawDemoDataProduct: DataProduct = {
   id: "product_retail_demo",
   name: "零售经营分析",
   schemaVersion: "1.0",
   datasets: [{ id: "dataset_retail_orders", name: "retail_orders.csv", rowCount: 12486, columnCount: 18, qualityScore: 96 }],
-  recipes: [demoRecipe],
+  recipes: [rawDemoRecipe],
   appSpec,
 };
 
@@ -138,7 +139,7 @@ const anomalyTable: DataTableProps = {
   ],
 };
 
-export const repurchaseChangeSet: ChangeSet = {
+const rawRepurchaseChangeSet: ChangeSet = {
   id: "changeset_repurchase_analysis",
   title: "华东异常订单与复购分析",
   status: "ready",
@@ -181,3 +182,35 @@ export const repurchaseChangeSet: ChangeSet = {
     },
   ],
 };
+
+export interface DemoFixtures {
+  dataProduct: DataProduct;
+  repurchaseChangeSet: ChangeSet;
+}
+
+export type DemoFixtureResult =
+  | { success: true; data: DemoFixtures }
+  | { success: false; error: string };
+
+function validateDemoFixtures(): DemoFixtureResult {
+  const dataProductResult = dataProductSchema.safeParse(rawDemoDataProduct);
+  const changeSetResult = changeSetSchema.safeParse(rawRepurchaseChangeSet);
+  const issues = [
+    ...(dataProductResult.success ? [] : formatSchemaIssues(dataProductResult.error, "DataProduct fixture")),
+    ...(changeSetResult.success ? [] : formatSchemaIssues(changeSetResult.error, "ChangeSet fixture")),
+  ];
+
+  if (!dataProductResult.success || !changeSetResult.success) {
+    return { success: false, error: `演示数据校验失败：${issues.join("；")}` };
+  }
+
+  return {
+    success: true,
+    data: {
+      dataProduct: dataProductResult.data,
+      repurchaseChangeSet: changeSetResult.data,
+    },
+  };
+}
+
+export const demoFixtureResult = validateDemoFixtures();

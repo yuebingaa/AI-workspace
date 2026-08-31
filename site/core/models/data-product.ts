@@ -38,13 +38,15 @@ export interface DataTableProps {
   rows: Array<Record<string, string>>;
 }
 
+export type EmptyComponentProps = Record<never, never>;
+
 export interface ComponentPropsMap {
-  PageRoot: Record<string, never>;
+  PageRoot: EmptyComponentProps;
   PageHeader: PageHeaderProps;
   InsightBanner: InsightBannerProps;
   MetricGrid: MetricGridProps;
   MetricCard: MetricCardProps;
-  DashboardGrid: Record<string, never>;
+  DashboardGrid: EmptyComponentProps;
   BarChart: BarChartProps;
   DataHealth: DataHealthProps;
   DataTable: DataTableProps;
