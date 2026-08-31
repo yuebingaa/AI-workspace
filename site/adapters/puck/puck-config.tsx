@@ -147,8 +147,14 @@ function leafConfig<TType extends LeafType>(type: TType, context: ComponentRende
   };
 }
 
-export function createStudioPuckConfig(dataSources: DataSourceDefinition[], dataRuntime: LocalDataRuntime): Config<StudioPuckComponentProps> {
-  const context: ComponentRenderContext = { dataSources, dataRuntime };
+export function createStudioPuckConfig(
+  dataSources: DataSourceDefinition[],
+  dataRuntime: LocalDataRuntime,
+  pageId: string,
+  queryRevision: string,
+  onQueryExecuted?: ComponentRenderContext["onQueryExecuted"],
+): Config<StudioPuckComponentProps> {
+  const context: ComponentRenderContext = { dataSources, dataRuntime, pageId, queryRevision, onQueryExecuted };
   const metricGridDefinition = getComponentDefinition("MetricGrid");
   const dashboardGridDefinition = getComponentDefinition("DashboardGrid");
   return {

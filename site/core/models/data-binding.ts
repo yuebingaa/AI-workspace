@@ -74,6 +74,8 @@ export interface DataSourceDefinition {
   rowCount: number;
   columnCount: number;
   qualityScore: number;
+  updatedAt: string;
+  sourceType: "csv" | "json" | "local-fixture";
   fields: DataSourceField[];
 }
 

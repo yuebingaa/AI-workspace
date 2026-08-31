@@ -7,6 +7,8 @@ import type {
   DataSourceDefinition,
   DataValue,
   LocalDataRuntime,
+  QueryComponentKind,
+  QueryExecutionRecord,
 } from "@/core/models";
 import { StudioValidationError } from "@/core/schemas";
 
@@ -15,6 +17,51 @@ export interface ChartBindingResult { labels: string[]; values: number[]; yAxis:
 export interface TableBindingResult {
   columns: Array<{ key: string; label: string }>;
   rows: Array<Record<string, string>>;
+}
+
+export const MAX_QUERY_EXECUTION_RECORDS = 100;
+
+export type RecordedQueryResult<T> =
+  | { success: true; result: T; record: QueryExecutionRecord }
+  | { success: false; error: Error; record: QueryExecutionRecord };
+
+let querySequence = 0;
+
+function stableHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function appendQueryExecutionRecord(
+  records: QueryExecutionRecord[],
+  record: QueryExecutionRecord,
+  limit = MAX_QUERY_EXECUTION_RECORDS,
+): QueryExecutionRecord[] {
+  return [record, ...records].slice(0, Math.max(1, limit));
+}
+
+export function summarizeBinding(binding: DataBinding, sourceName?: string): string {
+  const parts = [
+    `数据源 ${sourceName ?? binding.dataSourceId}`,
+    `${binding.field} · ${binding.aggregation}`,
+  ];
+  if (binding.groupBy) parts.push(`按 ${binding.groupBy} 分组`);
+  if (binding.filters.length) parts.push(`${binding.filters.length} 个筛选条件`);
+  return parts.join("；");
+}
+
+export function createExecutionPlanSummary(binding: DataBinding, inputRows: number): string {
+  const steps = [`扫描 ${inputRows} 行`];
+  if (binding.filters.length) steps.push(`应用 ${binding.filters.length} 个筛选条件`);
+  if (binding.groupBy) steps.push(`按 ${binding.groupBy} 分组并执行 ${binding.aggregation}`);
+  else steps.push(`执行 ${binding.aggregation} 聚合`);
+  if (binding.sort.length) steps.push(`按 ${binding.sort.map((item) => `${item.field} ${item.direction}`).join("、")} 排序`);
+  steps.push(`最多输出 ${binding.limit} 行`);
+  return steps.join(" → ");
 }
 
 function sourceFor(
@@ -194,6 +241,80 @@ export function executeTableBinding(
       formatDataValue(row[column.field] ?? null, column.format),
     ]))),
   };
+}
+
+interface BindingResultMap {
+  metric: MetricBindingResult;
+  chart: ChartBindingResult;
+  table: TableBindingResult;
+}
+
+export function executeRecordedBinding<TKind extends QueryComponentKind>(
+  kind: TKind,
+  binding: DataBinding,
+  dataSources: DataSourceDefinition[],
+  runtime: LocalDataRuntime,
+  context: { componentId: string; pageId: string; revision?: string },
+  clock: () => Date = () => new Date(),
+): RecordedQueryResult<BindingResultMap[TKind]> {
+  const started = clock();
+  const source = dataSources.find((item) => item.id === binding.dataSourceId);
+  const inputRowCount = runtime.rowsByDataSourceId[binding.dataSourceId]?.length ?? 0;
+  const executionKey = context.revision
+    ? `${context.pageId}:${context.componentId}:${context.revision}:${stableHash(JSON.stringify(binding))}`
+    : null;
+  const common = {
+    id: executionKey ? `query_${stableHash(executionKey)}` : `query_${started.getTime()}_${++querySequence}`,
+    componentId: context.componentId,
+    pageId: context.pageId,
+    componentKind: kind,
+    dataSourceId: binding.dataSourceId,
+    bindingSummary: summarizeBinding(binding, source?.name),
+    planSummary: createExecutionPlanSummary(binding, inputRowCount),
+    startedAt: started.toISOString(),
+    inputRowCount,
+  };
+  try {
+    const result = (
+      kind === "metric"
+        ? executeMetricBinding(binding, dataSources, runtime)
+        : kind === "chart"
+          ? executeChartBinding(binding, dataSources, runtime)
+          : executeTableBinding(binding, dataSources, runtime)
+    ) as BindingResultMap[TKind];
+    const completed = clock();
+    const outputRowCount = kind === "metric"
+      ? 1
+      : kind === "chart"
+        ? (result as ChartBindingResult).labels.length
+        : (result as TableBindingResult).rows.length;
+    return {
+      success: true,
+      result,
+      record: {
+        ...common,
+        completedAt: completed.toISOString(),
+        durationMs: Math.max(0, completed.getTime() - started.getTime()),
+        outputRowCount,
+        status: "success",
+      },
+    };
+  } catch (caught) {
+    const completed = clock();
+    const error = caught instanceof Error ? caught : new Error("未知查询错误");
+    return {
+      success: false,
+      error,
+      record: {
+        ...common,
+        completedAt: completed.toISOString(),
+        durationMs: Math.max(0, completed.getTime() - started.getTime()),
+        outputRowCount: 0,
+        status: "failure",
+        error: error.message,
+      },
+    };
+  }
 }
 
 export function validateRuntimeRows(source: DataSourceDefinition, rows: DataRow[]): void {

@@ -1,9 +1,9 @@
 "use client";
 
 import { Puck } from "@puckeditor/core";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { createStudioPuckConfig, type StudioPuckData } from "@/adapters/puck";
-import type { DataSourceDefinition, LocalDataRuntime } from "@/core/models";
+import type { DataSourceDefinition, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
 import { puckPermissionsForRole, type StudioRole } from "@/core/permissions";
 
 interface PuckEditorClientProps {
@@ -11,26 +11,38 @@ interface PuckEditorClientProps {
   dataSources: DataSourceDefinition[];
   dataRuntime: LocalDataRuntime;
   role: StudioRole;
+  pageId: string;
+  queryRevision: string;
+  onQueryExecuted: (record: QueryExecutionRecord) => void;
   onChange: (data: StudioPuckData) => void;
   onRequestPreview: (data: StudioPuckData) => void;
 }
 
-export function PuckEditorClient({ data, dataSources, dataRuntime, role, onChange, onRequestPreview }: PuckEditorClientProps) {
-  const config = useMemo(() => createStudioPuckConfig(dataSources, dataRuntime), [dataSources, dataRuntime]);
+const puckDnd = { behavior: "auto" } as const;
+const puckIframe = { enabled: true, syncHostStyles: true } as const;
+
+export function PuckEditorClient({ data, dataSources, dataRuntime, role, pageId, queryRevision, onQueryExecuted, onChange, onRequestPreview }: PuckEditorClientProps) {
+  const config = useMemo(
+    () => createStudioPuckConfig(dataSources, dataRuntime, pageId, queryRevision, onQueryExecuted),
+    [dataSources, dataRuntime, onQueryExecuted, pageId, queryRevision],
+  );
+  const permissions = useMemo(() => puckPermissionsForRole(role), [role]);
+  const handlePublish = useCallback((nextData: StudioPuckData) => {
+    onChange(nextData);
+    onRequestPreview(nextData);
+  }, [onChange, onRequestPreview]);
+
   return (
     <div className="puck-editor-shell">
       <Puck
         config={config}
         data={data}
-        dnd={{ behavior: "auto" }}
+        dnd={puckDnd}
         height="100%"
-        iframe={{ enabled: true, syncHostStyles: true }}
-        permissions={puckPermissionsForRole(role)}
+        iframe={puckIframe}
+        permissions={permissions}
         onChange={onChange}
-        onPublish={(nextData) => {
-          onChange(nextData);
-          onRequestPreview(nextData);
-        }}
+        onPublish={handlePublish}
       />
     </div>
   );

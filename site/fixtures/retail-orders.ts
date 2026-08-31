@@ -9,6 +9,8 @@ export const retailOrdersDataSource: DataSourceDefinition = {
   rowCount: 48,
   columnCount: 14,
   qualityScore: 96,
+  updatedAt: "2026-08-31T01:30:00.000Z",
+  sourceType: "local-fixture",
   fields: [
     { name: "order_id", label: "订单 ID", type: "string", aggregatable: false, supportedAggregations: [...identityAggregations] },
     { name: "customer_id", label: "客户 ID", type: "string", aggregatable: false, supportedAggregations: [...identityAggregations] },

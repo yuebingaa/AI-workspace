@@ -86,6 +86,8 @@ export const dataSourceDefinitionSchema: z.ZodType<DataSourceDefinition> = z.obj
   rowCount: z.number().int().nonnegative(),
   columnCount: z.number().int().nonnegative(),
   qualityScore: z.number().min(0).max(100),
+  updatedAt: z.iso.datetime(),
+  sourceType: z.enum(["csv", "json", "local-fixture"]),
   fields: z.array(dataSourceFieldSchema).min(1),
 }).strict().superRefine((source, context) => {
   const names = source.fields.map((field) => field.name);

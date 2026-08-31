@@ -1,4 +1,4 @@
-import type { AppSpec, LocalDataRuntime } from "@/core/models";
+import type { AppSpec, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
 import type { StudioPuckData } from "@/adapters/puck";
 import { AppSpecRenderer } from "./AppSpecRenderer";
@@ -11,6 +11,7 @@ interface DataProductCanvasProps {
   appSpec: AppSpec;
   dataRuntime: LocalDataRuntime;
   role: StudioRole;
+  appSpecRevision: string;
   activePageId: string;
   device: PreviewDevice;
   isPreviewing: boolean;
@@ -25,12 +26,14 @@ interface DataProductCanvasProps {
   onRequestPuckPreview: (data: StudioPuckData) => void;
   onApplyPuckPreview: () => void;
   onCancelPuckPreview: () => void;
+  onQueryExecuted: (record: QueryExecutionRecord) => void;
 }
 
 export function DataProductCanvas({
   appSpec,
   dataRuntime,
   role,
+  appSpecRevision,
   activePageId,
   device,
   isPreviewing,
@@ -45,6 +48,7 @@ export function DataProductCanvas({
   onRequestPuckPreview,
   onApplyPuckPreview,
   onCancelPuckPreview,
+  onQueryExecuted,
 }: DataProductCanvasProps) {
   const page = appSpec.pages.find((candidate) => candidate.id === activePageId) ?? appSpec.pages[0];
   const canEdit = role !== "viewer";
@@ -75,6 +79,9 @@ export function DataProductCanvas({
               dataSources={appSpec.dataSources}
               dataRuntime={dataRuntime}
               role={role}
+              pageId={activePageId}
+              queryRevision={`puck:${puckSessionKey}`}
+              onQueryExecuted={onQueryExecuted}
               onChange={onPuckDataChange}
               onRequestPreview={onRequestPuckPreview}
             />
@@ -83,7 +90,7 @@ export function DataProductCanvas({
       ) : (
         <div className={`device-stage ${device} ${isPreviewing ? "previewing" : ""}`}>
           <div className="dashboard">
-            {page ? <AppSpecRenderer node={page.root} context={{ dataSources: appSpec.dataSources, dataRuntime }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
+            {page ? <AppSpecRenderer node={page.root} context={{ dataSources: appSpec.dataSources, dataRuntime, pageId: page.id, queryRevision: `canvas:${appSpecRevision}:${isPreviewing ? "preview" : "formal"}`, onQueryExecuted }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
           </div>
         </div>
       )}

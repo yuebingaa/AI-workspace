@@ -6,6 +6,8 @@ import {
   executeChartBinding,
   executeMetricBinding,
   executeTableBinding,
+  executeRecordedBinding,
+  appendQueryExecutionRecord,
 } from "./query-runtime";
 
 function binding(overrides: Partial<DataBinding> = {}): DataBinding {
@@ -87,5 +89,26 @@ describe("本地数据查询运行时", () => {
   it("拒绝不存在的数据源或字段", () => {
     expect(() => executeMetricBinding(binding({ dataSourceId: "missing" }), [retailOrdersDataSource], demoLocalDataRuntime)).toThrow(/数据源不存在/);
     expect(() => executeMetricBinding(binding({ field: "missing" }), [retailOrdersDataSource], demoLocalDataRuntime)).toThrow(/字段不存在/);
+  });
+
+  it("生成查询成功和失败执行记录", () => {
+    const times = [new Date("2026-08-31T00:00:00.000Z"), new Date("2026-08-31T00:00:00.007Z")];
+    const success = executeRecordedBinding("metric", binding(), [retailOrdersDataSource], demoLocalDataRuntime, { componentId: "metric_1", pageId: "page_1" }, () => times.shift()!);
+    expect(success.success).toBe(true);
+    expect(success.record).toMatchObject({ status: "success", componentId: "metric_1", pageId: "page_1", inputRowCount: 48, outputRowCount: 1, durationMs: 7 });
+    expect(success.record.planSummary).toMatch(/扫描 48 行/);
+
+    const failureTimes = [new Date("2026-08-31T00:00:01.000Z"), new Date("2026-08-31T00:00:01.003Z")];
+    const failure = executeRecordedBinding("metric", binding({ field: "missing" }), [retailOrdersDataSource], demoLocalDataRuntime, { componentId: "metric_bad", pageId: "page_1" }, () => failureTimes.shift()!);
+    expect(failure.success).toBe(false);
+    expect(failure.record).toMatchObject({ status: "failure", outputRowCount: 0, durationMs: 3 });
+    expect(failure.record.error).toMatch(/字段不存在/);
+  });
+
+  it("限制查询执行记录数量", () => {
+    const makeRecord = (index: number) => executeRecordedBinding("metric", binding(), [retailOrdersDataSource], demoLocalDataRuntime, { componentId: `metric_${index}`, pageId: "page_1" }).record;
+    const records = [0, 1, 2].reduce((current, index) => appendQueryExecutionRecord(current, makeRecord(index), 2), [] as ReturnType<typeof makeRecord>[]);
+    expect(records).toHaveLength(2);
+    expect(records[0].componentId).toBe("metric_2");
   });
 });

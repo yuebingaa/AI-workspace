@@ -1,4 +1,5 @@
-import type { ChangeSet } from "@/core/models";
+import type { ChangeSet, ChangeSetAuditRecord } from "@/core/models";
+import { studioRoleLabels } from "@/core/permissions";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
 
@@ -9,6 +10,7 @@ interface AiBuilderAssistantProps {
   status: ChangeSetUiStatus;
   validationError: string | null;
   canApply: boolean;
+  auditRecords: ChangeSetAuditRecord[];
   onPreview: () => void;
   onApply: () => void;
   onCancelPreview: () => void;
@@ -19,6 +21,7 @@ const statusLabels: Record<ChangeSetUiStatus, string> = {
   preview: "画布预览中",
   applied: "已应用",
 };
+const auditSourceLabels = { ai: "AI", puck: "Puck", manual: "手动" } as const;
 
 export function AiBuilderAssistant({
   pageTitle,
@@ -27,6 +30,7 @@ export function AiBuilderAssistant({
   status,
   validationError,
   canApply,
+  auditRecords,
   onPreview,
   onApply,
   onCancelPreview,
@@ -38,6 +42,20 @@ export function AiBuilderAssistant({
         <button type="button" aria-label="助手菜单">···</button>
       </div>
       <div className="context-pill">上下文：{pageTitle} · {datasetName.replace(".csv", "")}</div>
+      <details className="audit-history">
+        <summary>变更审计记录 <span>{auditRecords.length}</span></summary>
+        <div>
+          {!auditRecords.length && <p>预览、应用、取消或撤销后会在这里留下记录。</p>}
+          {auditRecords.slice(0, 12).map((record) => (
+            <article key={record.id} className={record.status}>
+              <div><b>{record.status === "previewed" ? "已预览" : record.status === "applied" ? "已应用" : record.status === "cancelled" ? "已取消" : record.status === "undone" ? "已撤销" : "失败"}</b><span>{studioRoleLabels[record.role]} · {auditSourceLabels[record.source]}</span></div>
+              <p>{record.operationSummary || record.changeSetId}</p>
+              <small>{new Date(record.timestamp).toLocaleString("zh-CN")}</small>
+              {record.error && <em>{record.error}</em>}
+            </article>
+          ))}
+        </div>
+      </details>
       <div className="conversation">
         <div className="user-message">整理华东异常订单，创建复购分析，并提供 Excel 下载。</div>
         <div className="assistant-message">

@@ -11,9 +11,10 @@ interface StudioHeaderProps {
   onDeviceChange: (device: PreviewDevice) => void;
   onUndo: () => void;
   onRoleChange: (role: StudioRole) => void;
+  onResetDemo: () => void;
 }
 
-export function StudioHeader({ productName, device, canUndo, saveLabel, role, onDeviceChange, onUndo, onRoleChange }: StudioHeaderProps) {
+export function StudioHeader({ productName, device, canUndo, saveLabel, role, onDeviceChange, onUndo, onRoleChange, onResetDemo }: StudioHeaderProps) {
   return (
     <header className="topbar">
       <div className="brand">
@@ -31,6 +32,7 @@ export function StudioHeader({ productName, device, canUndo, saveLabel, role, on
         <button type="button" className={device === "desktop" ? "active" : ""} onClick={() => onDeviceChange("desktop")}>桌面</button>
         <button type="button" className={device === "mobile" ? "active" : ""} onClick={() => onDeviceChange("mobile")}>手机</button>
         <button type="button" disabled={!canUndo} onClick={onUndo}>撤销</button>
+        <button type="button" onClick={onResetDemo}>恢复演示数据</button>
         <span className="saved">{saveLabel}</span>
         <button type="button" className="publish">发布</button>
       </div>

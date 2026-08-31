@@ -13,9 +13,10 @@ interface PageStructurePanelProps {
   onPageChange: (pageId: string) => void;
   role: StudioRole;
   onRenamePage: (pageId: string, currentTitle: string) => void;
+  onOpenDataSource: () => void;
 }
 
-export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange, role, onRenamePage }: PageStructurePanelProps) {
+export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange, role, onRenamePage, onOpenDataSource }: PageStructurePanelProps) {
   const activePage = appSpec.pages.find((page) => page.id === activePageId);
   const dataset = dataProduct.datasets[0];
 
@@ -49,11 +50,11 @@ export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageC
       </div>
 
       {dataset && (
-        <div className="data-card">
+        <div className="data-card" onClick={onOpenDataSource}>
           <div className="data-head"><span className="db">⌘</span><div><b>{dataset.name}</b><small>{dataset.rowCount.toLocaleString("zh-CN")} 行 · {dataset.columnCount} 列</small></div></div>
           <div className="quality"><span>数据质量</span><b>{dataset.qualityScore}%</b></div>
           <div className="quality-bar"><i style={{ width: `${dataset.qualityScore}%` }} /></div>
-          <button type="button">查看字段与配方 →</button>
+          <button type="button" onClick={onOpenDataSource}>查看字段、预览与记录 →</button>
         </div>
       )}
     </aside>

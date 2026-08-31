@@ -15,7 +15,7 @@ export interface ChangeSetPreview {
   operationIds: string[];
 }
 
-interface ChangeSetHistoryEntry {
+export interface ChangeSetHistoryEntry {
   appSpec: AppSpec;
   changeSetId: string;
   requiredRole: "editor" | "admin";
@@ -29,6 +29,7 @@ export interface ChangeSetExecutionState {
 }
 
 export const MAX_COMPONENTS_PER_PAGE = 30;
+export const MAX_CHANGESET_HISTORY = 100;
 
 export interface ChangeSetValidationOptions {
   role?: StudioRole;
@@ -302,6 +303,19 @@ export function createExecutionState(appSpec: AppSpec): ChangeSetExecutionState 
   return { present: parseAppSpec(appSpec), preview: null, history: [], appliedChangeSetIds: [] };
 }
 
+export function restoreExecutionState(
+  appSpec: AppSpec,
+  history: ChangeSetHistoryEntry[],
+  appliedChangeSetIds: string[],
+): ChangeSetExecutionState {
+  return {
+    present: parseAppSpec(appSpec),
+    preview: null,
+    history: history.map((entry) => ({ ...entry, appSpec: parseAppSpec(entry.appSpec) })),
+    appliedChangeSetIds: [...appliedChangeSetIds],
+  };
+}
+
 export function previewChangeSet(
   state: ChangeSetExecutionState,
   changeSet: ChangeSet,
@@ -335,10 +349,10 @@ export function applyChangeSet(
       appSpec: state.present,
       changeSetId: changeSet.id,
       requiredRole: changeSet.operations.some((operation) => operation.type === "removeNode" || operation.type === "updatePage")
-        ? "admin"
-        : "editor",
-    }],
-    appliedChangeSetIds: [...state.appliedChangeSetIds, changeSet.id],
+        ? "admin" as const
+        : "editor" as const,
+    }].slice(-MAX_CHANGESET_HISTORY),
+    appliedChangeSetIds: [...state.appliedChangeSetIds, changeSet.id].slice(-MAX_CHANGESET_HISTORY),
   };
 }
 

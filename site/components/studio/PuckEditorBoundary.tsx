@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import type { StudioPuckData } from "@/adapters/puck";
-import type { DataSourceDefinition, LocalDataRuntime } from "@/core/models";
+import type { DataSourceDefinition, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
 
 const ClientPuckEditor = dynamic(
@@ -18,6 +18,9 @@ interface PuckEditorBoundaryProps {
   dataSources: DataSourceDefinition[];
   dataRuntime: LocalDataRuntime;
   role: StudioRole;
+  pageId: string;
+  queryRevision: string;
+  onQueryExecuted: (record: QueryExecutionRecord) => void;
   onChange: (data: StudioPuckData) => void;
   onRequestPreview: (data: StudioPuckData) => void;
 }

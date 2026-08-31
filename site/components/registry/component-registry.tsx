@@ -1,13 +1,16 @@
-import { Children, type ReactNode } from "react";
+import { Children, type ReactNode, useEffect, useMemo } from "react";
 import type { Field } from "@puckeditor/core";
 import { BarChart, DataHealth, DataTable, MetricCard } from "@/components/data-components";
-import { executeChartBinding, executeMetricBinding, executeTableBinding } from "@/core/data";
-import type { AppNode, AppNodeType, ComponentPropsMap, DataBinding, DataSourceDefinition, LocalDataRuntime } from "@/core/models";
+import { executeRecordedBinding } from "@/core/data";
+import type { AppNode, AppNodeType, ComponentPropsMap, DataBinding, DataSourceDefinition, LocalDataRuntime, QueryComponentKind, QueryExecutionRecord } from "@/core/models";
 import { componentPropsSchemas } from "@/core/schemas";
 
 export interface ComponentRenderContext {
   dataSources: DataSourceDefinition[];
   dataRuntime: LocalDataRuntime;
+  pageId: string;
+  queryRevision: string;
+  onQueryExecuted?: (record: QueryExecutionRecord) => void;
 }
 
 interface ComponentDefinition<TType extends AppNodeType> {
@@ -40,6 +43,46 @@ function bindingError(nodeId: string, error: unknown) {
       <p>{error instanceof Error ? error.message : "无法计算当前组件的数据"}</p>
     </article>
   );
+}
+
+function useRecordedBinding<TKind extends QueryComponentKind>(
+  kind: TKind,
+  binding: DataBinding,
+  nodeId: string,
+  context: ComponentRenderContext,
+) {
+  const bindingKey = JSON.stringify(binding);
+  const semanticBinding = useMemo(() => JSON.parse(bindingKey) as DataBinding, [bindingKey]);
+  const execution = useMemo(() => executeRecordedBinding(
+    kind,
+    semanticBinding,
+    context.dataSources,
+    context.dataRuntime,
+    { componentId: nodeId, pageId: context.pageId, revision: context.queryRevision },
+  ), [context.dataRuntime, context.dataSources, context.pageId, context.queryRevision, kind, nodeId, semanticBinding]);
+  const onQueryExecuted = context.onQueryExecuted;
+  useEffect(() => {
+    onQueryExecuted?.(execution.record);
+  }, [execution.record, onQueryExecuted]);
+  return execution;
+}
+
+function BoundMetricCard({ props, nodeId, context }: { props: ComponentPropsMap["MetricCard"]; nodeId: string; context: ComponentRenderContext }) {
+  const execution = useRecordedBinding("metric", props.binding, nodeId, context);
+  if (!execution.success) return bindingError(nodeId, execution.error);
+  return <MetricCard label={props.label} trend={props.trend} isNew={props.isNew} value={execution.result.value} />;
+}
+
+function BoundBarChart({ props, nodeId, context }: { props: ComponentPropsMap["BarChart"]; nodeId: string; context: ComponentRenderContext }) {
+  const execution = useRecordedBinding("chart", props.binding, nodeId, context);
+  if (!execution.success) return bindingError(nodeId, execution.error);
+  return <BarChart {...props} {...execution.result} />;
+}
+
+function BoundDataTable({ props, nodeId, context }: { props: ComponentPropsMap["DataTable"]; nodeId: string; context: ComponentRenderContext }) {
+  const execution = useRecordedBinding("table", props.binding, nodeId, context);
+  if (!execution.success) return bindingError(nodeId, execution.error);
+  return <DataTable {...props} {...execution.result} />;
 }
 
 type ComponentRegistry = {
@@ -123,14 +166,7 @@ export const componentRegistry: ComponentRegistry = {
       },
       defaultProps: { label: "新指标", trend: "—", isNew: true, binding: structuredClone(defaultBinding) },
     },
-    render: (props, _children, nodeId, context) => {
-      try {
-        const result = executeMetricBinding(props.binding, context.dataSources, context.dataRuntime);
-        return <MetricCard label={props.label} trend={props.trend} isNew={props.isNew} value={result.value} />;
-      } catch (error) {
-        return bindingError(nodeId, error);
-      }
-    },
+    render: (props, _children, nodeId, context) => <BoundMetricCard props={props} nodeId={nodeId} context={context} />,
   },
   DashboardGrid: {
     label: "分析图表组",
@@ -155,13 +191,7 @@ export const componentRegistry: ComponentRegistry = {
         binding: { ...structuredClone(defaultBinding), groupBy: "month" },
       },
     },
-    render: (props, _children, nodeId, context) => {
-      try {
-        return <BarChart {...props} {...executeChartBinding(props.binding, context.dataSources, context.dataRuntime)} />;
-      } catch (error) {
-        return bindingError(nodeId, error);
-      }
-    },
+    render: (props, _children, nodeId, context) => <BoundBarChart props={props} nodeId={nodeId} context={context} />,
   },
   DataHealth: {
     label: "数据健康度",
@@ -211,13 +241,7 @@ export const componentRegistry: ComponentRegistry = {
         },
       },
     },
-    render: (props, _children, nodeId, context) => {
-      try {
-        return <DataTable {...props} {...executeTableBinding(props.binding, context.dataSources, context.dataRuntime)} />;
-      } catch (error) {
-        return bindingError(nodeId, error);
-      }
-    },
+    render: (props, _children, nodeId, context) => <BoundDataTable props={props} nodeId={nodeId} context={context} />,
   },
 };
 
