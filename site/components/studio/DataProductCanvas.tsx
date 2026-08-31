@@ -1,4 +1,5 @@
-import type { AppSpec } from "@/core/models";
+import type { AppSpec, LocalDataRuntime } from "@/core/models";
+import type { StudioRole } from "@/core/permissions";
 import type { StudioPuckData } from "@/adapters/puck";
 import { AppSpecRenderer } from "./AppSpecRenderer";
 import { PuckEditorBoundary } from "./PuckEditorBoundary";
@@ -8,6 +9,8 @@ export type CanvasMode = "edit" | "preview";
 
 interface DataProductCanvasProps {
   appSpec: AppSpec;
+  dataRuntime: LocalDataRuntime;
+  role: StudioRole;
   activePageId: string;
   device: PreviewDevice;
   isPreviewing: boolean;
@@ -26,6 +29,8 @@ interface DataProductCanvasProps {
 
 export function DataProductCanvas({
   appSpec,
+  dataRuntime,
+  role,
   activePageId,
   device,
   isPreviewing,
@@ -42,19 +47,20 @@ export function DataProductCanvas({
   onCancelPuckPreview,
 }: DataProductCanvasProps) {
   const page = appSpec.pages.find((candidate) => candidate.id === activePageId) ?? appSpec.pages[0];
+  const canEdit = role !== "viewer";
 
   return (
     <section className="canvas-area">
       <div className="canvas-toolbar">
         <div><button type="button" disabled={!canUndo} onClick={onUndo}>↶</button><button type="button" disabled>↷</button><span>100%</span></div>
         <div className="canvas-mode-switch" aria-label="画布模式">
-          <button type="button" className={mode === "edit" ? "active" : ""} onClick={() => onModeChange("edit")}>编辑</button>
+          <button type="button" className={mode === "edit" ? "active" : ""} disabled={!canEdit} title={canEdit ? "进入可视化编辑" : "查看者只能预览"} onClick={() => onModeChange("edit")}>编辑</button>
           <button type="button" className={mode === "preview" ? "active" : ""} onClick={() => onModeChange("preview")}>预览</button>
         </div>
         <div>
           {isPreviewing && <span className="preview-badge">变更预览</span>}
           {mode === "edit" && puckData && <button type="button" className="canvas-primary" onClick={() => onRequestPuckPreview(puckData)}>生成变更预览</button>}
-          {mode === "preview" && hasPuckPreview && <button type="button" onClick={onCancelPuckPreview}>继续编辑</button>}
+          {mode === "preview" && hasPuckPreview && <button type="button" onClick={onCancelPuckPreview}>{puckData ? "继续编辑" : "取消预览"}</button>}
           {mode === "preview" && hasPuckPreview && <button type="button" className="canvas-primary" onClick={onApplyPuckPreview}>应用编辑</button>}
           {!hasPuckPreview && mode === "preview" && <button type="button">分享</button>}
           <button type="button">•••</button>
@@ -66,6 +72,9 @@ export function DataProductCanvas({
             <PuckEditorBoundary
               key={`${activePageId}-${puckSessionKey}`}
               data={puckData}
+              dataSources={appSpec.dataSources}
+              dataRuntime={dataRuntime}
+              role={role}
               onChange={onPuckDataChange}
               onRequestPreview={onRequestPuckPreview}
             />
@@ -74,7 +83,7 @@ export function DataProductCanvas({
       ) : (
         <div className={`device-stage ${device} ${isPreviewing ? "previewing" : ""}`}>
           <div className="dashboard">
-            {page ? <AppSpecRenderer node={page.root} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
+            {page ? <AppSpecRenderer node={page.root} context={{ dataSources: appSpec.dataSources, dataRuntime }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
           </div>
         </div>
       )}

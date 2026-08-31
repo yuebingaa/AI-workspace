@@ -1,4 +1,6 @@
 import type { AppNode, AppPage, AppSpec, ChangeOperation, ChangeSet } from "@/core/models";
+import { assertValidAppSpecDataBindings } from "@/core/data";
+import { assertOperationPermission, type StudioRole } from "@/core/permissions";
 import {
   appSpecSchema,
   changeSetSchema,
@@ -16,6 +18,7 @@ export interface ChangeSetPreview {
 interface ChangeSetHistoryEntry {
   appSpec: AppSpec;
   changeSetId: string;
+  requiredRole: "editor" | "admin";
 }
 
 export interface ChangeSetExecutionState {
@@ -25,12 +28,32 @@ export interface ChangeSetExecutionState {
   appliedChangeSetIds: string[];
 }
 
+export const MAX_COMPONENTS_PER_PAGE = 30;
+
+export interface ChangeSetValidationOptions {
+  role?: StudioRole;
+  intent?: "preview" | "apply";
+}
+
 function nodeEntries(node: AppNode): AppNode[] {
   return [node, ...(node.children?.flatMap(nodeEntries) ?? [])];
 }
 
 function allNodes(appSpec: AppSpec): AppNode[] {
   return appSpec.pages.flatMap((page) => nodeEntries(page.root));
+}
+
+function componentCount(page: AppPage): number {
+  return Math.max(0, nodeEntries(page.root).length - 1);
+}
+
+function assertPageComponentLimits(appSpec: AppSpec) {
+  const exceeded = appSpec.pages.filter((page) => componentCount(page) > MAX_COMPONENTS_PER_PAGE);
+  if (exceeded.length) {
+    throw new StudioValidationError("页面组件数量校验失败", exceeded.map((page) => (
+      `页面“${page.title}”包含 ${componentCount(page)} 个组件，最多允许 ${MAX_COMPONENTS_PER_PAGE} 个`
+    )));
+  }
 }
 
 function duplicateIds(ids: string[]): string[] {
@@ -116,6 +139,21 @@ function updatePage(appSpec: AppSpec, pageId: string, updater: (page: AppPage) =
 }
 
 function applyOperationUnchecked(appSpec: AppSpec, operation: ChangeOperation): AppSpec {
+  if (operation.type === "updatePage") {
+    return {
+      ...appSpec,
+      pages: appSpec.pages.map((page) => page.id === operation.pageId ? {
+        ...page,
+        ...(operation.title === undefined ? {} : { title: operation.title }),
+        ...(operation.route === undefined ? {} : { route: operation.route }),
+      } : page),
+      navigation: appSpec.navigation.map((item) => (
+        item.pageId === operation.pageId && operation.title !== undefined
+          ? { ...item, title: operation.title }
+          : item
+      )),
+    };
+  }
   return updatePage(appSpec, operation.pageId, (page) => {
     if (operation.type === "removeNode") {
       const [root] = removeNode(page.root, operation.nodeId);
@@ -152,6 +190,13 @@ function validateOperationTarget(appSpec: AppSpec, operation: ChangeOperation) {
     throw new StudioValidationError("ChangeSet 目标校验失败", [
       `操作“${operation.label}”引用了不存在的页面：${operation.pageId}`,
     ]);
+  }
+
+  if (operation.type === "updatePage") {
+    if (operation.title === undefined && operation.route === undefined) {
+      throw new StudioValidationError("ChangeSet 目标校验失败", ["页面更新至少需要提供标题或路由"]);
+    }
+    return;
   }
 
   if (operation.type === "addNode") {
@@ -218,6 +263,8 @@ function parseAppSpec(appSpec: AppSpec): AppSpec {
     throw new StudioValidationError("AppSpec Schema 校验失败", formatSchemaIssues(result.error, "AppSpec"));
   }
   assertUniqueNodeIds(result.data);
+  assertPageComponentLimits(result.data);
+  assertValidAppSpecDataBindings(result.data);
   return result.data;
 }
 
@@ -229,14 +276,23 @@ function parseChangeSet(changeSet: ChangeSet): ChangeSet {
   return result.data;
 }
 
-export function validateChangeSetAgainstAppSpec(appSpec: AppSpec, changeSet: ChangeSet): AppSpec {
+export function validateChangeSetAgainstAppSpec(
+  appSpec: AppSpec,
+  changeSet: ChangeSet,
+  options: ChangeSetValidationOptions = {},
+): AppSpec {
   let working = structuredClone(parseAppSpec(appSpec));
   const parsedChangeSet = parseChangeSet(changeSet);
+  const role = options.role ?? "editor";
+  const intent = options.intent ?? "apply";
 
   for (const operation of parsedChangeSet.operations) {
+    if (intent === "apply") assertOperationPermission(role, operation);
     validateOperationTarget(working, operation);
     working = applyOperationUnchecked(working, operation);
     assertUniqueNodeIds(working);
+    assertPageComponentLimits(working);
+    assertValidAppSpecDataBindings(working);
   }
 
   return parseAppSpec(working);
@@ -249,8 +305,9 @@ export function createExecutionState(appSpec: AppSpec): ChangeSetExecutionState 
 export function previewChangeSet(
   state: ChangeSetExecutionState,
   changeSet: ChangeSet,
+  role: StudioRole = "editor",
 ): ChangeSetExecutionState {
-  const appSpec = validateChangeSetAgainstAppSpec(state.present, changeSet);
+  const appSpec = validateChangeSetAgainstAppSpec(state.present, changeSet, { role, intent: "preview" });
   return {
     ...state,
     preview: {
@@ -268,19 +325,34 @@ export function cancelPreview(state: ChangeSetExecutionState): ChangeSetExecutio
 export function applyChangeSet(
   state: ChangeSetExecutionState,
   changeSet: ChangeSet,
+  role: StudioRole = "editor",
 ): ChangeSetExecutionState {
-  const nextAppSpec = validateChangeSetAgainstAppSpec(state.present, changeSet);
+  const nextAppSpec = validateChangeSetAgainstAppSpec(state.present, changeSet, { role, intent: "apply" });
   return {
     present: nextAppSpec,
     preview: null,
-    history: [...state.history, { appSpec: state.present, changeSetId: changeSet.id }],
+    history: [...state.history, {
+      appSpec: state.present,
+      changeSetId: changeSet.id,
+      requiredRole: changeSet.operations.some((operation) => operation.type === "removeNode" || operation.type === "updatePage")
+        ? "admin"
+        : "editor",
+    }],
     appliedChangeSetIds: [...state.appliedChangeSetIds, changeSet.id],
   };
 }
 
-export function undoLastChange(state: ChangeSetExecutionState): ChangeSetExecutionState {
+export function undoLastChange(
+  state: ChangeSetExecutionState,
+  role: StudioRole = "editor",
+): ChangeSetExecutionState {
   const previous = state.history.at(-1);
   if (!previous) return { ...state, preview: null };
+  if (role === "viewer" || (previous.requiredRole === "admin" && role !== "admin")) {
+    throw new StudioValidationError("编辑权限校验失败", [
+      role === "viewer" ? "查看者无权撤销正式变更" : "该变更涉及管理员操作，只能由管理员撤销",
+    ]);
+  }
   return {
     present: previous.appSpec,
     preview: null,

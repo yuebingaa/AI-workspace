@@ -1,6 +1,11 @@
 import type { DataTableProps } from "@/core/models";
 
-export function DataTable({ title, subtitle, actionLabel, columns, rows }: DataTableProps) {
+interface DataTableViewProps extends Omit<DataTableProps, "binding"> {
+  columns: Array<{ key: string; label: string }>;
+  rows: Array<Record<string, string>>;
+}
+
+export function DataTable({ title, subtitle, actionLabel, columns, rows }: DataTableViewProps) {
   return (
     <article className="table-card">
       <div className="card-head">
@@ -14,7 +19,7 @@ export function DataTable({ title, subtitle, actionLabel, columns, rows }: DataT
             {rows.map((row, rowIndex) => (
               <tr key={`${row.region ?? "row"}-${rowIndex}`}>
                 {columns.map((column) => (
-                  <td key={column.key} className={column.key === "growth" ? "positive" : undefined}>
+                  <td key={column.key} className={column.key.includes("growth") ? "positive" : undefined}>
                     {row[column.key]}
                   </td>
                 ))}

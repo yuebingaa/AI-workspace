@@ -10,6 +10,7 @@ import type {
   DataProduct,
   DataRecipe,
 } from "@/core/models";
+import { dataBindingSchema, dataSourceDefinitionSchema } from "./data-binding";
 
 const idSchema = z.string().trim().min(1);
 const textSchema = z.string();
@@ -32,20 +33,16 @@ export const componentPropsSchemas: {
   MetricGrid: z.object({ columns: z.number().int().min(1).max(4) }).strict(),
   MetricCard: z.object({
     label: textSchema,
-    value: textSchema,
     trend: textSchema,
     isNew: z.boolean().optional(),
+    binding: dataBindingSchema,
   }).strict(),
   DashboardGrid: z.object({}).strict(),
   BarChart: z.object({
     title: textSchema,
     subtitle: textSchema,
-    labels: z.array(textSchema),
-    values: z.array(z.number()),
-    yAxis: z.array(textSchema),
-  }).strict().refine((value) => value.labels.length === value.values.length, {
-    message: "图表标签数量必须与数据点数量一致",
-  }),
+    binding: dataBindingSchema,
+  }).strict(),
   DataHealth: z.object({
     title: textSchema,
     subtitle: textSchema,
@@ -60,8 +57,7 @@ export const componentPropsSchemas: {
     title: textSchema,
     subtitle: textSchema,
     actionLabel: textSchema,
-    columns: z.array(z.object({ key: idSchema, label: textSchema }).strict()),
-    rows: z.array(z.record(z.string(), z.string())),
+    binding: dataBindingSchema,
   }).strict(),
 };
 
@@ -97,6 +93,7 @@ export const appSpecSchema: z.ZodType<AppSpec> = z.object({
   id: idSchema,
   siteId: idSchema,
   schemaVersion: z.literal("1.0"),
+  dataSources: z.array(dataSourceDefinitionSchema).min(1),
   navigation: z.array(z.object({ id: idSchema, title: textSchema, pageId: idSchema }).strict()),
   pages: z.array(appPageSchema).min(1),
 }).strict();
@@ -150,6 +147,15 @@ export const changeOperationSchema: z.ZodType<ChangeOperation> = z.discriminated
     nodeId: idSchema,
     parentId: idSchema,
     position: z.number().int().min(0),
+  }).strict(),
+  z.object({
+    id: idSchema,
+    type: z.literal("updatePage"),
+    label: textSchema,
+    description: textSchema,
+    pageId: idSchema,
+    title: textSchema.optional(),
+    route: z.string().startsWith("/").optional(),
   }).strict(),
 ]) as z.ZodType<ChangeOperation>;
 

@@ -8,6 +8,7 @@ interface AiBuilderAssistantProps {
   changeSet: ChangeSet;
   status: ChangeSetUiStatus;
   validationError: string | null;
+  canApply: boolean;
   onPreview: () => void;
   onApply: () => void;
   onCancelPreview: () => void;
@@ -25,6 +26,7 @@ export function AiBuilderAssistant({
   changeSet,
   status,
   validationError,
+  canApply,
   onPreview,
   onApply,
   onCancelPreview,
@@ -64,7 +66,7 @@ export function AiBuilderAssistant({
                 ) : (
                   <button type="button" disabled={status === "applied"} onClick={onPreview}>画布预览</button>
                 )}
-                <button type="button" className="apply" disabled={status === "applied"} onClick={onApply}>
+                <button type="button" className="apply" disabled={status === "applied" || !canApply} title={canApply ? "应用变更" : "查看者只能预览变更"} onClick={onApply}>
                   {status === "applied" ? "已全部应用 ✓" : "全部应用"}
                 </button>
               </div>

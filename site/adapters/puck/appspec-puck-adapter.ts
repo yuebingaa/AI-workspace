@@ -8,6 +8,7 @@ import {
   StudioValidationError,
 } from "@/core/schemas";
 import type { StudioPuckComponentType, StudioPuckData } from "./types";
+import type { StudioRole } from "@/core/permissions";
 
 const supportedTypes = [
   "PageHeader",
@@ -137,19 +138,20 @@ function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function applyGeneratedOperation(appSpec: AppSpec, pageId: string, operation: ChangeOperation): AppSpec {
+function applyGeneratedOperation(appSpec: AppSpec, pageId: string, operation: ChangeOperation, role: StudioRole): AppSpec {
   return validateChangeSetAgainstAppSpec(appSpec, {
     id: `puck_validation_${operation.id}`,
     title: "Puck 操作中间校验",
     status: "ready",
     operations: [{ ...operation, pageId }],
-  });
+  }, { role, intent: "apply" });
 }
 
 export function puckDataToChangeSet(
   appSpec: AppSpec,
   pageId: string,
   data: unknown,
+  role: StudioRole = "editor",
 ): ChangeSet {
   const page = appSpec.pages.find((candidate) => candidate.id === pageId);
   if (!page) throw new StudioValidationError("Puck 变更转换失败", [`找不到页面：${pageId}`]);
@@ -162,7 +164,7 @@ export function puckDataToChangeSet(
   const nextId = (kind: string) => `puck_${kind}_${++sequence}`;
   const append = (operation: ChangeOperation) => {
     operations.push(operation);
-    working = applyGeneratedOperation(working, pageId, operation);
+    working = applyGeneratedOperation(working, pageId, operation, role);
   };
 
   const originalLocations = nodeLocations(page.root);
@@ -250,7 +252,7 @@ export function puckDataToChangeSet(
     status: "ready",
     operations,
   };
-  const validated = validateChangeSetAgainstAppSpec(appSpec, changeSet);
+  const validated = validateChangeSetAgainstAppSpec(appSpec, changeSet, { role, intent: "apply" });
   const validatedPage = validated.pages.find((candidate) => candidate.id === pageId)!;
   if (!sameValue(validatedPage.root, targetPage.root)) {
     throw new StudioValidationError("Puck 变更转换失败", ["生成的 ChangeSet 与编辑结果不一致"]);

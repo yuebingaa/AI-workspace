@@ -1,3 +1,5 @@
+import type { DataBinding, DataSourceDefinition } from "./data-binding";
+
 export interface DatasetReference {
   id: string;
   name: string;
@@ -22,8 +24,8 @@ export interface DataRecipe {
 export interface PageHeaderProps { eyebrow: string; title: string; description: string; dateRange: string }
 export interface InsightBannerProps { title: string; description: string; actionLabel: string }
 export interface MetricGridProps { columns: number }
-export interface MetricCardProps { label: string; value: string; trend: string; isNew?: boolean }
-export interface BarChartProps { title: string; subtitle: string; labels: string[]; values: number[]; yAxis: string[] }
+export interface MetricCardProps { label: string; trend: string; isNew?: boolean; binding: DataBinding }
+export interface BarChartProps { title: string; subtitle: string; binding: DataBinding }
 export interface DataHealthProps {
   title: string;
   subtitle: string;
@@ -34,8 +36,7 @@ export interface DataTableProps {
   title: string;
   subtitle: string;
   actionLabel: string;
-  columns: Array<{ key: string; label: string }>;
-  rows: Array<Record<string, string>>;
+  binding: DataBinding;
 }
 
 export type EmptyComponentProps = Record<never, never>;
@@ -69,6 +70,7 @@ export interface AppSpec {
   id: string;
   siteId: string;
   schemaVersion: "1.0";
+  dataSources: DataSourceDefinition[];
   navigation: NavigationItem[];
   pages: AppPage[];
 }
@@ -84,7 +86,8 @@ export type ChangeOperation =
   | (ChangeOperationBase & { type: "addNode"; parentId: string; node: AppNode; position?: number })
   | (ChangeOperationBase & { type: "updateNodeProps"; nodeId: string; props: Record<string, unknown> })
   | (ChangeOperationBase & { type: "removeNode"; nodeId: string })
-  | (ChangeOperationBase & { type: "moveNode"; nodeId: string; parentId: string; position: number });
+  | (ChangeOperationBase & { type: "moveNode"; nodeId: string; parentId: string; position: number })
+  | (ChangeOperationBase & { type: "updatePage"; title?: string; route?: string });
 
 export interface ChangeSet {
   id: string;

@@ -1,6 +1,13 @@
 import type { BarChartProps } from "@/core/models";
 
-export function BarChart({ title, subtitle, labels, values, yAxis }: BarChartProps) {
+interface BarChartViewProps extends Omit<BarChartProps, "binding"> {
+  labels: string[];
+  values: number[];
+  yAxis: string[];
+}
+
+export function BarChart({ title, subtitle, labels, values, yAxis }: BarChartViewProps) {
+  const maximum = Math.max(...values, 1);
   return (
     <article className="chart-card">
       <div className="card-head">
@@ -12,7 +19,7 @@ export function BarChart({ title, subtitle, labels, values, yAxis }: BarChartPro
         <div className="bars">
           {values.map((height, index) => (
             <div className="bar-wrap" key={labels[index]}>
-              <i style={{ height }} className={index === 9 ? "focus" : ""} />
+              <i style={{ height: Math.max(8, height / maximum * 132) }} className={index === 9 ? "focus" : ""} />
               <small>{labels[index]}</small>
             </div>
           ))}

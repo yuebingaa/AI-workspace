@@ -1,3 +1,5 @@
+import { studioRoleLabels, type StudioRole } from "@/core/permissions";
+
 export type PreviewDevice = "desktop" | "mobile";
 
 interface StudioHeaderProps {
@@ -5,11 +7,13 @@ interface StudioHeaderProps {
   device: PreviewDevice;
   canUndo: boolean;
   saveLabel: string;
+  role: StudioRole;
   onDeviceChange: (device: PreviewDevice) => void;
   onUndo: () => void;
+  onRoleChange: (role: StudioRole) => void;
 }
 
-export function StudioHeader({ productName, device, canUndo, saveLabel, onDeviceChange, onUndo }: StudioHeaderProps) {
+export function StudioHeader({ productName, device, canUndo, saveLabel, role, onDeviceChange, onUndo, onRoleChange }: StudioHeaderProps) {
   return (
     <header className="topbar">
       <div className="brand">
@@ -19,6 +23,11 @@ export function StudioHeader({ productName, device, canUndo, saveLabel, onDevice
       </div>
       <div className="project-name"><span className="status-dot" />{productName}<button type="button" aria-label="切换项目">⌄</button></div>
       <div className="top-actions">
+        <label className="role-switcher">演示角色
+          <select value={role} onChange={(event) => onRoleChange(event.target.value as StudioRole)}>
+            {(Object.keys(studioRoleLabels) as StudioRole[]).map((item) => <option key={item} value={item}>{studioRoleLabels[item]}</option>)}
+          </select>
+        </label>
         <button type="button" className={device === "desktop" ? "active" : ""} onClick={() => onDeviceChange("desktop")}>桌面</button>
         <button type="button" className={device === "mobile" ? "active" : ""} onClick={() => onDeviceChange("mobile")}>手机</button>
         <button type="button" disabled={!canUndo} onClick={onUndo}>撤销</button>

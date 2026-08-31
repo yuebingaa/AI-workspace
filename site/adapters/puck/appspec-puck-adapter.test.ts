@@ -90,6 +90,25 @@ describe("AppSpec 与 Puck Data 适配器", () => {
     }));
   });
 
+  it("数据绑定编辑生成 ChangeSet 而不直接修改 AppSpec", () => {
+    const { dataProduct } = fixtures();
+    const original = structuredClone(dataProduct.appSpec);
+    const data = appSpecToPuckData(dataProduct.appSpec, "page_home");
+    const grid = data.content.find((item) => item.type === "MetricGrid");
+    if (!grid || grid.type !== "MetricGrid") throw new Error("缺少指标组 fixture");
+    const metric = grid.props.children.find((item) => item.type === "MetricCard");
+    if (!metric || metric.type !== "MetricCard") throw new Error("缺少指标卡 fixture");
+    metric.props.binding = { ...metric.props.binding, field: "average_order_value", aggregation: "average" };
+
+    const changeSet = puckDataToChangeSet(dataProduct.appSpec, "page_home", data, "editor");
+    expect(changeSet.operations).toContainEqual(expect.objectContaining({
+      type: "updateNodeProps",
+      nodeId: "page_home_revenue",
+      props: expect.objectContaining({ binding: expect.objectContaining({ field: "average_order_value" }) }),
+    }));
+    expect(dataProduct.appSpec).toEqual(original);
+  });
+
   it("拒绝包含非法组件属性的 Puck Data", () => {
     const { dataProduct } = fixtures();
     const data = appSpecToPuckData(dataProduct.appSpec, "page_home");

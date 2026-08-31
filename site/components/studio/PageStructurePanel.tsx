@@ -1,5 +1,6 @@
 import { getComponentDefinition } from "@/components/registry/component-registry";
 import type { AppPage, AppSpec, DataProduct } from "@/core/models";
+import type { StudioRole } from "@/core/permissions";
 
 function getLayerNodes(page: AppPage | undefined) {
   return page?.root.children ?? [];
@@ -10,20 +11,27 @@ interface PageStructurePanelProps {
   appSpec: AppSpec;
   activePageId: string;
   onPageChange: (pageId: string) => void;
+  role: StudioRole;
+  onRenamePage: (pageId: string, currentTitle: string) => void;
 }
 
-export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange }: PageStructurePanelProps) {
+export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange, role, onRenamePage }: PageStructurePanelProps) {
   const activePage = appSpec.pages.find((page) => page.id === activePageId);
   const dataset = dataProduct.datasets[0];
 
   return (
     <aside className="left-panel panel">
-      <div className="panel-title"><span>页面与结构</span><button type="button" aria-label="新建页面">＋</button></div>
+      <div className="panel-title"><span>页面与结构</span><button type="button" disabled title="本里程碑仅开放页面重命名" aria-label="新建页面">＋</button></div>
       <nav className="page-list" aria-label="页面列表">
         {appSpec.navigation.map((item, index) => (
-          <button key={item.id} type="button" className={activePageId === item.pageId ? "selected" : ""} onClick={() => onPageChange(item.pageId)}>
-            <span className="icon">{index === 0 ? "▦" : index === 1 ? "⌁" : "◉"}</span>{item.title}<span>···</span>
-          </button>
+          <div className="page-list-row" key={item.id}>
+            <button type="button" className={activePageId === item.pageId ? "selected" : ""} onClick={() => onPageChange(item.pageId)}>
+              <span className="icon">{index === 0 ? "▦" : index === 1 ? "⌁" : "◉"}</span>{item.title}
+            </button>
+            {role === "admin" ? (
+              <button type="button" className="page-structure-edit" title="重命名页面" onClick={() => onRenamePage(item.pageId, item.title)}>编辑</button>
+            ) : <span>···</span>}
+          </div>
         ))}
       </nav>
 

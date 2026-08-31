@@ -1,18 +1,45 @@
 import { Children, type ReactNode } from "react";
 import type { Field } from "@puckeditor/core";
 import { BarChart, DataHealth, DataTable, MetricCard } from "@/components/data-components";
-import type { AppNode, AppNodeType, ComponentPropsMap } from "@/core/models";
+import { executeChartBinding, executeMetricBinding, executeTableBinding } from "@/core/data";
+import type { AppNode, AppNodeType, ComponentPropsMap, DataBinding, DataSourceDefinition, LocalDataRuntime } from "@/core/models";
 import { componentPropsSchemas } from "@/core/schemas";
+
+export interface ComponentRenderContext {
+  dataSources: DataSourceDefinition[];
+  dataRuntime: LocalDataRuntime;
+}
 
 interface ComponentDefinition<TType extends AppNodeType> {
   label: string;
   icon: string;
   propsSchema: typeof componentPropsSchemas[TType];
-  render: (props: ComponentPropsMap[TType], children: ReactNode, nodeId: string) => ReactNode;
+  render: (props: ComponentPropsMap[TType], children: ReactNode, nodeId: string, context: ComponentRenderContext) => ReactNode;
+  dataBinding?: "metric" | "chart" | "table";
   editor?: {
     fields: Partial<{ [TProp in keyof ComponentPropsMap[TType]]: Field<ComponentPropsMap[TType][TProp]> }>;
     defaultProps: ComponentPropsMap[TType];
   };
+}
+
+const defaultBinding: DataBinding = {
+  dataSourceId: "dataset_retail_orders",
+  field: "revenue",
+  aggregation: "sum",
+  groupBy: null,
+  filters: [],
+  sort: [],
+  limit: 12,
+  format: { style: "number", decimals: 0 },
+};
+
+function bindingError(nodeId: string, error: unknown) {
+  return (
+    <article className="data-binding-error" data-node-id={nodeId} role="alert">
+      <b>数据绑定无效</b>
+      <p>{error instanceof Error ? error.message : "无法计算当前组件的数据"}</p>
+    </article>
+  );
 }
 
 type ComponentRegistry = {
@@ -82,11 +109,11 @@ export const componentRegistry: ComponentRegistry = {
   MetricCard: {
     label: "指标卡",
     icon: "◇",
+    dataBinding: "metric",
     propsSchema: componentPropsSchemas.MetricCard,
     editor: {
       fields: {
         label: { type: "text", label: "指标名称" },
-        value: { type: "text", label: "指标值" },
         trend: { type: "text", label: "趋势" },
         isNew: {
           type: "radio",
@@ -94,9 +121,16 @@ export const componentRegistry: ComponentRegistry = {
           options: [{ label: "否", value: false }, { label: "是", value: true }],
         },
       },
-      defaultProps: { label: "新指标", value: "0", trend: "—", isNew: true },
+      defaultProps: { label: "新指标", trend: "—", isNew: true, binding: structuredClone(defaultBinding) },
     },
-    render: (props) => <MetricCard {...props} />,
+    render: (props, _children, nodeId, context) => {
+      try {
+        const result = executeMetricBinding(props.binding, context.dataSources, context.dataRuntime);
+        return <MetricCard label={props.label} trend={props.trend} isNew={props.isNew} value={result.value} />;
+      } catch (error) {
+        return bindingError(nodeId, error);
+      }
+    },
   },
   DashboardGrid: {
     label: "分析图表组",
@@ -108,6 +142,7 @@ export const componentRegistry: ComponentRegistry = {
   BarChart: {
     label: "月度收入趋势",
     icon: "⌁",
+    dataBinding: "chart",
     propsSchema: componentPropsSchemas.BarChart,
     editor: {
       fields: {
@@ -116,13 +151,17 @@ export const componentRegistry: ComponentRegistry = {
       },
       defaultProps: {
         title: "新增柱状图",
-        subtitle: "模拟数据",
-        labels: ["一月", "二月", "三月"],
-        values: [48, 72, 61],
-        yAxis: ["100", "75", "50", "25", "0"],
+        subtitle: "绑定本地数据",
+        binding: { ...structuredClone(defaultBinding), groupBy: "month" },
       },
     },
-    render: (props) => <BarChart {...props} />,
+    render: (props, _children, nodeId, context) => {
+      try {
+        return <BarChart {...props} {...executeChartBinding(props.binding, context.dataSources, context.dataRuntime)} />;
+      } catch (error) {
+        return bindingError(nodeId, error);
+      }
+    },
   },
   DataHealth: {
     label: "数据健康度",
@@ -149,6 +188,7 @@ export const componentRegistry: ComponentRegistry = {
   DataTable: {
     label: "区域表现表",
     icon: "▤",
+    dataBinding: "table",
     propsSchema: componentPropsSchemas.DataTable,
     editor: {
       fields: {
@@ -158,13 +198,26 @@ export const componentRegistry: ComponentRegistry = {
       },
       defaultProps: {
         title: "新增数据表",
-        subtitle: "模拟数据",
+        subtitle: "绑定本地数据",
         actionLabel: "下载数据",
-        columns: [{ key: "item", label: "项目" }, { key: "value", label: "数值" }],
-        rows: [{ item: "示例", value: "100" }],
+        binding: {
+          ...structuredClone(defaultBinding),
+          groupBy: "region",
+          limit: 5,
+          columns: [
+            { field: "region", label: "区域", aggregation: "none", format: { style: "text" } },
+            { field: "revenue", label: "收入", aggregation: "sum", format: { style: "currency", currency: "CNY", decimals: 0 } },
+          ],
+        },
       },
     },
-    render: (props) => <DataTable {...props} />,
+    render: (props, _children, nodeId, context) => {
+      try {
+        return <DataTable {...props} {...executeTableBinding(props.binding, context.dataSources, context.dataRuntime)} />;
+      } catch (error) {
+        return bindingError(nodeId, error);
+      }
+    },
   },
 };
 
@@ -172,7 +225,7 @@ export function getComponentDefinition<TType extends AppNodeType>(type: TType): 
   return componentRegistry[type];
 }
 
-export function renderRegisteredNode(node: AppNode, children: ReactNode): ReactNode {
+export function renderRegisteredNode(node: AppNode, children: ReactNode, context: ComponentRenderContext): ReactNode {
   const definition = getComponentDefinition(node.type) as ComponentDefinition<AppNodeType>;
-  return definition.render(node.props, children, node.id);
+  return definition.render(node.props, children, node.id, context);
 }
