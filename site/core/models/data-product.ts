@@ -1,4 +1,5 @@
 import type { DataBinding, DataSourceDefinition } from "./data-binding";
+import type { DataRecipe } from "./data-recipe";
 
 export interface DatasetReference {
   id: string;
@@ -6,19 +7,6 @@ export interface DatasetReference {
   rowCount: number;
   columnCount: number;
   qualityScore: number;
-}
-
-export type DataRecipeStep =
-  | { id: string; type: "filter"; field: string; operator: string; value: string }
-  | { id: string; type: "derive"; field: string; expression: string }
-  | { id: string; type: "export"; format: "xlsx" | "csv" };
-
-export interface DataRecipe {
-  id: string;
-  name: string;
-  sourceDatasetId: string;
-  status: "draft" | "ready";
-  steps: DataRecipeStep[];
 }
 
 export interface PageHeaderProps { eyebrow: string; title: string; description: string; dateRange: string }

@@ -413,6 +413,26 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     }
   }
 
+  function handlePreviewRecipeBinding(changeSet: ChangeSet) {
+    try {
+      auditCurrentPreviewCancellation();
+      const nextExecution = previewChangeSet(cancelPreview(execution), changeSet, role);
+      setExecution(nextExecution);
+      setActivePageId(changeSet.operations[0]?.pageId ?? activePageId);
+      setPendingPuckChangeSet(changeSet);
+      setPendingChangeSource("manual");
+      setCanvasMode("preview");
+      setIsDataSourceOpen(false);
+      setSaveLabel(`预览中 · ${changeSet.operations.length} 项配方绑定变更`);
+      setValidationError(null);
+      addAudit(changeSet, "manual", "previewed");
+    } catch (error) {
+      const message = readableValidationError(error);
+      setValidationError(message);
+      addAudit(changeSet, "manual", "failed", message);
+    }
+  }
+
   function handleApplyPuckPreview() {
     if (!pendingPuckChangeSet) return;
     try {
@@ -588,9 +608,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       </div>
       {isDataSourceOpen && activeDataSource && (
         <DataSourceDetailsPanel
+          key={activeDataSource.id}
           source={activeDataSource}
           rows={dataRuntime.rowsByDataSourceId[activeDataSource.id] ?? []}
+          recipe={dataProduct.recipes.find((recipe) => recipe.sourceDatasetId === activeDataSource.id)}
           queryRecords={queryRecords}
+          onPreviewRecipeBinding={handlePreviewRecipeBinding}
           onClose={() => setIsDataSourceOpen(false)}
         />
       )}

@@ -8,9 +8,9 @@ import type {
   ChangeSet,
   ComponentPropsMap,
   DataProduct,
-  DataRecipe,
 } from "@/core/models";
 import { dataBindingSchema, dataSourceDefinitionSchema } from "./data-binding";
+import { dataRecipeSchema } from "./data-recipe";
 
 const idSchema = z.string().trim().min(1);
 const textSchema = z.string();
@@ -96,18 +96,6 @@ export const appSpecSchema: z.ZodType<AppSpec> = z.object({
   dataSources: z.array(dataSourceDefinitionSchema).min(1),
   navigation: z.array(z.object({ id: idSchema, title: textSchema, pageId: idSchema }).strict()),
   pages: z.array(appPageSchema).min(1),
-}).strict();
-
-export const dataRecipeSchema: z.ZodType<DataRecipe> = z.object({
-  id: idSchema,
-  name: textSchema,
-  sourceDatasetId: idSchema,
-  status: z.enum(["draft", "ready"]),
-  steps: z.array(z.discriminatedUnion("type", [
-    z.object({ id: idSchema, type: z.literal("filter"), field: idSchema, operator: textSchema, value: textSchema }).strict(),
-    z.object({ id: idSchema, type: z.literal("derive"), field: idSchema, expression: textSchema }).strict(),
-    z.object({ id: idSchema, type: z.literal("export"), format: z.enum(["xlsx", "csv"]) }).strict(),
-  ])),
 }).strict();
 
 export const changeOperationSchema: z.ZodType<ChangeOperation> = z.discriminatedUnion("type", [

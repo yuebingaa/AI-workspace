@@ -1,5 +1,5 @@
 import type { AppNode, AppPage, ChangeSet, DataBinding, DataProduct, DataRecipe, DataTableProps, LocalDataRuntime } from "@/core/models";
-import { assertValidAppSpecDataBindings, validateRuntimeRows } from "@/core/data";
+import { assertValidAppSpecDataBindings, executeDataRecipe, validateRuntimeRows } from "@/core/data";
 import { changeSetSchema, dataProductSchema, formatSchemaIssues } from "@/core/schemas";
 import { demoLocalDataRuntime, retailOrderRows, retailOrdersDataSource } from "./retail-orders";
 
@@ -132,11 +132,38 @@ const rawDemoRecipe: DataRecipe = {
   id: "recipe_east_anomalies",
   name: "华东异常订单与复购分析",
   sourceDatasetId: "dataset_retail_orders",
+  outputDatasetId: "dataset_east_category_recipe",
   status: "ready",
   steps: [
+    {
+      id: "select_business_fields",
+      type: "selectFields",
+      fields: ["region", "category", "revenue", "repurchase_rate", "anomaly_count", "completion_rate"],
+    },
     { id: "filter_east", type: "filter", field: "region", operator: "equals", value: "华东" },
-    { id: "derive_repeat", type: "derive", field: "is_repeat_customer", expression: "customer_order_count > 1" },
-    { id: "export_result", type: "export", format: "xlsx" },
+    { id: "rename_completion", type: "renameField", field: "completion_rate", newName: "target_completion", newLabel: "目标完成率" },
+    { id: "cast_anomaly", type: "castField", field: "anomaly_count", to: "number" },
+    {
+      id: "derive_revenue_per_anomaly",
+      type: "deriveField",
+      field: "revenue_per_anomaly",
+      label: "单个异常订单对应收入",
+      operator: "divide",
+      left: { kind: "field", field: "revenue" },
+      right: { kind: "field", field: "anomaly_count" },
+    },
+    {
+      id: "aggregate_category",
+      type: "groupAggregate",
+      groupBy: ["category"],
+      aggregations: [
+        { field: "revenue", aggregation: "sum", as: "total_revenue", label: "总收入" },
+        { field: "repurchase_rate", aggregation: "average", as: "average_repurchase_rate", label: "平均复购率" },
+        { field: "anomaly_count", aggregation: "sum", as: "total_anomaly_count", label: "异常订单数" },
+      ],
+    },
+    { id: "sort_revenue", type: "sort", by: [{ field: "total_revenue", direction: "desc" }] },
+    { id: "limit_categories", type: "limit", count: 4 },
   ],
 };
 
@@ -242,6 +269,10 @@ function validateDemoFixtures(): DemoFixtureResult {
     validateRuntimeRows(retailOrdersDataSource, retailOrderRows);
     if (retailOrdersDataSource.rowCount !== retailOrderRows.length) {
       return { success: false, error: "演示数据校验失败：数据源行数与 fixture 行数不一致" };
+    }
+    const recipeResult = executeDataRecipe(dataProductResult.data.recipes[0], retailOrdersDataSource, retailOrderRows);
+    if (!recipeResult.success) {
+      return { success: false, error: `演示数据校验失败：${recipeResult.error}` };
     }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : "演示数据绑定校验失败" };
