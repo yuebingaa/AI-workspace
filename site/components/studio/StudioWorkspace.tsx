@@ -2,16 +2,22 @@
 
 import { useState } from "react";
 import {
+  appSpecToPuckData,
+  puckDataToChangeSet,
+  type StudioPuckData,
+} from "@/adapters/puck";
+import {
   applyChangeSet,
   cancelPreview,
   createExecutionState,
   previewChangeSet,
   undoLastChange,
 } from "@/core/changesets";
+import type { ChangeSet } from "@/core/models";
 import { readableValidationError } from "@/core/schemas";
 import { demoFixtureResult, type DemoFixtures } from "@/fixtures/demo-product";
 import { AiBuilderAssistant, type ChangeSetUiStatus } from "./AiBuilderAssistant";
-import { DataProductCanvas } from "./DataProductCanvas";
+import { DataProductCanvas, type CanvasMode } from "./DataProductCanvas";
 import { PageStructurePanel } from "./PageStructurePanel";
 import { StudioHeader, type PreviewDevice } from "./StudioHeader";
 
@@ -38,9 +44,14 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [saveLabel, setSaveLabel] = useState("已保存 · 演示草稿");
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [canvasMode, setCanvasMode] = useState<CanvasMode>("preview");
+  const [puckDraft, setPuckDraft] = useState<StudioPuckData | null>(null);
+  const [puckSessionKey, setPuckSessionKey] = useState(0);
+  const [pendingPuckChangeSet, setPendingPuckChangeSet] = useState<ChangeSet | null>(null);
 
   const isApplied = execution.appliedChangeSetIds.includes(repurchaseChangeSet.id);
-  const status: ChangeSetUiStatus = isApplied ? "applied" : execution.preview ? "preview" : "pending";
+  const isAiPreview = execution.preview?.changeSetId === repurchaseChangeSet.id;
+  const status: ChangeSetUiStatus = isApplied ? "applied" : isAiPreview ? "preview" : "pending";
   const renderedSpec = execution.preview?.appSpec ?? execution.present;
   const activePage = renderedSpec.pages.find((page) => page.id === activePageId) ?? renderedSpec.pages[0];
   const dataset = dataProduct.datasets[0];
@@ -49,6 +60,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     try {
       setExecution(previewChangeSet(execution, repurchaseChangeSet));
       setActivePageId("page_home");
+      setCanvasMode("preview");
+      setPendingPuckChangeSet(null);
       setSaveLabel("预览中 · 尚未保存");
       setValidationError(null);
     } catch (error) {
@@ -60,6 +73,10 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     try {
       setExecution(applyChangeSet(execution, repurchaseChangeSet));
       setActivePageId("page_home");
+      setCanvasMode("preview");
+      setPendingPuckChangeSet(null);
+      setPuckDraft(null);
+      setPuckSessionKey((value) => value + 1);
       setSaveLabel("已保存 · 变更已应用");
       setValidationError(null);
     } catch (error) {
@@ -75,7 +92,88 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
 
   function handleUndo() {
     setExecution(undoLastChange(execution));
+    setCanvasMode("preview");
+    setPendingPuckChangeSet(null);
+    setPuckDraft(null);
+    setPuckSessionKey((value) => value + 1);
     setSaveLabel("已保存 · 已撤销最近变更");
+    setValidationError(null);
+  }
+
+  function handleCanvasModeChange(mode: CanvasMode) {
+    if (mode === canvasMode) return;
+    if (mode === "preview") {
+      setCanvasMode("preview");
+      return;
+    }
+
+    try {
+      const nextExecution = cancelPreview(execution);
+      setExecution(nextExecution);
+      if (!pendingPuckChangeSet || !puckDraft) {
+        setPuckDraft(appSpecToPuckData(nextExecution.present, activePageId));
+        setPuckSessionKey((value) => value + 1);
+      }
+      setPendingPuckChangeSet(null);
+      setCanvasMode("edit");
+      setSaveLabel("可视化编辑 · 尚未生成变更集");
+      setValidationError(null);
+    } catch (error) {
+      setValidationError(readableValidationError(error));
+    }
+  }
+
+  function handlePageChange(pageId: string) {
+    try {
+      const nextExecution = cancelPreview(execution);
+      setExecution(nextExecution);
+      setActivePageId(pageId);
+      setPendingPuckChangeSet(null);
+      if (canvasMode === "edit") {
+        setPuckDraft(appSpecToPuckData(nextExecution.present, pageId));
+        setPuckSessionKey((value) => value + 1);
+      }
+      setValidationError(null);
+    } catch (error) {
+      setValidationError(readableValidationError(error));
+    }
+  }
+
+  function handleRequestPuckPreview(data: StudioPuckData) {
+    try {
+      const changeSet = puckDataToChangeSet(execution.present, activePageId, data);
+      const nextExecution = previewChangeSet(cancelPreview(execution), changeSet);
+      setExecution(nextExecution);
+      setPuckDraft(structuredClone(data));
+      setPendingPuckChangeSet(changeSet);
+      setCanvasMode("preview");
+      setSaveLabel(`预览中 · ${changeSet.operations.length} 项可视化变更`);
+      setValidationError(null);
+    } catch (error) {
+      setValidationError(readableValidationError(error));
+    }
+  }
+
+  function handleApplyPuckPreview() {
+    if (!pendingPuckChangeSet) return;
+    try {
+      setExecution(applyChangeSet(cancelPreview(execution), pendingPuckChangeSet));
+      setPendingPuckChangeSet(null);
+      setPuckDraft(null);
+      setPuckSessionKey((value) => value + 1);
+      setCanvasMode("preview");
+      setSaveLabel("已保存 · 可视化编辑已应用");
+      setValidationError(null);
+    } catch (error) {
+      setValidationError(readableValidationError(error));
+    }
+  }
+
+  function handleCancelPuckPreview() {
+    setExecution(cancelPreview(execution));
+    setPendingPuckChangeSet(null);
+    setCanvasMode("edit");
+    setSaveLabel("可视化编辑 · 尚未应用");
     setValidationError(null);
   }
 
@@ -94,7 +192,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           dataProduct={dataProduct}
           appSpec={renderedSpec}
           activePageId={activePageId}
-          onPageChange={setActivePageId}
+          onPageChange={handlePageChange}
         />
         <DataProductCanvas
           appSpec={renderedSpec}
@@ -102,7 +200,16 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           device={device}
           isPreviewing={Boolean(execution.preview)}
           canUndo={execution.history.length > 0}
+          mode={canvasMode}
+          puckData={puckDraft}
+          puckSessionKey={puckSessionKey}
+          hasPuckPreview={Boolean(pendingPuckChangeSet && execution.preview?.changeSetId === pendingPuckChangeSet.id)}
           onUndo={handleUndo}
+          onModeChange={handleCanvasModeChange}
+          onPuckDataChange={setPuckDraft}
+          onRequestPuckPreview={handleRequestPuckPreview}
+          onApplyPuckPreview={handleApplyPuckPreview}
+          onCancelPuckPreview={handleCancelPuckPreview}
         />
         <AiBuilderAssistant
           pageTitle={activePage?.title ?? "未选择页面"}

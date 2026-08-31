@@ -83,7 +83,8 @@ interface ChangeOperationBase {
 export type ChangeOperation =
   | (ChangeOperationBase & { type: "addNode"; parentId: string; node: AppNode; position?: number })
   | (ChangeOperationBase & { type: "updateNodeProps"; nodeId: string; props: Record<string, unknown> })
-  | (ChangeOperationBase & { type: "removeNode"; nodeId: string });
+  | (ChangeOperationBase & { type: "removeNode"; nodeId: string })
+  | (ChangeOperationBase & { type: "moveNode"; nodeId: string; parentId: string; position: number });
 
 export interface ChangeSet {
   id: string;

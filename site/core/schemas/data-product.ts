@@ -141,6 +141,16 @@ export const changeOperationSchema: z.ZodType<ChangeOperation> = z.discriminated
     pageId: idSchema,
     nodeId: idSchema,
   }).strict(),
+  z.object({
+    id: idSchema,
+    type: z.literal("moveNode"),
+    label: textSchema,
+    description: textSchema,
+    pageId: idSchema,
+    nodeId: idSchema,
+    parentId: idSchema,
+    position: z.number().int().min(0),
+  }).strict(),
 ]) as z.ZodType<ChangeOperation>;
 
 export const changeSetSchema: z.ZodType<ChangeSet> = z.object({

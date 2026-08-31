@@ -89,6 +89,28 @@ function removeNode(node: AppNode, nodeId: string): [AppNode, boolean] {
   return changed ? [{ ...node, children } as AppNode, true] : [node, false];
 }
 
+function detachNode(node: AppNode, nodeId: string): [AppNode, AppNode | undefined] {
+  if (!node.children) return [node, undefined];
+  const directIndex = node.children.findIndex((child) => child.id === nodeId);
+  if (directIndex >= 0) {
+    const detached = node.children[directIndex];
+    return [
+      { ...node, children: node.children.filter((_, index) => index !== directIndex) } as AppNode,
+      detached,
+    ];
+  }
+
+  for (let index = 0; index < node.children.length; index += 1) {
+    const [nextChild, detached] = detachNode(node.children[index], nodeId);
+    if (detached) {
+      const children = [...node.children];
+      children[index] = nextChild;
+      return [{ ...node, children } as AppNode, detached];
+    }
+  }
+  return [node, undefined];
+}
+
 function updatePage(appSpec: AppSpec, pageId: string, updater: (page: AppPage) => AppPage): AppSpec {
   return { ...appSpec, pages: appSpec.pages.map((page) => page.id === pageId ? updater(page) : page) };
 }
@@ -97,6 +119,17 @@ function applyOperationUnchecked(appSpec: AppSpec, operation: ChangeOperation): 
   return updatePage(appSpec, operation.pageId, (page) => {
     if (operation.type === "removeNode") {
       const [root] = removeNode(page.root, operation.nodeId);
+      return { ...page, root };
+    }
+
+    if (operation.type === "moveNode") {
+      const [rootWithoutNode, detached] = detachNode(page.root, operation.nodeId);
+      if (!detached) return page;
+      const [root] = updateNode(rootWithoutNode, operation.parentId, (parent) => {
+        const children = [...(parent.children ?? [])];
+        children.splice(operation.position, 0, detached);
+        return { ...parent, children } as AppNode;
+      });
       return { ...page, root };
     }
 
@@ -148,6 +181,25 @@ function validateOperationTarget(appSpec: AppSpec, operation: ChangeOperation) {
   }
   if (operation.type === "removeNode" && page.root.id === operation.nodeId) {
     throw new StudioValidationError("ChangeSet 目标校验失败", ["不能删除页面根节点"]);
+  }
+  if (operation.type === "moveNode") {
+    if (page.root.id === operation.nodeId) {
+      throw new StudioValidationError("ChangeSet 目标校验失败", ["不能移动页面根节点"]);
+    }
+    const parent = findNode(page.root, operation.parentId);
+    if (!parent) {
+      throw new StudioValidationError("ChangeSet 目标校验失败", [
+        `操作“${operation.label}”引用了不存在的父组件：${operation.parentId}`,
+      ]);
+    }
+    if (nodeEntries(target).some((node) => node.id === operation.parentId)) {
+      throw new StudioValidationError("ChangeSet 目标校验失败", ["不能把组件移动到自身或其子节点中"]);
+    }
+    if (operation.position > (parent.children?.length ?? 0)) {
+      throw new StudioValidationError("ChangeSet 目标校验失败", [
+        `移动位置 ${operation.position} 超出父组件范围`,
+      ]);
+    }
   }
   if (operation.type === "updateNodeProps") {
     const result = componentPropsSchemas[target.type].safeParse({ ...target.props, ...operation.props });
