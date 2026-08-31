@@ -1,0 +1,47 @@
+import { describe, expect, it, vi } from "vitest";
+import { demoFixtureResult } from "@/fixtures/demo-product";
+import type { AiPlanRequest } from "./contracts";
+import { AiPlanClientError, requestAiPlan } from "./client";
+
+function request(): AiPlanRequest {
+  if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+  return {
+    instruction: "修改指标标题",
+    pageId: "page_home",
+    appSpec: structuredClone(demoFixtureResult.data.dataProduct.appSpec),
+    role: "editor",
+  };
+}
+
+function abortingFetch() {
+  return vi.fn<typeof fetch>((_input, init) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+  }));
+}
+
+describe("AI 规划客户端", () => {
+  it("客户端超时显示可重试中文错误", async () => {
+    await expect(requestAiPlan(request(), { fetchImpl: abortingFetch(), timeoutMs: 1 })).rejects.toMatchObject({
+      code: "timeout",
+      retryable: true,
+    } satisfies Partial<AiPlanClientError>);
+  });
+
+  it("用户取消请求时区分取消状态", async () => {
+    const controller = new AbortController();
+    const promise = requestAiPlan(request(), { fetchImpl: abortingFetch(), signal: controller.signal });
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ code: "cancelled" } satisfies Partial<AiPlanClientError>);
+  });
+
+  it("服务端中文错误被安全转换而不渲染原始响应", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      error: { code: "not_configured", message: "AI 服务尚未配置。", retryable: false },
+    }), { status: 503, headers: { "content-type": "application/json" } }));
+    await expect(requestAiPlan(request(), { fetchImpl })).rejects.toMatchObject({
+      code: "service_error",
+      message: "AI 服务尚未配置。",
+      retryable: false,
+    } satisfies Partial<AiPlanClientError>);
+  });
+});

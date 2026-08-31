@@ -21,6 +21,24 @@ export interface QueryExecutionRecord {
 export type ChangeSetAuditSource = "ai" | "puck" | "manual";
 export type ChangeSetAuditStatus = "previewed" | "applied" | "cancelled" | "undone" | "failed";
 
+export interface AiChangeSetAuditMetadata {
+  model: string;
+  durationMs: number;
+  transport?: "responses_json_schema" | "chat_function" | "chat_json_object";
+  repairAttempted?: boolean;
+  validationIssues?: Array<{
+    stage: "json_parse" | "draft_schema" | "compile" | "changeset_validation";
+    path: string;
+    code: string;
+    operationType?: "addNode" | "updateNodeProps" | "removeNode" | "moveNode" | "updatePage";
+  }>;
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+
 export interface ChangeSetAuditRecord {
   id: string;
   changeSetId: string;
@@ -30,6 +48,7 @@ export interface ChangeSetAuditRecord {
   status: ChangeSetAuditStatus;
   timestamp: string;
   error?: string;
+  ai?: AiChangeSetAuditMetadata;
 }
 
 export interface FieldAnalysis {

@@ -21,6 +21,23 @@ const auditRecordSchema: z.ZodType<ChangeSetAuditRecord> = z.object({
   status: z.enum(["previewed", "applied", "cancelled", "undone", "failed"]),
   timestamp: z.iso.datetime(),
   error: z.string().optional(),
+  ai: z.object({
+    model: z.string().min(1),
+    durationMs: z.number().nonnegative(),
+    transport: z.enum(["responses_json_schema", "chat_function", "chat_json_object"]).optional(),
+    repairAttempted: z.boolean().optional(),
+    validationIssues: z.array(z.object({
+      stage: z.enum(["json_parse", "draft_schema", "compile", "changeset_validation"]),
+      path: z.string().min(1).max(240),
+      code: z.string().min(1).max(120),
+      operationType: z.enum(["addNode", "updateNodeProps", "removeNode", "moveNode", "updatePage"]).optional(),
+    }).strict()).max(12).optional(),
+    usage: z.object({
+      promptTokens: z.number().int().nonnegative(),
+      completionTokens: z.number().int().nonnegative(),
+      totalTokens: z.number().int().nonnegative(),
+    }).strict(),
+  }).strict().optional(),
 }).strict();
 
 const queryRecordSchema: z.ZodType<QueryExecutionRecord> = z.object({

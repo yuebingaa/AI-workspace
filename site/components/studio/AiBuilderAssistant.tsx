@@ -1,7 +1,9 @@
-import type { ChangeSet, ChangeSetAuditRecord } from "@/core/models";
+import type { AiPlanMetadata } from "@/core/ai/contracts";
+import type { ChangeOperation, ChangeSet, ChangeSetAuditRecord } from "@/core/models";
 import { studioRoleLabels } from "@/core/permissions";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
+export type AiRequestUiStatus = "idle" | "loading" | "success" | "error" | "cancelled" | "timeout";
 
 interface AiBuilderAssistantProps {
   pageTitle: string;
@@ -10,18 +12,36 @@ interface AiBuilderAssistantProps {
   status: ChangeSetUiStatus;
   validationError: string | null;
   canApply: boolean;
+  canPreview: boolean;
   auditRecords: ChangeSetAuditRecord[];
+  aiMessage: string;
+  aiMetadata: AiPlanMetadata | null;
+  instruction: string;
+  requestStatus: AiRequestUiStatus;
+  requestError: string | null;
+  canRetry: boolean;
+  onInstructionChange: (instruction: string) => void;
+  onGenerate: () => void;
+  onCancelRequest: () => void;
+  onRetry: () => void;
   onPreview: () => void;
   onApply: () => void;
   onCancelPreview: () => void;
 }
 
 const statusLabels: Record<ChangeSetUiStatus, string> = {
-  pending: "等待确认",
+  pending: "等待预览",
   preview: "画布预览中",
   applied: "已应用",
 };
 const auditSourceLabels = { ai: "AI", puck: "Puck", manual: "手动" } as const;
+
+function operationTargets(operation: ChangeOperation): string[] {
+  if (operation.type === "addNode") return [operation.parentId, operation.node.id];
+  if (operation.type === "updatePage") return [operation.pageId];
+  if (operation.type === "moveNode") return [operation.nodeId, operation.parentId];
+  return [operation.nodeId];
+}
 
 export function AiBuilderAssistant({
   pageTitle,
@@ -30,15 +50,31 @@ export function AiBuilderAssistant({
   status,
   validationError,
   canApply,
+  canPreview,
   auditRecords,
+  aiMessage,
+  aiMetadata,
+  instruction,
+  requestStatus,
+  requestError,
+  canRetry,
+  onInstructionChange,
+  onGenerate,
+  onCancelRequest,
+  onRetry,
   onPreview,
   onApply,
   onCancelPreview,
 }: AiBuilderAssistantProps) {
+  const affectedPages = [...new Set(changeSet.operations.map((operation) => operation.pageId))];
+  const affectedComponents = [...new Set(changeSet.operations.flatMap(operationTargets))];
+  const needsAdmin = changeSet.operations.some((operation) => operation.type === "removeNode" || operation.type === "updatePage");
+  const isLoading = requestStatus === "loading";
+
   return (
     <aside className="right-panel panel">
       <div className="assistant-head">
-        <div><span className="ai-mark">✦</span><div><b>AI 构建助手</b><small>正在读取当前数据产品</small></div></div>
+        <div><span className="ai-mark">✦</span><div><b>AI 构建助手</b><small>{isLoading ? "正在生成结构化 ChangeSet" : "AppSpec 安全规划模式"}</small></div></div>
         <button type="button" aria-label="助手菜单">···</button>
       </div>
       <div className="context-pill">上下文：{pageTitle} · {datasetName.replace(".csv", "")}</div>
@@ -51,17 +87,26 @@ export function AiBuilderAssistant({
               <div><b>{record.status === "previewed" ? "已预览" : record.status === "applied" ? "已应用" : record.status === "cancelled" ? "已取消" : record.status === "undone" ? "已撤销" : "失败"}</b><span>{studioRoleLabels[record.role]} · {auditSourceLabels[record.source]}</span></div>
               <p>{record.operationSummary || record.changeSetId}</p>
               <small>{new Date(record.timestamp).toLocaleString("zh-CN")}</small>
+              {record.ai && <small>{record.ai.model} · {record.ai.durationMs}ms · {record.ai.usage.totalTokens} tokens</small>}
               {record.error && <em>{record.error}</em>}
             </article>
           ))}
         </div>
       </details>
       <div className="conversation">
-        <div className="user-message">整理华东异常订单，创建复购分析，并提供 Excel 下载。</div>
+        <div className="user-message">{instruction || "描述你希望调整的数据产品内容。"}</div>
         <div className="assistant-message">
           <span className="ai-mark small">✦</span>
           <div>
-            <p>我已检查数据结构和当前画布，建议执行以下变更：</p>
+            <p>{aiMessage}</p>
+            {isLoading && <div className="ai-request-state" role="status"><span className="ai-spinner" />正在请求 DeepSeek 并校验 JSON…</div>}
+            {requestError && (
+              <div className="validation-error" role="alert">
+                <b>{requestStatus === "timeout" ? "请求超时" : requestStatus === "cancelled" ? "请求已取消" : "AI 生成失败"}</b>
+                <p>{requestError}</p>
+                {canRetry && <button type="button" onClick={onRetry}>重试</button>}
+              </div>
+            )}
             {validationError && (
               <div className="validation-error" role="alert">
                 <b>无法执行变更</b>
@@ -69,7 +114,7 @@ export function AiBuilderAssistant({
               </div>
             )}
             <div className="change-plan">
-              <div className="plan-head"><b>变更计划</b><span className={status === "applied" ? "done" : status}>{statusLabels[status]}</span></div>
+              <div className="plan-head"><b>结构化变更计划</b><span className={status === "applied" ? "done" : status}>{statusLabels[status]}</span></div>
               <ol>
                 {changeSet.operations.map((operation, index) => (
                   <li key={operation.id}>
@@ -78,24 +123,60 @@ export function AiBuilderAssistant({
                   </li>
                 ))}
               </ol>
+              <div className="ai-plan-scope">
+                <span>页面：{affectedPages.join("、")}</span>
+                <span>组件：{affectedComponents.join("、")}</span>
+                <span className={needsAdmin ? "risk" : "safe"}>{needsAdmin ? "包含页面结构或删除操作，需要管理员确认" : "正式应用前仍会执行 Schema、目标和权限校验"}</span>
+              </div>
+              {aiMetadata && (
+                <div className="ai-plan-meta">
+                  <span>模型 {aiMetadata.model}</span>
+                  <span>{aiMetadata.durationMs}ms</span>
+                  <span>{aiMetadata.usage.totalTokens} tokens</span>
+                  {aiMetadata.repairAttempted && <span>已执行一次 JSON 修复</span>}
+                </div>
+              )}
               <div className="plan-actions">
                 {status === "preview" ? (
                   <button type="button" onClick={onCancelPreview}>取消预览</button>
                 ) : (
-                  <button type="button" disabled={status === "applied"} onClick={onPreview}>画布预览</button>
+                  <button type="button" disabled={!canPreview || status === "applied" || isLoading} title={canPreview ? "预览已校验的 ChangeSet" : "当前没有通过校验的 AI ChangeSet"} onClick={onPreview}>画布预览</button>
                 )}
-                <button type="button" className="apply" disabled={status === "applied" || !canApply} title={canApply ? "应用变更" : "查看者只能预览变更"} onClick={onApply}>
-                  {status === "applied" ? "已全部应用 ✓" : "全部应用"}
+                <button
+                  type="button"
+                  className="apply"
+                  disabled={status !== "preview" || !canApply || isLoading}
+                  title={!canApply ? "当前角色无权应用变更" : status !== "preview" ? "请先完成画布预览" : "人工确认并应用变更"}
+                  onClick={onApply}
+                >
+                  {status === "applied" ? "已全部应用 ✓" : "确认并应用"}
                 </button>
               </div>
             </div>
-            <p className="safe-note">所有改动都通过本地结构化 ChangeSet 执行，可预览、应用和撤销。</p>
+            <p className="safe-note">AI 只生成待预览 ChangeSet，不会自动修改正式 AppSpec。</p>
           </div>
         </div>
       </div>
       <div className="prompt-box">
-        <textarea aria-label="AI 指令" placeholder="描述你想分析的数据或创建的页面……" />
-        <div><span>＋　@ 数据　/ 命令</span><button type="button" aria-label="发送模拟指令">↑</button></div>
+        <textarea
+          aria-label="AI 指令"
+          maxLength={1_000}
+          value={instruction}
+          disabled={isLoading}
+          placeholder="例如：将本月收入指标标题改为月度总收入……"
+          onChange={(event) => onInstructionChange(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && instruction.trim() && !isLoading) onGenerate();
+          }}
+        />
+        <div>
+          <span>{instruction.length}/1000 · Ctrl + Enter</span>
+          {isLoading ? (
+            <button type="button" aria-label="取消 AI 请求" onClick={onCancelRequest}>■</button>
+          ) : (
+            <button type="button" aria-label="发送 AI 指令" disabled={!instruction.trim()} onClick={onGenerate}>↑</button>
+          )}
+        </div>
       </div>
     </aside>
   );

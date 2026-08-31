@@ -1,5 +1,6 @@
 import type {
   ChangeSet,
+  AiChangeSetAuditMetadata,
   ChangeSetAuditRecord,
   ChangeSetAuditSource,
   ChangeSetAuditStatus,
@@ -20,6 +21,7 @@ export function createChangeSetAuditRecord(
   status: ChangeSetAuditStatus,
   error?: string,
   clock: () => Date = () => new Date(),
+  ai?: AiChangeSetAuditMetadata,
 ): ChangeSetAuditRecord {
   return createChangeSetAuditRecordFromSummary(
     changeSet.id,
@@ -29,6 +31,7 @@ export function createChangeSetAuditRecord(
     status,
     error,
     clock,
+    ai,
   );
 }
 
@@ -40,6 +43,7 @@ export function createChangeSetAuditRecordFromSummary(
   status: ChangeSetAuditStatus,
   error?: string,
   clock: () => Date = () => new Date(),
+  ai?: AiChangeSetAuditMetadata,
 ): ChangeSetAuditRecord {
   const timestamp = clock();
   return {
@@ -51,6 +55,7 @@ export function createChangeSetAuditRecordFromSummary(
     status,
     timestamp: timestamp.toISOString(),
     ...(error ? { error } : {}),
+    ...(ai ? { ai } : {}),
   };
 }
 

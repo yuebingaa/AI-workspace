@@ -10,16 +10,19 @@ import {
   type PuckDraftOrigin,
   type StudioPuckData,
 } from "@/adapters/puck";
+import { AiPlanClientError, requestAiPlan } from "@/core/ai/client";
+import type { AiPlanMetadata } from "@/core/ai/contracts";
 import {
   applyChangeSet,
   cancelPreview,
   createExecutionState,
   previewChangeSet,
   undoLastChange,
+  validateChangeSetAgainstAppSpec,
 } from "@/core/changesets";
 import { createChangeSetAuditRecord, createChangeSetAuditRecordFromSummary, appendChangeSetAuditRecord } from "@/core/audit";
 import { appendQueryExecutionRecord } from "@/core/data";
-import type { ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
+import type { AiChangeSetAuditMetadata, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
 import {
   createBrowserStudioRepository,
@@ -30,7 +33,7 @@ import {
 } from "@/core/repository";
 import { readableValidationError } from "@/core/schemas";
 import { demoFixtureResult, type DemoFixtures } from "@/fixtures/demo-product";
-import { AiBuilderAssistant, type ChangeSetUiStatus } from "./AiBuilderAssistant";
+import { AiBuilderAssistant, type AiRequestUiStatus, type ChangeSetUiStatus } from "./AiBuilderAssistant";
 import { DataProductCanvas, type CanvasMode } from "./DataProductCanvas";
 import { DataSourceDetailsPanel } from "./DataSourceDetailsPanel";
 import { PageStructurePanel } from "./PageStructurePanel";
@@ -70,11 +73,20 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [pendingChangeSource, setPendingChangeSource] = useState<ChangeSetAuditSource | null>(null);
   const [isDataSourceOpen, setIsDataSourceOpen] = useState(false);
   const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
+  const [aiChangeSet, setAiChangeSet] = useState<ChangeSet>(() => structuredClone(repurchaseChangeSet));
+  const [aiMessage, setAiMessage] = useState("我已检查数据结构和当前画布，建议先预览以下结构化变更。");
+  const [aiMetadata, setAiMetadata] = useState<AiPlanMetadata | null>(null);
+  const [aiInstruction, setAiInstruction] = useState("整理华东异常订单，创建复购分析，并提供 Excel 下载。");
+  const [lastSubmittedInstruction, setLastSubmittedInstruction] = useState("");
+  const [aiRequestStatus, setAiRequestStatus] = useState<AiRequestUiStatus>("idle");
+  const [aiRequestError, setAiRequestError] = useState<string | null>(null);
+  const [hasValidAiPlan, setHasValidAiPlan] = useState(true);
   const repositoryRef = useRef<StudioRepository | null>(null);
   const puckDraftOriginRef = useRef<PuckDraftOrigin | null>(null);
+  const aiRequestAbortRef = useRef<AbortController | null>(null);
 
-  const isApplied = execution.appliedChangeSetIds.includes(repurchaseChangeSet.id);
-  const isAiPreview = execution.preview?.changeSetId === repurchaseChangeSet.id;
+  const isApplied = execution.appliedChangeSetIds.includes(aiChangeSet.id);
+  const isAiPreview = execution.preview?.changeSetId === aiChangeSet.id;
   const status: ChangeSetUiStatus = isApplied ? "applied" : isAiPreview ? "preview" : "pending";
   const renderedSpec = execution.preview?.appSpec ?? execution.present;
   const activePage = renderedSpec.pages.find((page) => page.id === activePageId) ?? renderedSpec.pages[0];
@@ -104,6 +116,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     });
     return () => { cancelled = true; };
   }, [fixtures.dataProduct]);
+
+  useEffect(() => () => aiRequestAbortRef.current?.abort(), []);
 
   function persistExplicitly(
     nextExecution = execution,
@@ -139,13 +153,27 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setPuckDraft((current) => updatePuckDraft(current, data));
   }, []);
 
+  function toAuditMetadata(metadata: AiPlanMetadata | AiChangeSetAuditMetadata | null): AiChangeSetAuditMetadata | undefined {
+    return metadata ? {
+      model: metadata.model,
+      durationMs: metadata.durationMs,
+      usage: metadata.usage,
+      ...(metadata && "transport" in metadata ? { transport: metadata.transport } : {}),
+      ...(metadata && "repairAttempted" in metadata ? { repairAttempted: metadata.repairAttempted } : {}),
+      ...(metadata && "validationIssues" in metadata && metadata.validationIssues
+        ? { validationIssues: metadata.validationIssues }
+        : {}),
+    } : undefined;
+  }
+
   function addAudit(
     changeSet: ChangeSet,
     source: ChangeSetAuditSource,
     auditStatus: ChangeSetAuditStatus,
     error?: string,
+    metadata: AiPlanMetadata | AiChangeSetAuditMetadata | null = source === "ai" ? aiMetadata : null,
   ) {
-    const record = createChangeSetAuditRecord(changeSet, role, source, auditStatus, error);
+    const record = createChangeSetAuditRecord(changeSet, role, source, auditStatus, error, undefined, toAuditMetadata(metadata));
     setAuditRecords((current) => appendChangeSetAuditRecord(
       current,
       record,
@@ -159,8 +187,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     source: ChangeSetAuditSource,
     auditStatus: ChangeSetAuditStatus,
     error?: string,
+    metadata: AiPlanMetadata | AiChangeSetAuditMetadata | null = source === "ai" ? aiMetadata : null,
   ) {
-    const record = createChangeSetAuditRecordFromSummary(changeSetId, summary, role, source, auditStatus, error);
+    const record = createChangeSetAuditRecordFromSummary(changeSetId, summary, role, source, auditStatus, error, undefined, toAuditMetadata(metadata));
     setAuditRecords((current) => appendChangeSetAuditRecord(
       current,
       record,
@@ -175,36 +204,39 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     addAuditSummary(
       changeSetId,
       previous?.operationSummary ?? "取消当前变更预览",
-      changeSetId === repurchaseChangeSet.id ? "ai" : pendingChangeSource ?? "manual",
+      changeSetId === aiChangeSet.id ? "ai" : pendingChangeSource ?? "manual",
       "cancelled",
     );
   }
 
   function handlePreview() {
     try {
-      if (execution.preview && execution.preview.changeSetId !== repurchaseChangeSet.id) auditCurrentPreviewCancellation();
-      setExecution(previewChangeSet(execution, repurchaseChangeSet, role));
-      setActivePageId("page_home");
+      if (!hasValidAiPlan) throw new Error("当前没有通过校验的 AI ChangeSet，请先重新生成。");
+      if (execution.preview && execution.preview.changeSetId !== aiChangeSet.id) auditCurrentPreviewCancellation();
+      setExecution(previewChangeSet(execution, aiChangeSet, role));
+      setActivePageId(aiChangeSet.operations[0]?.pageId ?? activePageId);
       setCanvasMode("preview");
       setPendingPuckChangeSet(null);
       setPendingChangeSource(null);
       setSaveLabel("预览中 · 尚未保存");
       setValidationError(null);
-      addAudit(repurchaseChangeSet, "ai", "previewed");
+      addAudit(aiChangeSet, "ai", "previewed");
     } catch (error) {
       const message = readableValidationError(error);
       setValidationError(message);
-      addAudit(repurchaseChangeSet, "ai", "failed", message);
+      addAudit(aiChangeSet, "ai", "failed", message);
     }
   }
 
   function handleApply() {
     try {
-      if (execution.preview && execution.preview.changeSetId !== repurchaseChangeSet.id) auditCurrentPreviewCancellation();
-      const nextExecution = applyChangeSet(execution, repurchaseChangeSet, role);
-      const audit = addAudit(repurchaseChangeSet, "ai", "applied");
+      if (execution.preview?.changeSetId !== aiChangeSet.id) {
+        throw new Error("请先完成当前 AI ChangeSet 的画布预览，再人工确认应用。");
+      }
+      const nextExecution = applyChangeSet(execution, aiChangeSet, role);
+      const audit = addAudit(aiChangeSet, "ai", "applied");
       setExecution(nextExecution);
-      setActivePageId("page_home");
+      setActivePageId(aiChangeSet.operations[0]?.pageId ?? activePageId);
       setCanvasMode("preview");
       setPendingPuckChangeSet(null);
       setPendingChangeSource(null);
@@ -216,15 +248,86 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     } catch (error) {
       const message = readableValidationError(error);
       setValidationError(message);
-      addAudit(repurchaseChangeSet, "ai", "failed", message);
+      addAudit(aiChangeSet, "ai", "failed", message);
     }
   }
 
   function handleCancelPreview() {
-    addAudit(repurchaseChangeSet, "ai", "cancelled");
+    addAudit(aiChangeSet, "ai", "cancelled");
     setExecution(cancelPreview(execution));
-    setSaveLabel("已保存 · 演示草稿");
+    setSaveLabel("已保存 · 已取消 AI 预览");
     setValidationError(null);
+  }
+
+  async function handleGenerateAiPlan(instructionOverride?: string) {
+    const submittedInstruction = (instructionOverride ?? aiInstruction).trim();
+    if (!submittedInstruction || aiRequestStatus === "loading") return;
+
+    aiRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiRequestAbortRef.current = controller;
+    const baseExecution = cancelPreview(execution);
+    if (execution.preview) auditCurrentPreviewCancellation();
+    setExecution(baseExecution);
+    setPendingPuckChangeSet(null);
+    setPendingChangeSource(null);
+    setCanvasMode("preview");
+    setLastSubmittedInstruction(submittedInstruction);
+    setAiRequestStatus("loading");
+    setAiRequestError(null);
+    setHasValidAiPlan(false);
+    setValidationError(null);
+    setSaveLabel("AI 规划中 · 正式 AppSpec 未修改");
+
+    try {
+      const result = await requestAiPlan({
+        instruction: submittedInstruction,
+        pageId: activePageId,
+        appSpec: baseExecution.present,
+        role,
+      }, { signal: controller.signal, timeoutMs: 25_000 });
+      validateChangeSetAgainstAppSpec(baseExecution.present, result.changeSet, { role, intent: "apply" });
+      setAiChangeSet(result.changeSet);
+      setAiMessage(result.message);
+      setAiMetadata(result.metadata);
+      setAiRequestStatus("success");
+      setAiRequestError(null);
+      setHasValidAiPlan(true);
+      setSaveLabel("AI 已生成 · 等待画布预览");
+    } catch (error) {
+      const clientError = error instanceof AiPlanClientError
+        ? error
+        : new AiPlanClientError("invalid_response", readableValidationError(error), true);
+      const nextStatus: AiRequestUiStatus = clientError.code === "timeout"
+        ? "timeout"
+        : clientError.code === "cancelled"
+          ? "cancelled"
+          : "error";
+      setAiRequestStatus(nextStatus);
+      setAiRequestError(clientError.message);
+      setAiMessage("本次请求未生成可用 ChangeSet，正式 AppSpec 保持不变。");
+      setAiMetadata(clientError.metadata ?? null);
+      setHasValidAiPlan(false);
+      setSaveLabel("已保存 · AI 未修改 AppSpec");
+      addAuditSummary(
+        `changeset_ai_request_${Date.now()}`,
+        "AI 生成结构化 ChangeSet",
+        "ai",
+        "failed",
+        clientError.message,
+        clientError.metadata ?? null,
+      );
+    } finally {
+      if (aiRequestAbortRef.current === controller) aiRequestAbortRef.current = null;
+    }
+  }
+
+  function handleCancelAiRequest() {
+    aiRequestAbortRef.current?.abort();
+  }
+
+  function handleRetryAiRequest() {
+    if (lastSubmittedInstruction) void handleGenerateAiPlan(lastSubmittedInstruction);
   }
 
   function handleUndo() {
@@ -232,7 +335,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     const prior = auditRecords.find((record) => record.changeSetId === changeSetId && record.status === "applied");
     try {
       const nextExecution = undoLastChange(execution, role);
-      const audit = addAuditSummary(changeSetId, prior?.operationSummary ?? "撤销最近一次正式变更", prior?.source ?? "manual", "undone");
+      const audit = addAuditSummary(changeSetId, prior?.operationSummary ?? "撤销最近一次正式变更", prior?.source ?? "manual", "undone", undefined, prior?.ai ?? null);
       setExecution(nextExecution);
       setCanvasMode("preview");
       setPendingPuckChangeSet(null);
@@ -342,6 +445,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   }
 
   function handleRoleChange(nextRole: StudioRole) {
+    aiRequestAbortRef.current?.abort();
     auditCurrentPreviewCancellation();
     setRole(nextRole);
     setExecution(cancelPreview(execution));
@@ -389,6 +493,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
 
   function handleResetDemo() {
     if (!window.confirm("确定恢复演示数据吗？当前已应用编辑、查询记录和审计记录都会被清除。")) return;
+    aiRequestAbortRef.current?.abort();
     const restored = restoreDemoData(repositoryRef.current, fixtures.dataProduct);
     setDataProduct(restored.dataProduct);
     setExecution(restored.execution);
@@ -403,6 +508,13 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setSaveLabel("已保存 · 已恢复演示数据");
     setValidationError(null);
     setPersistenceNotice(null);
+    setAiChangeSet(structuredClone(repurchaseChangeSet));
+    setAiMessage("我已检查数据结构和当前画布，建议先预览以下结构化变更。");
+    setAiMetadata(null);
+    setAiRequestStatus("idle");
+    setAiRequestError(null);
+    setLastSubmittedInstruction("");
+    setHasValidAiPlan(true);
   }
 
   return (
@@ -453,11 +565,22 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         <AiBuilderAssistant
           pageTitle={activePage?.title ?? "未选择页面"}
           datasetName={dataset?.name ?? "未选择数据集"}
-          changeSet={repurchaseChangeSet}
+          changeSet={aiChangeSet}
           status={status}
           validationError={validationError}
           canApply={role !== "viewer"}
+          canPreview={hasValidAiPlan}
           auditRecords={auditRecords}
+          aiMessage={aiMessage}
+          aiMetadata={aiMetadata}
+          instruction={aiInstruction}
+          requestStatus={aiRequestStatus}
+          requestError={aiRequestError}
+          canRetry={Boolean(lastSubmittedInstruction && aiRequestError)}
+          onInstructionChange={setAiInstruction}
+          onGenerate={() => { void handleGenerateAiPlan(); }}
+          onCancelRequest={handleCancelAiRequest}
+          onRetry={handleRetryAiRequest}
           onPreview={handlePreview}
           onApply={handleApply}
           onCancelPreview={handleCancelPreview}
