@@ -77,13 +77,24 @@ export function recoverHarnessTasksAfterRefresh(
   clock: HarnessTaskClock,
 ): HarnessTaskSummary[] {
   const interrupted = new Set<HarnessState>(["planning", "executingTool", "observing"]);
-  return tasks.map((task) => interrupted.has(task.state)
-    ? appendHarnessEvent(task, {
+  return tasks.map((task) => {
+    if (task.state === "completed" && task.counters.toolCallCount === 0 && /数据|销售|订单|字段|异常|复购/.test(task.instruction)) {
+      return appendHarnessEvent(task, {
+        type: "state",
+        state: "blocked",
+        message: "历史数据任务未执行任何工具却被标记为完成，已安全改为阻塞；请重新运行任务。",
+      }, clock, {
+        error: "历史任务缺少必要的数据工具执行记录。",
+        resultMessage: "任务已阻塞，正式 AppSpec 未修改。",
+      });
+    }
+    return interrupted.has(task.state) ? appendHarnessEvent(task, {
       type: "error",
       state: "cancelled",
       message: "页面刷新后已安全终止未完成任务，不会自动继续执行。",
     }, clock, { error: "任务因页面刷新而终止。" })
-    : task);
+      : task;
+  });
 }
 
 export function taskWithPendingChangeSet(task: HarnessTaskSummary, changeSet: ChangeSet): HarnessTaskSummary {

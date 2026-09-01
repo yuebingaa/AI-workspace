@@ -5,3 +5,4 @@ export * from "./security";
 export * from "./deepseek-harness";
 export * from "./client";
 export * from "./context-selector";
+export * from "./action-normalizer";

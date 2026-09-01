@@ -12,6 +12,7 @@ export const harnessStateSchema = z.enum([
   "executingTool",
   "observing",
   "awaitingConfirmation",
+  "blocked",
   "completed",
   "failed",
   "cancelled",
@@ -98,18 +99,32 @@ export type HarnessRequest = z.infer<typeof harnessRequestSchema>;
 export const harnessResponseSchema = z.object({ task: harnessTaskSummarySchema }).strict();
 export type HarnessResponse = z.infer<typeof harnessResponseSchema>;
 
-export const harnessModelTurnSchema = z.object({
-  message: z.string().trim().min(1).max(2_000),
-  action: z.discriminatedUnion("type", [
-    z.object({ type: z.literal("complete") }).strict(),
-    z.object({
-      type: z.literal("tool"),
-      toolCallId: z.string().min(1).max(120).regex(/^[A-Za-z0-9_-]+$/),
-      name: z.string().min(1).max(120),
-      arguments: z.record(z.string(), z.unknown()),
-    }).strict(),
-  ]),
+const harnessTurnMessageSchema = z.string().trim().min(1).max(2_000);
+
+export const harnessCallToolTurnSchema = z.object({
+  type: z.literal("callTool"),
+  message: harnessTurnMessageSchema,
+  toolCallId: z.string().min(1).max(120).regex(/^[A-Za-z0-9_-]+$/),
+  name: z.string().min(1).max(120),
+  arguments: z.record(z.string(), z.unknown()),
 }).strict();
+
+export const harnessCompleteTurnSchema = z.object({
+  type: z.literal("complete"),
+  message: harnessTurnMessageSchema,
+}).strict();
+
+export const harnessBlockedTurnSchema = z.object({
+  type: z.literal("blocked"),
+  message: harnessTurnMessageSchema,
+  missingRequirements: z.array(z.string().trim().min(1).max(240)).min(1).max(20),
+}).strict();
+
+export const harnessModelTurnSchema = z.discriminatedUnion("type", [
+  harnessCallToolTurnSchema,
+  harnessCompleteTurnSchema,
+  harnessBlockedTurnSchema,
+]);
 export type HarnessModelTurn = z.infer<typeof harnessModelTurnSchema>;
 
 export interface HarnessModelUsage {

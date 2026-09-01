@@ -16,6 +16,7 @@ import type {
   HarnessToolName,
 } from "./contracts";
 import { jsonByteLength, sanitizeHarnessText } from "./security";
+import { resolveHarnessPageDataSourceIds } from "./context-selector";
 
 export const MAX_HARNESS_TOOL_RESULT_BYTES = 6_000;
 export const DEFAULT_HARNESS_TOOL_RESULT_ENTRIES = 16;
@@ -211,6 +212,7 @@ interface HarnessToolCatalogOptions {
   names?: HarnessToolName[];
   editableNodes?: HarnessEditableNodeSummary[];
   instruction?: string;
+  request?: HarnessRequest;
 }
 
 function stringEnum(values: string[]) {
@@ -232,6 +234,50 @@ function primitivePropertySchema(value: string | number | boolean | undefined) {
   if (typeof value === "number") return { type: "number" };
   if (typeof value === "boolean") return { type: "boolean" };
   return { type: "string", maxLength: 500 };
+}
+
+function compactMetricPropsSchema(request: HarnessRequest): Record<string, unknown> {
+  const dataSourceIds = resolveHarnessPageDataSourceIds(request);
+  const fields = request.appSpec.dataSources
+    .filter((source) => dataSourceIds.includes(source.id))
+    .flatMap((source) => source.fields.map((field) => field.name));
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["label", "trend", "binding"],
+    properties: {
+      label: { type: "string", maxLength: 100 },
+      trend: { type: "string", maxLength: 100 },
+      isNew: { type: "boolean" },
+      binding: {
+        type: "object",
+        additionalProperties: false,
+        required: ["dataSourceId", "field", "aggregation", "groupBy", "filters", "sort", "limit", "format"],
+        properties: {
+          dataSourceId: stringEnum(dataSourceIds),
+          field: stringEnum(fields),
+          aggregation: stringEnum(["none", "sum", "average", "count", "countDistinct", "min", "max"]),
+          groupBy: { anyOf: [stringEnum(fields), { type: "null" }] },
+          filters: { type: "array", maxItems: 0 },
+          sort: { type: "array", maxItems: 0 },
+          limit: { type: "integer", minimum: 1, maximum: 10_000 },
+          format: {
+            type: "object",
+            additionalProperties: false,
+            required: ["style"],
+            properties: {
+              style: stringEnum(["auto", "text", "number", "currency", "percent"]),
+              currency: stringEnum(["CNY", "USD"]),
+              notation: stringEnum(["standard", "compact"]),
+              decimals: { type: "integer", minimum: 0, maximum: 8 },
+              prefix: { type: "string", maxLength: 20 },
+              suffix: { type: "string", maxLength: 20 },
+            },
+          },
+        },
+      },
+    },
+  };
 }
 
 function compactChangePreviewSchema(options: HarnessToolCatalogOptions): Record<string, unknown> {
@@ -260,6 +306,32 @@ function compactChangePreviewSchema(options: HarnessToolCatalogOptions): Record<
       },
     };
   });
+  const metricParents = editableNodes.filter((node) => node.type === "MetricGrid");
+  const metricProps = options.request ? compactMetricPropsSchema(options.request) : {};
+  const addMetricVariants = /生成|创建|新增|添加|指标|复购率/.test(instruction)
+    ? metricParents.map((parent) => ({
+        type: "object",
+        additionalProperties: false,
+        required: ["type", "pageId", "parentId", "node"],
+        properties: {
+          type: stringEnum(["addNode"]),
+          pageId: stringEnum([parent.pageId]),
+          parentId: stringEnum([parent.nodeId]),
+          position: { type: "integer", minimum: 0 },
+          node: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "type", "props"],
+            properties: {
+              id: { type: "string", pattern: "^[A-Za-z][A-Za-z0-9_-]{0,119}$" },
+              type: stringEnum(["MetricCard"]),
+              props: metricProps,
+            },
+          },
+        },
+      }))
+    : [];
+  const operationVariants = addMetricVariants.length > 0 ? addMetricVariants : updateVariants;
   return {
     type: "object",
     additionalProperties: false,
@@ -270,10 +342,47 @@ function compactChangePreviewSchema(options: HarnessToolCatalogOptions): Record<
         type: "array",
         minItems: 1,
         maxItems: 20,
-        items: updateVariants.length === 1 ? updateVariants[0] : { oneOf: updateVariants },
+        items: operationVariants.length === 1 ? operationVariants[0] : { oneOf: operationVariants },
       },
     },
   };
+}
+
+function scopedToolParameters(tool: (typeof harnessToolRegistry)[HarnessToolName], options: HarnessToolCatalogOptions) {
+  if (!options.request) return z.toJSONSchema(tool.schema) as Record<string, unknown>;
+  const dataSourceIds = resolveHarnessPageDataSourceIds(options.request);
+  const fieldNames = options.request.appSpec.dataSources
+    .filter((source) => dataSourceIds.includes(source.id))
+    .flatMap((source) => source.fields.map((field) => field.name));
+  const recipeIds = options.request.recipes
+    .filter((recipe) => dataSourceIds.includes(recipe.sourceDatasetId))
+    .map((recipe) => recipe.id);
+  if (tool.name === "inspectDataset") {
+    return { type: "object", additionalProperties: false, required: ["dataSourceId"], properties: { dataSourceId: stringEnum(dataSourceIds) } };
+  }
+  if (tool.name === "inspectFields") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["dataSourceId"],
+      properties: {
+        dataSourceId: stringEnum(dataSourceIds),
+        fields: { type: "array", maxItems: 30, items: stringEnum(fieldNames) },
+      },
+    };
+  }
+  if (tool.name === "previewDataRecipe") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipeId"],
+      properties: { recipeId: stringEnum(recipeIds), stepCount: { type: "integer", minimum: 1, maximum: 50 } },
+    };
+  }
+  if (tool.name === "validateDataRecipe") {
+    return { type: "object", additionalProperties: false, required: ["recipeId"], properties: { recipeId: stringEnum(recipeIds) } };
+  }
+  return z.toJSONSchema(tool.schema) as Record<string, unknown>;
 }
 
 export function harnessToolCatalog(options: HarnessToolCatalogOptions = {}) {
@@ -284,7 +393,7 @@ export function harnessToolCatalog(options: HarnessToolCatalogOptions = {}) {
     mode: tool.mode,
     parameters: tool.name === "createChangeSetPreview" && options.editableNodes
       ? compactChangePreviewSchema(options)
-      : z.toJSONSchema(tool.schema) as Record<string, unknown>,
+      : scopedToolParameters(tool, options),
   }));
 }
 

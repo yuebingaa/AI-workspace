@@ -55,7 +55,7 @@ export async function POST(request: Request) {
       model: process.env.DEEPSEEK_MODEL,
       signal: request.signal,
       bounds: {
-        maxModelCalls: positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 2),
+        maxModelCalls: positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 5),
         maxToolCalls: positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
       },
     }));

@@ -4,7 +4,6 @@ import { DEEPSEEK_CHAT_COMPLETIONS_URL } from "@/core/ai/server/deepseek-planner
 import type { LocalDataRuntime } from "@/core/models";
 import { StudioValidationError } from "@/core/schemas";
 import {
-  harnessModelTurnSchema,
   harnessRequestSchema,
   harnessToolNameSchema,
   type HarnessModel,
@@ -14,11 +13,13 @@ import {
   type HarnessRequest,
   type HarnessTaskSummary,
 } from "./contracts";
+import { normalizeHarnessModelTurn } from "./action-normalizer";
 import { sanitizeHarnessText } from "./security";
 import {
   buildHarnessContextSelection,
   estimateHarnessModelInputChars,
   harnessSystemPrompt,
+  resolveHarnessPageDataSourceIds,
   resolveHarnessContextBudget,
   type HarnessContextBudget,
 } from "./context-selector";
@@ -27,7 +28,7 @@ import { executeHarnessTool, harnessToolCatalog } from "./tool-registry";
 
 export const DEFAULT_HARNESS_BOUNDS = {
   maxLoops: 8,
-  maxModelCalls: 2,
+  maxModelCalls: 5,
   maxToolCalls: 6,
   totalTimeoutMs: 25_000,
   toolTimeoutMs: 4_000,
@@ -118,10 +119,14 @@ export class DeepSeekHarnessModel implements HarnessModel {
     } catch {
       throw new Error("DeepSeek Harness 动作不是有效 JSON。");
     }
-    const turn = harnessModelTurnSchema.safeParse(candidate);
-    if (!turn.success) throw new Error("DeepSeek Harness 动作未通过 Schema 校验。");
+    const readonlyTask = input.context.taskMode === "readOnly";
+    const readonlyResultComplete = readonlyTask
+      && input.context.phase === "followUp"
+      && input.tools.length === 0
+      && input.context.lastObservation !== undefined;
+    const turn = normalizeHarnessModelTurn(candidate, { readonlyTask, readonlyResultComplete });
     return {
-      turn: turn.data,
+      turn: turn.turn,
       model: provider.data.model ?? this.options.model,
       usage: {
         promptTokens: provider.data.usage?.prompt_tokens ?? 0,
@@ -163,6 +168,26 @@ function addUsage(
     completionTokens: (current?.completionTokens ?? 0) + next.completionTokens,
     totalTokens: (current?.totalTokens ?? 0) + next.totalTokens,
   };
+}
+
+function requiredDataFieldsBlockingReason(request: HarnessRequest): string | undefined {
+  const sourceIds = resolveHarnessPageDataSourceIds(request);
+  const fields = new Set(request.appSpec.dataSources
+    .filter((source) => sourceIds.includes(source.id))
+    .flatMap((source) => source.fields.map((field) => field.name)));
+  const missingCapabilities: string[] = [];
+  if (/异常订单/.test(request.instruction) && !fields.has("anomaly_count") && !fields.has("refunded")) {
+    missingCapabilities.push("异常识别字段 anomaly_count 或 refunded");
+  }
+  if (/复购/.test(request.instruction) && !fields.has("repurchase_rate")) {
+    const missingRawFields = ["customer_id", "order_id"].filter((field) => !fields.has(field));
+    if (missingRawFields.length > 0) {
+      missingCapabilities.push(`复购率字段 repurchase_rate，或原始计算字段 ${missingRawFields.join("、")}`);
+    }
+  }
+  return missingCapabilities.length > 0
+    ? `数据字段不足，缺少：${missingCapabilities.join("；")}。正式 AppSpec 未修改。`
+    : undefined;
 }
 
 async function withToolTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, timeoutMs: number, outerSignal: AbortSignal): Promise<T> {
@@ -226,14 +251,31 @@ export class DeepSeekHarness {
         if (task.counters.modelCallCount >= bounds.maxModelCalls) throw new Error("Harness 已达到最大模型调用次数。");
         const iteration = task.counters.loopCount + 1;
         let selection = buildHarnessContextSelection(request, observations, iteration);
-        let tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction });
+        if (selection.blockingReason) {
+          task = appendHarnessEvent(task, {
+            type: "state",
+            state: "blocked",
+            message: selection.blockingReason,
+          }, clock, {
+            error: selection.blockingReason,
+            resultMessage: selection.blockingReason,
+            totalDurationMs: Math.round(clock.elapsed()),
+          });
+          return task;
+        }
+        let tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction, request });
         let inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
         if (inputChars > contextBudget.maxRequestInputChars) {
           selection = buildHarnessContextSelection(request, observations, iteration, true);
-          tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction });
+          tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction, request });
           inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
         }
         const previousInputChars = task.contextUsage?.totalInputChars ?? 0;
+        if (!selection.compacted && previousInputChars + inputChars > contextBudget.maxTotalInputChars) {
+          selection = buildHarnessContextSelection(request, observations, iteration, true);
+          tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction, request });
+          inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
+        }
         if (inputChars > contextBudget.maxRequestInputChars) {
           throw new Error("Harness 单次模型上下文压缩后仍超过预算，未调用模型。");
         }
@@ -257,7 +299,10 @@ export class DeepSeekHarness {
         }), controller.signal, () => totalTimedOut);
         task = { ...task, model: modelResult.model, usage: addUsage(task.usage, modelResult.usage) };
         const { turn } = modelResult;
-        if (turn.action.type === "complete") {
+        if (turn.type === "complete") {
+          if (selection.toolNames.length > 0) {
+            throw new StudioValidationError("Harness 模型协议失败", ["仍有可用工具时模型提前结束，未接受其‘没有工具或数据’的结论。"]);
+          }
           task = appendHarnessEvent(task, {
             type: "state",
             state: "completed",
@@ -265,7 +310,24 @@ export class DeepSeekHarness {
           }, clock, { resultMessage: sanitizeHarnessText(turn.message), totalDurationMs: Math.round(clock.elapsed()) });
           return task;
         }
-        const toolAction = turn.action;
+        if (turn.type === "blocked") {
+          if (selection.toolNames.length > 0) {
+            throw new StudioValidationError("Harness 模型协议失败", ["仍有可用工具时模型不得跳过检查并宣告缺少条件。"]);
+          }
+          const missing = turn.missingRequirements.map((item) => sanitizeHarnessText(item)).join("、");
+          const blockedMessage = `${sanitizeHarnessText(turn.message)} 缺少：${missing}。正式 AppSpec 未修改。`;
+          task = appendHarnessEvent(task, {
+            type: "state",
+            state: "blocked",
+            message: blockedMessage,
+          }, clock, {
+            error: blockedMessage,
+            resultMessage: blockedMessage,
+            totalDurationMs: Math.round(clock.elapsed()),
+          });
+          return task;
+        }
+        const toolAction = turn;
         if (task.counters.toolCallCount >= bounds.maxToolCalls) throw new Error("Harness 已达到最大工具调用次数。");
         const parsedToolName = harnessToolNameSchema.safeParse(toolAction.name);
         if (!parsedToolName.success) throw new StudioValidationError("Harness 工具校验失败", [`不允许调用工具：${sanitizeHarnessText(toolAction.name, "未知工具")}`]);
@@ -316,6 +378,21 @@ export class DeepSeekHarness {
           message: result.summary,
           toolCall: { id: toolAction.toolCallId, name: toolName, status: "success", durationMs },
         }, clock);
+        if (toolName === "inspectFields") {
+          const blockingReason = requiredDataFieldsBlockingReason(request);
+          if (blockingReason) {
+            task = appendHarnessEvent(task, {
+              type: "state",
+              state: "blocked",
+              message: blockingReason,
+            }, clock, {
+              error: blockingReason,
+              resultMessage: blockingReason,
+              totalDurationMs: Math.round(clock.elapsed()),
+            });
+            return task;
+          }
+        }
         if (result.pendingChangeSet) {
           task = taskWithPendingChangeSet(task, result.pendingChangeSet);
           task = appendHarnessEvent(task, {

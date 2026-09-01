@@ -6,6 +6,8 @@ import {
   estimateHarnessModelInputChars,
   executeHarnessTool,
   harnessToolCatalog,
+  harnessSystemPrompt,
+  resolveHarnessPageDataSourceIds,
 } from "./index";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 
@@ -27,6 +29,51 @@ function request(instruction = "检查 retail_orders 数据集的基本信息，
 }
 
 describe("Harness 最小上下文选择器", () => {
+  it("模型提示词与顶层判别联合协议完全一致", () => {
+    for (const iteration of [1, 2]) {
+      const prompt = harnessSystemPrompt(iteration);
+      expect(prompt).toContain('{"type":"callTool","message":"检查","toolCallId":"c1","name":"inspectDataset","arguments":{}}');
+      expect(prompt).toContain('{"type":"complete","message":"完成"}');
+      expect(prompt).toContain('{"type":"blocked","message":"受阻","missingRequirements":["字段"]}');
+      expect(prompt).toContain("一次一种动作");
+      expect(prompt).toContain("禁止Markdown");
+      expect(prompt).not.toContain('"action"');
+    }
+  });
+
+  it("从客户洞察页面绑定发现 retail_orders，并向复杂任务提供五个相关工具", () => {
+    const input = { ...request("检查销售数据，找出异常订单，并生成复购率指标。"), pageId: "page_customers" };
+    const selection = buildHarnessContextSelection(input, [], 1);
+    const tools = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: input.instruction,
+      request: input,
+    });
+    const serialized = JSON.stringify({ ...selection.context, tools });
+
+    expect(resolveHarnessPageDataSourceIds(input)).toEqual(["dataset_retail_orders"]);
+    expect(selection.toolNames).toEqual([
+      "inspectDataset",
+      "inspectFields",
+      "previewDataRecipe",
+      "validateDataRecipe",
+      "createChangeSetPreview",
+    ]);
+    expect(serialized).toContain("retail_orders");
+    expect(serialized).toContain("page_customers_metrics");
+    expect(serialized).not.toContain("order_1_1");
+    expect(serialized).not.toContain('"appSpec"');
+    const compacted = buildHarnessContextSelection(input, [], 1, true);
+    const compactedTools = harnessToolCatalog({
+      names: compacted.toolNames,
+      editableNodes: compacted.editableNodes,
+      instruction: input.instruction,
+      request: input,
+    });
+    expect(estimateHarnessModelInputChars(compacted.context, compactedTools, 1)).toBeLessThanOrEqual(10_000);
+  });
+
   it("首轮只发送当前任务需要的页面摘要、数据目录和单个动态工具", () => {
     const input = request();
     const selection = buildHarnessContextSelection(input, [], 1);

@@ -43,6 +43,7 @@ const harnessStateLabels: Record<HarnessTaskSummary["state"], string> = {
   executingTool: "执行工具",
   observing: "观察结果",
   awaitingConfirmation: "等待确认",
+  blocked: "已阻塞",
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
