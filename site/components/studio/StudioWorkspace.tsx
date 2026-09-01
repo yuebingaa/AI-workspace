@@ -10,7 +10,6 @@ import {
   type PuckDraftOrigin,
   type StudioPuckData,
 } from "@/adapters/puck";
-import { AiPlanClientError, requestAiPlan } from "@/core/ai/client";
 import type { AiPlanMetadata } from "@/core/ai/contracts";
 import {
   applyChangeSet,
@@ -18,10 +17,21 @@ import {
   createExecutionState,
   previewChangeSet,
   undoLastChange,
-  validateChangeSetAgainstAppSpec,
 } from "@/core/changesets";
 import { createChangeSetAuditRecord, createChangeSetAuditRecordFromSummary, appendChangeSetAuditRecord } from "@/core/audit";
 import { appendQueryExecutionRecord } from "@/core/data";
+import {
+  HarnessClientError,
+  requestHarnessTask,
+} from "@/core/harness/client";
+import type { HarnessTaskSummary } from "@/core/harness/contracts";
+import {
+  appendHarnessEvent,
+  appendHarnessTask,
+  createHarnessTask,
+  settleHarnessConfirmation,
+  type HarnessTaskClock,
+} from "@/core/harness/task-state";
 import type { AiChangeSetAuditMetadata, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
 import {
@@ -38,6 +48,11 @@ import { DataProductCanvas, type CanvasMode } from "./DataProductCanvas";
 import { DataSourceDetailsPanel } from "./DataSourceDetailsPanel";
 import { PageStructurePanel } from "./PageStructurePanel";
 import { StudioHeader, type PreviewDevice } from "./StudioHeader";
+
+const harnessUiClock: HarnessTaskClock = {
+  now: () => new Date(),
+  id: () => `harness_ui_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`,
+};
 
 export function StudioWorkspace() {
   if (!demoFixtureResult.success) {
@@ -81,9 +96,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [aiRequestStatus, setAiRequestStatus] = useState<AiRequestUiStatus>("idle");
   const [aiRequestError, setAiRequestError] = useState<string | null>(null);
   const [hasValidAiPlan, setHasValidAiPlan] = useState(true);
+  const [harnessTasks, setHarnessTasks] = useState<HarnessTaskSummary[]>([]);
+  const [lastHarnessIdempotencyKey, setLastHarnessIdempotencyKey] = useState("");
   const repositoryRef = useRef<StudioRepository | null>(null);
   const puckDraftOriginRef = useRef<PuckDraftOrigin | null>(null);
   const aiRequestAbortRef = useRef<AbortController | null>(null);
+  const harnessRequestActiveRef = useRef(false);
 
   const isApplied = execution.appliedChangeSetIds.includes(aiChangeSet.id);
   const isAiPreview = execution.preview?.changeSetId === aiChangeSet.id;
@@ -111,6 +129,15 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setExecution(restored.execution);
       setAuditRecords(restored.auditRecords);
       setQueryRecords(restored.queryRecords);
+      setHarnessTasks(restored.harnessTasks);
+      const pendingHarnessTask = restored.harnessTasks.find((task) => task.state === "awaitingConfirmation" && task.pendingChangeSet);
+      if (pendingHarnessTask?.pendingChangeSet) {
+        setAiChangeSet(pendingHarnessTask.pendingChangeSet);
+        setAiMessage(pendingHarnessTask.resultMessage ?? "Harness 已恢复待确认变更，请重新预览后人工确认。");
+        setAiMetadata(null);
+        setHasValidAiPlan(true);
+        setAiRequestStatus("success");
+      }
       setSaveLabel(restored.restored ? "已恢复 · 本地草稿" : "已保存 · 演示草稿");
       setPersistenceNotice(restored.notice?.includes("回退") ? restored.notice : null);
     });
@@ -124,11 +151,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     nextAuditRecords = auditRecords,
     nextQueryRecords = queryRecords,
     nextDataProduct = dataProduct,
+    nextHarnessTasks = harnessTasks,
   ) {
     const repository = repositoryRef.current;
     if (!repository) return;
     try {
-      repository.save(createStudioSnapshot(nextDataProduct, nextExecution, nextAuditRecords, nextQueryRecords));
+      repository.save(createStudioSnapshot(nextDataProduct, nextExecution, nextAuditRecords, nextQueryRecords, nextHarnessTasks));
     } catch (error) {
       setPersistenceNotice(`本地保存失败，当前页面仍可继续使用。${error instanceof Error ? ` ${error.message}` : ""}`);
     }
@@ -235,7 +263,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       }
       const nextExecution = applyChangeSet(execution, aiChangeSet, role);
       const audit = addAudit(aiChangeSet, "ai", "applied");
+      const relatedTask = harnessTasks.find((task) => task.pendingChangeSet?.id === aiChangeSet.id);
+      const nextHarnessTasks = relatedTask
+        ? appendHarnessTask(harnessTasks, settleHarnessConfirmation(relatedTask, true, harnessUiClock))
+        : harnessTasks;
       setExecution(nextExecution);
+      setHarnessTasks(nextHarnessTasks);
       setActivePageId(aiChangeSet.operations[0]?.pageId ?? activePageId);
       setCanvasMode("preview");
       setPendingPuckChangeSet(null);
@@ -244,7 +277,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setPuckSessionKey((value) => value + 1);
       setSaveLabel("已保存 · 变更已应用");
       setValidationError(null);
-      persistExplicitly(nextExecution, appendChangeSetAuditRecord(auditRecords, audit));
+      persistExplicitly(nextExecution, appendChangeSetAuditRecord(auditRecords, audit), queryRecords, dataProduct, nextHarnessTasks);
     } catch (error) {
       const message = readableValidationError(error);
       setValidationError(message);
@@ -253,51 +286,83 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   }
 
   function handleCancelPreview() {
-    addAudit(aiChangeSet, "ai", "cancelled");
-    setExecution(cancelPreview(execution));
+    const audit = addAudit(aiChangeSet, "ai", "cancelled");
+    const nextExecution = cancelPreview(execution);
+    const relatedTask = harnessTasks.find((task) => task.pendingChangeSet?.id === aiChangeSet.id);
+    const nextHarnessTasks = relatedTask
+      ? appendHarnessTask(harnessTasks, settleHarnessConfirmation(relatedTask, false, harnessUiClock))
+      : harnessTasks;
+    setExecution(nextExecution);
+    setHarnessTasks(nextHarnessTasks);
+    if (relatedTask) setHasValidAiPlan(false);
     setSaveLabel("已保存 · 已取消 AI 预览");
     setValidationError(null);
+    persistExplicitly(nextExecution, appendChangeSetAuditRecord(auditRecords, audit), queryRecords, dataProduct, nextHarnessTasks);
   }
 
-  async function handleGenerateAiPlan(instructionOverride?: string) {
+  async function handleGenerateAiPlan(instructionOverride?: string, idempotencyOverride?: string) {
     const submittedInstruction = (instructionOverride ?? aiInstruction).trim();
-    if (!submittedInstruction || aiRequestStatus === "loading") return;
+    if (!submittedInstruction || harnessRequestActiveRef.current) return;
 
     aiRequestAbortRef.current?.abort();
     const controller = new AbortController();
     aiRequestAbortRef.current = controller;
+    harnessRequestActiveRef.current = true;
     const baseExecution = cancelPreview(execution);
     if (execution.preview) auditCurrentPreviewCancellation();
+    const idempotencyKey = idempotencyOverride || `request_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`;
+    const initialTask = createHarnessTask(idempotencyKey, submittedInstruction, activePageId, role, harnessUiClock);
+    const initialTasks = appendHarnessTask(harnessTasks, initialTask);
     setExecution(baseExecution);
+    setHarnessTasks(initialTasks);
     setPendingPuckChangeSet(null);
     setPendingChangeSource(null);
     setCanvasMode("preview");
     setLastSubmittedInstruction(submittedInstruction);
+    setLastHarnessIdempotencyKey(idempotencyKey);
     setAiRequestStatus("loading");
     setAiRequestError(null);
     setHasValidAiPlan(false);
     setValidationError(null);
-    setSaveLabel("AI 规划中 · 正式 AppSpec 未修改");
+    setSaveLabel("Harness 运行中 · 正式 AppSpec 未修改");
+    persistExplicitly(baseExecution, auditRecords, queryRecords, dataProduct, initialTasks);
 
     try {
-      const result = await requestAiPlan({
+      const { task } = await requestHarnessTask({
+        idempotencyKey,
         instruction: submittedInstruction,
         pageId: activePageId,
         appSpec: baseExecution.present,
+        recipes: dataProduct.recipes,
         role,
-      }, { signal: controller.signal, timeoutMs: 25_000 });
-      validateChangeSetAgainstAppSpec(baseExecution.present, result.changeSet, { role, intent: "apply" });
-      setAiChangeSet(result.changeSet);
-      setAiMessage(result.message);
-      setAiMetadata(result.metadata);
-      setAiRequestStatus("success");
-      setAiRequestError(null);
-      setHasValidAiPlan(true);
-      setSaveLabel("AI 已生成 · 等待画布预览");
+      }, { signal: controller.signal, timeoutMs: 30_000 });
+      const nextTasks = appendHarnessTask(initialTasks, task);
+      setHarnessTasks(nextTasks);
+      setAiMetadata(null);
+      setAiMessage(task.resultMessage ?? task.events.at(-1)?.message ?? "Harness 任务已结束。");
+      if (task.state === "awaitingConfirmation" && task.pendingChangeSet) {
+        setAiChangeSet(task.pendingChangeSet);
+        setAiRequestStatus("success");
+        setAiRequestError(null);
+        setHasValidAiPlan(true);
+        setSaveLabel("Harness 已暂停 · 等待人工确认");
+      } else if (task.state === "completed") {
+        setAiRequestStatus("success");
+        setAiRequestError(null);
+        setHasValidAiPlan(false);
+        setSaveLabel("Harness 已完成 · 只读任务");
+      } else {
+        const taskError = task.error ?? (task.state === "cancelled" ? "Harness 任务已取消。" : "Harness 任务执行失败。");
+        setAiRequestStatus(task.state === "cancelled" ? "cancelled" : "error");
+        setAiRequestError(taskError);
+        setHasValidAiPlan(false);
+        setSaveLabel("已保存 · Harness 未修改 AppSpec");
+      }
+      persistExplicitly(baseExecution, auditRecords, queryRecords, dataProduct, nextTasks);
     } catch (error) {
-      const clientError = error instanceof AiPlanClientError
+      const clientError = error instanceof HarnessClientError
         ? error
-        : new AiPlanClientError("invalid_response", readableValidationError(error), true);
+        : new HarnessClientError("invalid_response", readableValidationError(error), true);
       const nextStatus: AiRequestUiStatus = clientError.code === "timeout"
         ? "timeout"
         : clientError.code === "cancelled"
@@ -305,20 +370,21 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           : "error";
       setAiRequestStatus(nextStatus);
       setAiRequestError(clientError.message);
-      setAiMessage("本次请求未生成可用 ChangeSet，正式 AppSpec 保持不变。");
-      setAiMetadata(clientError.metadata ?? null);
+      setAiMessage("Harness 未生成可用待确认变更，正式 AppSpec 保持不变。");
+      setAiMetadata(null);
       setHasValidAiPlan(false);
-      setSaveLabel("已保存 · AI 未修改 AppSpec");
-      addAuditSummary(
-        `changeset_ai_request_${Date.now()}`,
-        "AI 生成结构化 ChangeSet",
-        "ai",
-        "failed",
-        clientError.message,
-        clientError.metadata ?? null,
-      );
+      setSaveLabel("已保存 · Harness 未修改 AppSpec");
+      const failedTask = appendHarnessEvent(initialTask, {
+        type: clientError.code === "cancelled" ? "state" : "error",
+        state: clientError.code === "cancelled" ? "cancelled" : "failed",
+        message: clientError.message,
+      }, harnessUiClock, { error: clientError.message, resultMessage: "任务未完成，正式 AppSpec 未修改。" });
+      const nextTasks = appendHarnessTask(initialTasks, failedTask);
+      setHarnessTasks(nextTasks);
+      persistExplicitly(baseExecution, auditRecords, queryRecords, dataProduct, nextTasks);
     } finally {
       if (aiRequestAbortRef.current === controller) aiRequestAbortRef.current = null;
+      harnessRequestActiveRef.current = false;
     }
   }
 
@@ -327,7 +393,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   }
 
   function handleRetryAiRequest() {
-    if (lastSubmittedInstruction) void handleGenerateAiPlan(lastSubmittedInstruction);
+    if (lastSubmittedInstruction) void handleGenerateAiPlan(lastSubmittedInstruction, lastHarnessIdempotencyKey || undefined);
   }
 
   function handleUndo() {
@@ -535,6 +601,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setAiRequestError(null);
     setLastSubmittedInstruction("");
     setHasValidAiPlan(true);
+    setHarnessTasks([]);
+    setLastHarnessIdempotencyKey("");
   }
 
   return (
@@ -597,6 +665,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           requestStatus={aiRequestStatus}
           requestError={aiRequestError}
           canRetry={Boolean(lastSubmittedInstruction && aiRequestError)}
+          harnessTask={harnessTasks[0] ?? null}
+          harnessTaskCount={harnessTasks.length}
           onInstructionChange={setAiInstruction}
           onGenerate={() => { void handleGenerateAiPlan(); }}
           onCancelRequest={handleCancelAiRequest}

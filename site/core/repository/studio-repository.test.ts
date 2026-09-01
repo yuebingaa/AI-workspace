@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyChangeSet, createExecutionState } from "@/core/changesets";
 import { createChangeSetAuditRecord } from "@/core/audit";
 import { executeRecordedBinding } from "@/core/data";
+import { appendHarnessEvent, createHarnessTask, taskWithPendingChangeSet } from "@/core/harness/task-state";
 import type { AppNode } from "@/core/models";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import {
@@ -11,6 +12,7 @@ import {
   LocalStorageStudioRepository,
   restoreDemoData,
   STUDIO_STORAGE_KEY,
+  STUDIO_STORAGE_VERSION,
   type StorageLike,
 } from "./studio-repository";
 
@@ -73,7 +75,7 @@ describe("StudioRepository 本地持久化", () => {
     const storage = new MemoryStorage();
     storage.setItem(STUDIO_STORAGE_KEY, JSON.stringify(legacy));
     const loaded = new LocalStorageStudioRepository(storage).load();
-    expect(loaded?.version).toBe(1);
+    expect(loaded?.version).toBe(STUDIO_STORAGE_VERSION);
     expect(loaded?.savedAt).toBe("1970-01-01T00:00:00.000Z");
   });
 
@@ -86,6 +88,29 @@ describe("StudioRepository 本地持久化", () => {
     expect(storage.getItem(STUDIO_STORAGE_KEY)).toBeNull();
     expect(restored.execution.present).toEqual(dataProduct.appSpec);
     expect(restored.auditRecords).toEqual([]);
+  });
+
+  it("刷新后恢复任务摘要，但不会自动继续运行或应用待确认写操作", () => {
+    const { dataProduct, repurchaseChangeSet } = fixtures();
+    let sequence = 0;
+    const clock = { now: () => new Date("2026-01-02T00:00:00.000Z"), id: () => `event_restore_${++sequence}` };
+    const planning = createHarnessTask("request_refresh_running", "检查数据", "page_home", "editor", clock);
+    let awaiting = createHarnessTask("request_refresh_pending", "生成复购指标", "page_home", "editor", clock);
+    awaiting = taskWithPendingChangeSet(awaiting, repurchaseChangeSet);
+    awaiting = appendHarnessEvent(awaiting, {
+      type: "confirmation",
+      state: "awaitingConfirmation",
+      message: "等待用户确认。",
+    }, clock);
+    const storage = new MemoryStorage();
+    const repository = new LocalStorageStudioRepository(storage);
+    repository.save(createStudioSnapshot(dataProduct, createExecutionState(dataProduct.appSpec), [], [], [planning, awaiting]));
+
+    const loaded = loadStudioStateSafely(repository, dataProduct);
+    expect(loaded.harnessTasks.find((task) => task.id === planning.id)?.state).toBe("cancelled");
+    expect(loaded.harnessTasks.find((task) => task.id === awaiting.id)?.state).toBe("awaitingConfirmation");
+    expect(loaded.execution.preview).toBeNull();
+    expect(loaded.execution.present).toEqual(dataProduct.appSpec);
   });
 
   it("SSR 环境没有 localStorage 时安全返回 null", () => {

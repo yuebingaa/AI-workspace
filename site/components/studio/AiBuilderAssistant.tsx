@@ -1,4 +1,5 @@
 import type { AiPlanMetadata } from "@/core/ai/contracts";
+import type { HarnessTaskSummary } from "@/core/harness/contracts";
 import type { ChangeOperation, ChangeSet, ChangeSetAuditRecord } from "@/core/models";
 import { studioRoleLabels } from "@/core/permissions";
 
@@ -20,6 +21,8 @@ interface AiBuilderAssistantProps {
   requestStatus: AiRequestUiStatus;
   requestError: string | null;
   canRetry: boolean;
+  harnessTask: HarnessTaskSummary | null;
+  harnessTaskCount: number;
   onInstructionChange: (instruction: string) => void;
   onGenerate: () => void;
   onCancelRequest: () => void;
@@ -35,6 +38,15 @@ const statusLabels: Record<ChangeSetUiStatus, string> = {
   applied: "已应用",
 };
 const auditSourceLabels = { ai: "AI", puck: "Puck", manual: "手动" } as const;
+const harnessStateLabels: Record<HarnessTaskSummary["state"], string> = {
+  planning: "规划中",
+  executingTool: "执行工具",
+  observing: "观察结果",
+  awaitingConfirmation: "等待确认",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
 
 function operationTargets(operation: ChangeOperation): string[] {
   if (operation.type === "addNode") return [operation.parentId, operation.node.id];
@@ -58,6 +70,8 @@ export function AiBuilderAssistant({
   requestStatus,
   requestError,
   canRetry,
+  harnessTask,
+  harnessTaskCount,
   onInstructionChange,
   onGenerate,
   onCancelRequest,
@@ -70,6 +84,7 @@ export function AiBuilderAssistant({
   const affectedComponents = [...new Set(changeSet.operations.flatMap(operationTargets))];
   const needsAdmin = changeSet.operations.some((operation) => operation.type === "removeNode" || operation.type === "updatePage");
   const isLoading = requestStatus === "loading";
+  const showChangePlan = !harnessTask || Boolean(harnessTask.pendingChangeSet);
 
   return (
     <aside className="right-panel panel">
@@ -93,6 +108,33 @@ export function AiBuilderAssistant({
           ))}
         </div>
       </details>
+      {harnessTask && (
+        <details className="harness-task-card" open>
+          <summary>
+            <div><b>Harness 任务</b><small>{harnessTask.id}</small></div>
+            <span className={harnessTask.state}>{harnessStateLabels[harnessTask.state]}</span>
+          </summary>
+          <div className="harness-task-body">
+            <div className="harness-task-meta">
+              <span>循环 {harnessTask.counters.loopCount}</span>
+              <span>模型 {harnessTask.counters.modelCallCount}</span>
+              <span>工具 {harnessTask.counters.toolCallCount}</span>
+              {harnessTask.usage && <span>Tokens {harnessTask.usage.totalTokens}</span>}
+              {harnessTask.contextUsage && <span>输入估算 {harnessTask.contextUsage.totalInputChars} chars</span>}
+              <span>历史任务 {harnessTaskCount}</span>
+            </div>
+            <ol className="harness-events">
+              {harnessTask.events.map((event) => (
+                <li key={event.id} className={event.state}>
+                  <i />
+                  <div><b>{harnessStateLabels[event.state]}</b><p>{event.message}</p><small>{new Date(event.timestamp).toLocaleTimeString("zh-CN")}{event.toolCall ? ` · ${event.toolCall.name} · ${event.toolCall.durationMs}ms` : ""}</small></div>
+                </li>
+              ))}
+            </ol>
+            {harnessTask.state === "awaitingConfirmation" && <p className="harness-confirm-note">Harness 已停止执行。请先画布预览，再由用户决定确认或拒绝。</p>}
+          </div>
+        </details>
+      )}
       <div className="conversation">
         <div className="user-message">{instruction || "描述你希望调整的数据产品内容。"}</div>
         <div className="assistant-message">
@@ -113,7 +155,7 @@ export function AiBuilderAssistant({
                 <p>{validationError}</p>
               </div>
             )}
-            <div className="change-plan">
+            {showChangePlan && <div className="change-plan">
               <div className="plan-head"><b>结构化变更计划</b><span className={status === "applied" ? "done" : status}>{statusLabels[status]}</span></div>
               <ol>
                 {changeSet.operations.map((operation, index) => (
@@ -140,7 +182,10 @@ export function AiBuilderAssistant({
                 {status === "preview" ? (
                   <button type="button" onClick={onCancelPreview}>取消预览</button>
                 ) : (
-                  <button type="button" disabled={!canPreview || status === "applied" || isLoading} title={canPreview ? "预览已校验的 ChangeSet" : "当前没有通过校验的 AI ChangeSet"} onClick={onPreview}>画布预览</button>
+                  <>
+                    {harnessTask?.state === "awaitingConfirmation" && <button type="button" className="reject" onClick={onCancelPreview}>拒绝变更</button>}
+                    <button type="button" disabled={!canPreview || status === "applied" || isLoading} title={canPreview ? "预览已校验的 ChangeSet" : "当前没有通过校验的 AI ChangeSet"} onClick={onPreview}>画布预览</button>
+                  </>
                 )}
                 <button
                   type="button"
@@ -152,7 +197,7 @@ export function AiBuilderAssistant({
                   {status === "applied" ? "已全部应用 ✓" : "确认并应用"}
                 </button>
               </div>
-            </div>
+            </div>}
             <p className="safe-note">AI 只生成待预览 ChangeSet，不会自动修改正式 AppSpec。</p>
           </div>
         </div>

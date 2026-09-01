@@ -1,0 +1,371 @@
+import { z } from "zod";
+import { compileModelPlanDraft, modelPlanDraftSchema } from "@/core/ai/operation-output";
+import { createExecutionState, previewChangeSet } from "@/core/changesets";
+import {
+  analyzeDataSourceFields,
+  executeDataRecipe,
+  recipeWithStepCount,
+} from "@/core/data";
+import type { AppNode, LocalDataRuntime } from "@/core/models";
+import { studioCapabilities } from "@/core/permissions";
+import { StudioValidationError } from "@/core/schemas";
+import type {
+  HarnessEditableNodeSummary,
+  HarnessRequest,
+  HarnessToolExecutionResult,
+  HarnessToolName,
+} from "./contracts";
+import { jsonByteLength, sanitizeHarnessText } from "./security";
+
+export const MAX_HARNESS_TOOL_RESULT_BYTES = 6_000;
+export const DEFAULT_HARNESS_TOOL_RESULT_ENTRIES = 16;
+
+export interface HarnessToolContext {
+  request: HarnessRequest;
+  dataRuntime: LocalDataRuntime;
+  now(): number;
+  id(): string;
+  resultBudgetChars?: number;
+  resultBudgetEntries?: number;
+}
+
+interface HarnessToolDefinition<Name extends HarnessToolName, Args> {
+  name: Name;
+  description: string;
+  mode: "readOnly" | "changePreview";
+  schema: z.ZodType<Args>;
+  execute(args: Args, context: HarnessToolContext): HarnessToolExecutionResult | Promise<HarnessToolExecutionResult>;
+}
+
+function defineTool<Name extends HarnessToolName, Args>(definition: HarnessToolDefinition<Name, Args>) {
+  return definition;
+}
+
+function sourceAndRows(context: HarnessToolContext, dataSourceId: string) {
+  const source = context.request.appSpec.dataSources.find((candidate) => candidate.id === dataSourceId);
+  if (!source) throw new StudioValidationError("Harness 数据源校验失败", [`数据源不存在：${dataSourceId}`]);
+  const rows = context.dataRuntime.rowsByDataSourceId[dataSourceId];
+  if (!rows) throw new StudioValidationError("Harness 数据源校验失败", [`数据源没有可用的本地 fixture：${dataSourceId}`]);
+  return { source, rows };
+}
+
+function recipeContext(context: HarnessToolContext, recipeId: string, stepCount?: number) {
+  const recipe = context.request.recipes.find((candidate) => candidate.id === recipeId);
+  if (!recipe) throw new StudioValidationError("Harness 配方校验失败", [`数据配方不存在：${recipeId}`]);
+  const { source, rows } = sourceAndRows(context, recipe.sourceDatasetId);
+  return { recipe: stepCount === undefined ? recipe : recipeWithStepCount(recipe, stepCount), source, rows };
+}
+
+function compactNodes(node: AppNode): Array<{ id: string; type: AppNode["type"]; childCount: number }> {
+  return [
+    { id: node.id, type: node.type, childCount: node.children?.length ?? 0 },
+    ...(node.children?.flatMap(compactNodes) ?? []),
+  ];
+}
+
+const inspectDataset = defineTool({
+  name: "inspectDataset",
+  description: "检查数据源概览、真实行列数、质量和字段名称。只读。",
+  mode: "readOnly",
+  schema: z.object({ dataSourceId: z.string().min(1).max(120) }).strict(),
+  execute: ({ dataSourceId }, context) => {
+    const { source, rows } = sourceAndRows(context, dataSourceId);
+    return {
+      summary: `数据源“${source.name}”包含 ${rows.length} 行、${source.fields.length} 个字段，质量 ${source.qualityScore}%。`,
+      data: {
+        id: source.id,
+        name: source.name,
+        rowCount: rows.length,
+        columnCount: source.fields.length,
+        qualityScore: source.qualityScore,
+        fields: source.fields.map((field) => ({ name: field.name, label: field.label, type: field.type })),
+        fieldCount: source.fields.length,
+      },
+    };
+  },
+});
+
+const inspectFields = defineTool({
+  name: "inspectFields",
+  description: "分析字段类型、空值、唯一值、数值范围和少量示例。只读。",
+  mode: "readOnly",
+  schema: z.object({
+    dataSourceId: z.string().min(1).max(120),
+    fields: z.array(z.string().min(1).max(120)).max(30).optional(),
+  }).strict(),
+  execute: ({ dataSourceId, fields }, context) => {
+    const { source, rows } = sourceAndRows(context, dataSourceId);
+    const allowed = fields ? new Set(fields) : null;
+    if (allowed) {
+      const missing = [...allowed].filter((field) => !source.fields.some((candidate) => candidate.name === field));
+      if (missing.length) throw new StudioValidationError("Harness 字段校验失败", [`字段不存在：${missing.join("、")}`]);
+    }
+    const analyses = analyzeDataSourceFields(source, rows)
+      .filter((analysis) => !allowed || allowed.has(analysis.field))
+      .map((analysis) => ({ ...analysis, samples: analysis.samples.slice(0, 3) }));
+    return { summary: `已分析 ${analyses.length} 个字段，输入 ${rows.length} 行。`, data: { fields: analyses } };
+  },
+});
+
+const previewDataRecipe = defineTool({
+  name: "previewDataRecipe",
+  description: "按顺序执行现有 DataRecipe，返回最多 10 行预览、步骤摘要和字段血缘。只读。",
+  mode: "readOnly",
+  schema: z.object({
+    recipeId: z.string().min(1).max(120),
+    stepCount: z.number().int().min(1).max(50).optional(),
+  }).strict(),
+  execute: ({ recipeId, stepCount }, context) => {
+    const { recipe, source, rows } = recipeContext(context, recipeId, stepCount);
+    const result = executeDataRecipe(recipe, source, rows);
+    if (!result.success) throw new StudioValidationError("Harness 配方预览失败", [result.error]);
+    return {
+      summary: `配方“${recipe.name}”执行成功：${result.steps.length} 步，${rows.length} 行输入，${result.rows.length} 行输出。`,
+      data: {
+        fields: result.fields,
+        outputRowCount: result.rows.length,
+        steps: result.steps.map((step) => ({
+          stepId: step.stepId,
+          stepType: step.stepType,
+          inputRowCount: step.inputRowCount,
+          outputRowCount: step.outputRowCount,
+          durationMs: step.durationMs,
+        })),
+        lineage: result.lineage,
+      },
+    };
+  },
+});
+
+const validateDataRecipe = defineTool({
+  name: "validateDataRecipe",
+  description: "使用现有 DataRecipe Schema 和本地执行器验证配方。只读。",
+  mode: "readOnly",
+  schema: z.object({ recipeId: z.string().min(1).max(120) }).strict(),
+  execute: ({ recipeId }, context) => {
+    const { recipe, source, rows } = recipeContext(context, recipeId);
+    const result = executeDataRecipe(recipe, source, rows);
+    if (!result.success) throw new StudioValidationError("Harness 配方验证失败", [result.error]);
+    return {
+      summary: `配方“${recipe.name}”通过 Schema 和 ${result.steps.length} 个执行步骤验证。`,
+      data: { valid: true, outputRowCount: result.rows.length, outputFields: result.fields },
+    };
+  },
+});
+
+const inspectAppSpec = defineTool({
+  name: "inspectAppSpec",
+  description: "检查 AppSpec 页面、组件树和可用数据源。只读。",
+  mode: "readOnly",
+  schema: z.object({ pageId: z.string().min(1).max(120).optional() }).strict(),
+  execute: ({ pageId }, context) => {
+    const pages = pageId
+      ? context.request.appSpec.pages.filter((page) => page.id === pageId)
+      : context.request.appSpec.pages;
+    if (!pages.length) throw new StudioValidationError("Harness AppSpec 校验失败", [`页面不存在：${pageId}`]);
+    return {
+      summary: `已检查 ${pages.length} 个页面和 ${pages.reduce((total, page) => total + compactNodes(page.root).length, 0)} 个节点。`,
+      data: {
+        pages: pages.map((page) => ({ id: page.id, title: page.title, route: page.route, nodes: compactNodes(page.root) })),
+        dataSourceIds: context.request.appSpec.dataSources.map((source) => source.id),
+      },
+    };
+  },
+});
+
+const createChangeSetPreview = defineTool({
+  name: "createChangeSetPreview",
+  description: "把模型操作编译并校验为待确认 ChangeSet。只生成预览，绝不应用正式状态。",
+  mode: "changePreview",
+  schema: modelPlanDraftSchema,
+  execute: (draft, context) => {
+    const changeSet = compileModelPlanDraft(draft, context.request.instruction, {
+      now: context.now,
+      idFactory: context.id,
+    });
+    const preview = previewChangeSet(createExecutionState(context.request.appSpec), changeSet, context.request.role);
+    if (!preview.preview) throw new StudioValidationError("Harness ChangeSet 预览失败", ["未生成有效预览"]);
+    return {
+      summary: `已生成 ${changeSet.operations.length} 项待确认变更，正式 AppSpec 尚未修改。`,
+      data: {
+        changeSetId: changeSet.id,
+        operationCount: changeSet.operations.length,
+        operationTypes: changeSet.operations.map((operation) => operation.type),
+        affectedPages: [...new Set(changeSet.operations.map((operation) => operation.pageId))],
+      },
+      pendingChangeSet: changeSet,
+    };
+  },
+});
+
+export const harnessToolRegistry = {
+  inspectDataset,
+  inspectFields,
+  previewDataRecipe,
+  validateDataRecipe,
+  inspectAppSpec,
+  createChangeSetPreview,
+} satisfies Record<HarnessToolName, HarnessToolDefinition<HarnessToolName, unknown>>;
+
+interface HarnessToolCatalogOptions {
+  names?: HarnessToolName[];
+  editableNodes?: HarnessEditableNodeSummary[];
+  instruction?: string;
+}
+
+function stringEnum(values: string[]) {
+  return { type: "string", enum: [...new Set(values)] };
+}
+
+function relevantProperties(node: HarnessEditableNodeSummary, instruction: string) {
+  const titleKeys = new Set(["label", "title", "subtitle", "eyebrow"]);
+  const explicitlyNamed = node.editableProperties.filter((property) => instruction.toLocaleLowerCase("zh-CN").includes(property.toLocaleLowerCase("zh-CN")));
+  if (instruction.includes("标题")) {
+    const titles = node.editableProperties.filter((property) => titleKeys.has(property));
+    if (titles.length > 0) return titles;
+  }
+  if (instruction.includes("描述")) return node.editableProperties.filter((property) => property === "description");
+  return explicitlyNamed.length > 0 ? explicitlyNamed : node.editableProperties.filter((property) => property !== "binding").slice(0, 6);
+}
+
+function primitivePropertySchema(value: string | number | boolean | undefined) {
+  if (typeof value === "number") return { type: "number" };
+  if (typeof value === "boolean") return { type: "boolean" };
+  return { type: "string", maxLength: 500 };
+}
+
+function compactChangePreviewSchema(options: HarnessToolCatalogOptions): Record<string, unknown> {
+  const editableNodes = options.editableNodes ?? [];
+  const instruction = options.instruction ?? "";
+  const updateVariants = editableNodes.map((node) => {
+    const propertyNames = relevantProperties(node, instruction);
+    const properties = Object.fromEntries(propertyNames.map((property) => [
+      property,
+      primitivePropertySchema(node.currentValues[property]),
+    ]));
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["type", "pageId", "nodeId", "props"],
+      properties: {
+        type: stringEnum(["updateNodeProps"]),
+        pageId: stringEnum([node.pageId]),
+        nodeId: stringEnum([node.nodeId]),
+        props: {
+          type: "object",
+          minProperties: 1,
+          additionalProperties: false,
+          properties,
+        },
+      },
+    };
+  });
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["message", "operations"],
+    properties: {
+      message: { type: "string", minLength: 1, maxLength: 2_000 },
+      operations: {
+        type: "array",
+        minItems: 1,
+        maxItems: 20,
+        items: updateVariants.length === 1 ? updateVariants[0] : { oneOf: updateVariants },
+      },
+    },
+  };
+}
+
+export function harnessToolCatalog(options: HarnessToolCatalogOptions = {}) {
+  const names = options.names ? new Set(options.names) : null;
+  return Object.values(harnessToolRegistry).filter((tool) => !names || names.has(tool.name)).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    mode: tool.mode,
+    parameters: tool.name === "createChangeSetPreview" && options.editableNodes
+      ? compactChangePreviewSchema(options)
+      : z.toJSONSchema(tool.schema) as Record<string, unknown>,
+  }));
+}
+
+function truncateString(value: string, limit = 300) {
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
+function compactValue(value: unknown, maxEntries: number, depth = 0): unknown {
+  if (typeof value === "string") return truncateString(value, depth === 0 ? 500 : 220);
+  if (value === null || typeof value !== "object") return value;
+  if (depth >= 5) return "[已省略深层结果]";
+  if (Array.isArray(value)) {
+    const items = value.slice(0, maxEntries).map((item) => compactValue(item, Math.max(3, Math.floor(maxEntries / 2)), depth + 1));
+    return value.length > maxEntries ? [...items, { truncated: true, omittedCount: value.length - maxEntries }] : items;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const selected = entries.slice(0, maxEntries).map(([key, child]) => [key, compactValue(child, Math.max(3, Math.floor(maxEntries / 2)), depth + 1)]);
+  if (entries.length > maxEntries) selected.push(["truncated", true], ["omittedPropertyCount", entries.length - maxEntries]);
+  return Object.fromEntries(selected);
+}
+
+export function compactHarnessToolResult(
+  result: HarnessToolExecutionResult,
+  maxChars = MAX_HARNESS_TOOL_RESULT_BYTES,
+  maxEntries = DEFAULT_HARNESS_TOOL_RESULT_ENTRIES,
+): HarnessToolExecutionResult {
+  if (JSON.stringify(result.data).length <= maxChars) return result;
+  let data = compactValue(result.data, maxEntries);
+  let pass = 0;
+  while (JSON.stringify(data).length > maxChars && pass < 3) {
+    data = compactValue(data, Math.max(2, Math.floor(maxEntries / (2 ** (pass + 1)))));
+    pass += 1;
+  }
+  if (JSON.stringify(data).length > maxChars) {
+    data = { truncated: true, summaryOnly: truncateString(result.summary, Math.max(80, maxChars - 80)) };
+  }
+  if (JSON.stringify(data).length > maxChars) {
+    throw new StudioValidationError("Harness 工具结果过大", ["工具结果压缩后仍超过上下文预算"]);
+  }
+  return {
+    ...result,
+    summary: `${result.summary}（结果已按上下文预算截断）`,
+    data,
+  };
+}
+
+export async function executeHarnessTool(
+  rawName: string,
+  rawArguments: unknown,
+  context: HarnessToolContext,
+): Promise<HarnessToolExecutionResult> {
+  if (!(rawName in harnessToolRegistry)) {
+    throw new StudioValidationError("Harness 工具校验失败", [`不允许调用工具：${sanitizeHarnessText(rawName, "未知工具")}`]);
+  }
+  const name = rawName as HarnessToolName;
+  const tool = harnessToolRegistry[name];
+  if (tool.mode === "changePreview" && !studioCapabilities[context.request.role].updateNodeProps) {
+    throw new StudioValidationError("Harness 工具权限校验失败", [`${context.request.role} 无权生成修改型工具预览`]);
+  }
+  const run = async <Args>(definition: HarnessToolDefinition<HarnessToolName, Args>) => {
+    const parsed = definition.schema.safeParse(rawArguments);
+    if (!parsed.success) throw new StudioValidationError("Harness 工具参数校验失败", [`工具 ${name} 的参数不符合定义`]);
+    return definition.execute(parsed.data, context);
+  };
+  const result = await (() => {
+    switch (name) {
+      case "inspectDataset": return run(inspectDataset);
+      case "inspectFields": return run(inspectFields);
+      case "previewDataRecipe": return run(previewDataRecipe);
+      case "validateDataRecipe": return run(validateDataRecipe);
+      case "inspectAppSpec": return run(inspectAppSpec);
+      case "createChangeSetPreview": return run(createChangeSetPreview);
+    }
+  })();
+  const compacted = compactHarnessToolResult(
+    result,
+    context.resultBudgetChars ?? MAX_HARNESS_TOOL_RESULT_BYTES,
+    context.resultBudgetEntries ?? DEFAULT_HARNESS_TOOL_RESULT_ENTRIES,
+  );
+  if (jsonByteLength(compacted.data) > (context.resultBudgetChars ?? MAX_HARNESS_TOOL_RESULT_BYTES) * 4) {
+    throw new StudioValidationError("Harness 工具结果过大", [`工具 ${name} 的结果压缩后仍超过安全字节限制`]);
+  }
+  return { ...compacted, summary: sanitizeHarnessText(compacted.summary).slice(0, 500) };
+}
