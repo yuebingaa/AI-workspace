@@ -121,7 +121,7 @@ export function resolveHarnessPageDataSourceIds(request: HarnessRequest): string
   const mentionedIds = request.appSpec.dataSources
     .filter((source) => request.instruction.includes(source.id) || request.instruction.includes(source.name))
     .map((source) => source.id);
-  return [...new Set([...mentionedIds, ...boundIds])]
+  return [...new Set([...(request.dataSourceId ? [request.dataSourceId] : []), ...mentionedIds, ...boundIds])]
     .filter((id) => request.appSpec.dataSources.some((source) => source.id === id));
 }
 

@@ -12,6 +12,7 @@ import {
 } from "@/core/harness/contracts";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
+import { datasetRepository } from "@/core/datasets/server/dataset-repository";
 
 export const runtime = "nodejs";
 
@@ -50,8 +51,37 @@ export async function POST(request: Request) {
   if (!demoFixtureResult.success) return error("服务端演示数据不可用。", 500);
   const fixtures = demoFixtureResult.data;
   try {
-    const task = await idempotencyStore.execute(parsed.data, () => harness.run(parsed.data, {
-      dataRuntime: fixtures.dataRuntime,
+    const uploadedSourceIds = parsed.data.appSpec.dataSources.filter((source) => source.sourceType === "csv").map((source) => source.id);
+    const uploaded = uploadedSourceIds.map((datasetId) => {
+      const stored = datasetRepository.get(datasetId);
+      if (!stored) throw new HarnessRequestError(`上传数据集 ${datasetId} 不存在或已过期，请重新上传。`, 410);
+      if (stored.descriptor.aiAccessPolicy === "pending") {
+        throw new HarnessRequestError(`数据集“${stored.descriptor.source.name}”包含可能的敏感字段，请先确认 AI 数据处理方式。`, 403);
+      }
+      return stored;
+    });
+    const canonicalSources = parsed.data.appSpec.dataSources.map((source) => (
+      source.sourceType === "csv"
+        ? uploaded.find((dataset) => dataset.descriptor.datasetId === source.id)?.descriptor.source ?? source
+        : source
+    ));
+    const canonicalRecipes = [
+      ...parsed.data.recipes.filter((recipe) => !uploadedSourceIds.includes(recipe.sourceDatasetId)),
+      ...uploaded.map((dataset) => dataset.descriptor.recipe),
+    ];
+    const serverRequest = harnessRequestSchema.parse({
+      ...parsed.data,
+      appSpec: { ...parsed.data.appSpec, dataSources: canonicalSources },
+      recipes: canonicalRecipes,
+    });
+    const dataRuntime = {
+      rowsByDataSourceId: {
+        ...fixtures.dataRuntime.rowsByDataSourceId,
+        ...Object.fromEntries(uploaded.map((dataset) => [dataset.descriptor.datasetId, dataset.rows])),
+      },
+    };
+    const task = await idempotencyStore.execute(serverRequest, () => harness.run(serverRequest, {
+      dataRuntime,
       apiKey: process.env.DEEPSEEK_API_KEY,
       model: process.env.DEEPSEEK_MODEL,
       signal: request.signal,

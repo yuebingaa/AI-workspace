@@ -63,10 +63,33 @@ export interface DataBinding {
 export interface DataSourceField {
   name: string;
   label: string;
+  originalName?: string;
   type: DataFieldType;
   aggregatable: boolean;
   supportedAggregations: DataAggregation[];
+  nullCount?: number;
+  nullRate?: number;
+  uniqueCount?: number;
+  typeConflictCount?: number;
+  sensitiveCategories?: Array<"name" | "phone" | "email" | "nationalId" | "address">;
 }
+
+export interface DataQualityAnomaly {
+  field: string;
+  kind: "numeric-outlier" | "type-conflict";
+  count: number;
+  message: string;
+}
+
+export interface DataQualitySummary {
+  nullCellCount: number;
+  nullRate: number;
+  duplicateRowCount: number;
+  typeConflictCount: number;
+  anomalies: DataQualityAnomaly[];
+}
+
+export type DatasetAiAccessPolicy = "not-required" | "pending" | "masked" | "exclude-sensitive-samples";
 
 export interface DataSourceDefinition {
   id: string;
@@ -77,6 +100,10 @@ export interface DataSourceDefinition {
   updatedAt: string;
   sourceType: "csv" | "json" | "local-fixture";
   fields: DataSourceField[];
+  expiresAt?: string;
+  ephemeral?: boolean;
+  aiAccessPolicy?: DatasetAiAccessPolicy;
+  quality?: DataQualitySummary;
 }
 
 export interface LocalDataRuntime {

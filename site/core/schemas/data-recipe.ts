@@ -24,7 +24,7 @@ export const dataRecipeStepSchema: z.ZodType<DataRecipeStep> = z.discriminatedUn
   z.object({
     id: idSchema,
     type: z.literal("selectFields"),
-    fields: z.array(fieldSchema).min(1).max(50),
+    fields: z.array(fieldSchema).min(1).max(100),
   }).strict().superRefine((step, context) => {
     if (new Set(step.fields).size !== step.fields.length) context.addIssue({ code: "custom", path: ["fields"], message: "选择字段不能重复" });
   }),

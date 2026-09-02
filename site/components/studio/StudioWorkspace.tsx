@@ -17,6 +17,7 @@ import {
   createExecutionState,
   previewChangeSet,
   undoLastChange,
+  type ChangeSetExecutionState,
 } from "@/core/changesets";
 import { createChangeSetAuditRecord, createChangeSetAuditRecordFromSummary, appendChangeSetAuditRecord } from "@/core/audit";
 import { appendQueryExecutionRecord } from "@/core/data";
@@ -36,7 +37,13 @@ import {
   settleHarnessConfirmation,
   type HarnessTaskClock,
 } from "@/core/harness/task-state";
-import type { AiChangeSetAuditMetadata, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
+import {
+  confirmDatasetAiAccess,
+  deleteUploadedDataset,
+  loadUploadedDataset,
+} from "@/core/datasets/client";
+import type { DatasetUploadResponse, UploadedDatasetDescriptor } from "@/core/datasets";
+import type { AiChangeSetAuditMetadata, AppNode, AppSpec, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, DataSourceDefinition, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
 import {
   createBrowserStudioRepository,
@@ -48,6 +55,7 @@ import {
 import { readableValidationError } from "@/core/schemas";
 import { demoFixtureResult, type DemoFixtures } from "@/fixtures/demo-product";
 import { AiBuilderAssistant, type AiRequestUiStatus, type ChangeSetUiStatus } from "./AiBuilderAssistant";
+import { CsvUploadDialog } from "./CsvUploadDialog";
 import { DataProductCanvas, type CanvasMode } from "./DataProductCanvas";
 import { DataSourceDetailsPanel } from "./DataSourceDetailsPanel";
 import { PageStructurePanel } from "./PageStructurePanel";
@@ -73,6 +81,37 @@ function initialHarnessTiming(): HarnessExecutionTiming {
   };
 }
 
+function withDataSource(appSpec: AppSpec, source: DataSourceDefinition): AppSpec {
+  const exists = appSpec.dataSources.some((candidate) => candidate.id === source.id);
+  return { ...appSpec, dataSources: exists ? appSpec.dataSources.map((candidate) => candidate.id === source.id ? source : candidate) : [...appSpec.dataSources, source] };
+}
+
+function withoutDataSource(appSpec: AppSpec, dataSourceId: string): AppSpec {
+  return { ...appSpec, dataSources: appSpec.dataSources.filter((source) => source.id !== dataSourceId) };
+}
+
+function mapExecutionDataSource(
+  state: ChangeSetExecutionState,
+  mapper: (appSpec: AppSpec) => AppSpec,
+): ChangeSetExecutionState {
+  return {
+    ...state,
+    present: mapper(state.present),
+    preview: state.preview ? { ...state.preview, appSpec: mapper(state.preview.appSpec) } : null,
+    history: state.history.map((entry) => ({ ...entry, appSpec: mapper(entry.appSpec) })),
+  };
+}
+
+function nodeUsesDataSource(node: AppNode, dataSourceId: string): boolean {
+  const binding = "binding" in node.props ? node.props.binding : undefined;
+  return Boolean(binding && typeof binding === "object" && "dataSourceId" in binding && binding.dataSourceId === dataSourceId)
+    || Boolean(node.children?.some((child) => nodeUsesDataSource(child, dataSourceId)));
+}
+
+function appSpecUsesDataSource(appSpec: AppSpec, dataSourceId: string): boolean {
+  return appSpec.pages.some((page) => nodeUsesDataSource(page.root, dataSourceId));
+}
+
 export function StudioWorkspace() {
   if (!demoFixtureResult.success) {
     return (
@@ -90,10 +129,12 @@ export function StudioWorkspace() {
 }
 
 function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
-  const { repurchaseChangeSet, dataRuntime } = fixtures;
+  const { repurchaseChangeSet } = fixtures;
   const [dataProduct, setDataProduct] = useState(() => structuredClone(fixtures.dataProduct));
   const [execution, setExecution] = useState(() => createExecutionState(fixtures.dataProduct.appSpec));
+  const [dataRuntime, setDataRuntime] = useState(() => structuredClone(fixtures.dataRuntime));
   const [activePageId, setActivePageId] = useState(fixtures.dataProduct.appSpec.navigation[0].pageId);
+  const [activeDataSourceId, setActiveDataSourceId] = useState(fixtures.dataProduct.datasets[0]?.id ?? "");
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [saveLabel, setSaveLabel] = useState("已保存 · 演示草稿");
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -106,6 +147,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [auditRecords, setAuditRecords] = useState<ChangeSetAuditRecord[]>([]);
   const [pendingChangeSource, setPendingChangeSource] = useState<ChangeSetAuditSource | null>(null);
   const [isDataSourceOpen, setIsDataSourceOpen] = useState(false);
+  const [isCsvUploadOpen, setIsCsvUploadOpen] = useState(false);
   const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
   const [aiChangeSet, setAiChangeSet] = useState<ChangeSet>(() => structuredClone(repurchaseChangeSet));
   const [aiMessage, setAiMessage] = useState("我已检查数据结构和当前画布，建议先预览以下结构化变更。");
@@ -127,8 +169,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const status: ChangeSetUiStatus = isApplied ? "applied" : isAiPreview ? "preview" : "pending";
   const renderedSpec = execution.preview?.appSpec ?? execution.present;
   const activePage = renderedSpec.pages.find((page) => page.id === activePageId) ?? renderedSpec.pages[0];
-  const dataset = dataProduct.datasets[0];
-  const activeDataSource = renderedSpec.dataSources.find((source) => source.id === dataset?.id) ?? renderedSpec.dataSources[0];
+  const dataset = dataProduct.datasets.find((candidate) => candidate.id === activeDataSourceId) ?? dataProduct.datasets[0];
+  const activeDataSource = renderedSpec.dataSources.find((source) => source.id === activeDataSourceId) ?? renderedSpec.dataSources[0];
   const formalAppSpecRevision = useMemo(() => appSpecRevision(execution.present), [execution.present]);
 
   const handleQueryExecuted = useCallback((record: QueryExecutionRecord) => {
@@ -149,6 +191,21 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setAuditRecords(restored.auditRecords);
       setQueryRecords(restored.queryRecords);
       setHarnessTasks(restored.harnessTasks);
+      setDataRuntime(structuredClone(fixtures.dataRuntime));
+      setActiveDataSourceId(restored.dataProduct.datasets[0]?.id ?? "");
+      const uploadedSourceIds = restored.execution.present.dataSources
+        .filter((source) => source.sourceType === "csv" && source.ephemeral)
+        .map((source) => source.id);
+      uploadedSourceIds.forEach((datasetId) => {
+        void loadUploadedDataset(datasetId).then((loaded) => {
+          if (cancelled) return;
+          setDataRuntime((current) => ({
+            rowsByDataSourceId: { ...current.rowsByDataSourceId, [datasetId]: loaded.rows },
+          }));
+        }).catch(() => {
+          if (!cancelled) setPersistenceNotice(`临时数据集 ${datasetId} 已过期或因服务重启失效，请重新上传。`);
+        });
+      });
       const pendingHarnessTask = restored.harnessTasks.find((task) => task.state === "awaitingConfirmation" && task.pendingChangeSet);
       if (pendingHarnessTask?.pendingChangeSet) {
         setAiChangeSet(pendingHarnessTask.pendingChangeSet);
@@ -161,7 +218,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setPersistenceNotice(restored.notice?.includes("回退") ? restored.notice : null);
     });
     return () => { cancelled = true; };
-  }, [fixtures.dataProduct]);
+  }, [fixtures.dataProduct, fixtures.dataRuntime]);
 
   useEffect(() => () => aiRequestAbortRef.current?.abort(), []);
 
@@ -354,6 +411,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         idempotencyKey,
         instruction: submittedInstruction,
         pageId: activePageId,
+        ...(activeDataSource ? { dataSourceId: activeDataSource.id } : {}),
         appSpec: baseExecution.present,
         recipes: dataProduct.recipes,
         role,
@@ -600,12 +658,91 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     }
   }
 
+  function datasetReference(descriptor: UploadedDatasetDescriptor) {
+    return {
+      id: descriptor.datasetId,
+      name: descriptor.source.name,
+      rowCount: descriptor.source.rowCount,
+      columnCount: descriptor.source.columnCount,
+      qualityScore: descriptor.source.qualityScore,
+      expiresAt: descriptor.expiresAt,
+      ephemeral: true,
+      sensitiveFieldCount: descriptor.sensitiveFields.length,
+      aiAccessPolicy: descriptor.aiAccessPolicy,
+    };
+  }
+
+  function applyUploadedDescriptor(descriptor: UploadedDatasetDescriptor) {
+    const nextExecution = mapExecutionDataSource(execution, (appSpec) => withDataSource(appSpec, descriptor.source));
+    const reference = datasetReference(descriptor);
+    const nextDataProduct = {
+      ...dataProduct,
+      datasets: dataProduct.datasets.some((item) => item.id === descriptor.datasetId)
+        ? dataProduct.datasets.map((item) => item.id === descriptor.datasetId ? reference : item)
+        : [...dataProduct.datasets, reference],
+      recipes: [
+        ...dataProduct.recipes.filter((recipe) => recipe.id !== descriptor.recipe.id && recipe.sourceDatasetId !== descriptor.datasetId),
+        descriptor.recipe,
+      ],
+      appSpec: nextExecution.present,
+    };
+    setExecution(nextExecution);
+    setDataProduct(nextDataProduct);
+    persistExplicitly(nextExecution, auditRecords, queryRecords, nextDataProduct, harnessTasks);
+    return { nextExecution, nextDataProduct };
+  }
+
+  function handleCsvUploaded(result: DatasetUploadResponse) {
+    applyUploadedDescriptor(result.dataset);
+    setDataRuntime((current) => ({
+      rowsByDataSourceId: { ...current.rowsByDataSourceId, [result.dataset.datasetId]: result.rows },
+    }));
+    setActiveDataSourceId(result.dataset.datasetId);
+    setIsCsvUploadOpen(false);
+    setIsDataSourceOpen(true);
+    setPersistenceNotice(result.dataset.persistenceNotice);
+    setSaveLabel("已注册 · 临时 CSV 数据源");
+  }
+
+  async function handleConfirmDatasetAiAccess(policy: "masked" | "exclude-sensitive-samples") {
+    if (!activeDataSource?.ephemeral) return;
+    const descriptor = await confirmDatasetAiAccess(activeDataSource.id, policy);
+    applyUploadedDescriptor(descriptor);
+    setSaveLabel("已保存 · 敏感字段策略已确认");
+  }
+
+  async function handleDeleteDataset() {
+    if (!activeDataSource?.ephemeral) return;
+    const dataSourceId = activeDataSource.id;
+    if (appSpecUsesDataSource(execution.present, dataSourceId) || execution.history.some((entry) => appSpecUsesDataSource(entry.appSpec, dataSourceId))) {
+      throw new Error("该数据源仍被页面组件或变更历史引用，无法删除。请先撤销相关绑定。");
+    }
+    await deleteUploadedDataset(dataSourceId);
+    const nextExecution = mapExecutionDataSource(execution, (appSpec) => withoutDataSource(appSpec, dataSourceId));
+    const nextDataProduct = {
+      ...dataProduct,
+      datasets: dataProduct.datasets.filter((item) => item.id !== dataSourceId),
+      recipes: dataProduct.recipes.filter((recipe) => recipe.sourceDatasetId !== dataSourceId),
+      appSpec: nextExecution.present,
+    };
+    const nextRuntime = { rowsByDataSourceId: Object.fromEntries(Object.entries(dataRuntime.rowsByDataSourceId).filter(([id]) => id !== dataSourceId)) };
+    setExecution(nextExecution);
+    setDataProduct(nextDataProduct);
+    setDataRuntime(nextRuntime);
+    setActiveDataSourceId(nextDataProduct.datasets[0]?.id ?? "");
+    setIsDataSourceOpen(false);
+    setSaveLabel("已保存 · 临时数据源已删除");
+    persistExplicitly(nextExecution, auditRecords, queryRecords, nextDataProduct, harnessTasks);
+  }
+
   function handleResetDemo() {
     if (!window.confirm("确定恢复演示数据吗？当前已应用编辑、查询记录和审计记录都会被清除。")) return;
     aiRequestAbortRef.current?.abort();
     const restored = restoreDemoData(repositoryRef.current, fixtures.dataProduct);
+    void Promise.all(dataProduct.datasets.filter((dataset) => dataset.ephemeral).map((dataset) => deleteUploadedDataset(dataset.id))).catch(() => undefined);
     setDataProduct(restored.dataProduct);
     setExecution(restored.execution);
+    setDataRuntime(structuredClone(fixtures.dataRuntime));
     setAuditRecords(restored.auditRecords);
     setQueryRecords(restored.queryRecords);
     setPendingPuckChangeSet(null);
@@ -614,6 +751,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setPuckSessionKey((value) => value + 1);
     setCanvasMode("preview");
     setActivePageId(fixtures.dataProduct.appSpec.navigation[0].pageId);
+    setActiveDataSourceId(fixtures.dataProduct.datasets[0]?.id ?? "");
+    setIsCsvUploadOpen(false);
+    setIsDataSourceOpen(false);
     setSaveLabel("已保存 · 已恢复演示数据");
     setValidationError(null);
     setPersistenceNotice(null);
@@ -650,7 +790,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           onPageChange={handlePageChange}
           role={role}
           onRenamePage={handleRenamePage}
-          onOpenDataSource={() => setIsDataSourceOpen(true)}
+          activeDataSourceId={activeDataSource?.id ?? ""}
+          onOpenDataSource={(dataSourceId) => { setActiveDataSourceId(dataSourceId); setIsDataSourceOpen(true); }}
+          onUploadCsv={() => setIsCsvUploadOpen(true)}
         />
         <DataProductCanvas
           appSpec={renderedSpec}
@@ -707,9 +849,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           recipe={dataProduct.recipes.find((recipe) => recipe.sourceDatasetId === activeDataSource.id)}
           queryRecords={queryRecords}
           onPreviewRecipeBinding={handlePreviewRecipeBinding}
+          onConfirmAiAccess={activeDataSource.ephemeral ? handleConfirmDatasetAiAccess : undefined}
+          onDelete={activeDataSource.ephemeral ? handleDeleteDataset : undefined}
           onClose={() => setIsDataSourceOpen(false)}
         />
       )}
+      {isCsvUploadOpen && <CsvUploadDialog onUploaded={handleCsvUploaded} onClose={() => setIsCsvUploadOpen(false)} />}
     </main>
   );
 }

@@ -165,8 +165,9 @@ export const harnessRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(160).regex(/^[A-Za-z0-9_-]+$/),
   instruction: z.string().trim().min(1).max(MAX_HARNESS_INSTRUCTION_LENGTH),
   pageId: z.string().min(1).max(120),
+  dataSourceId: z.string().min(1).max(160).optional(),
   appSpec: appSpecSchema,
-  recipes: z.array(dataRecipeSchema).max(10),
+  recipes: z.array(dataRecipeSchema).max(20),
   role: z.enum(["viewer", "editor", "admin"]),
   retryOfTaskId: z.string().min(1).max(160).optional(),
 }).strict();

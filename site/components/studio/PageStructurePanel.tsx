@@ -13,12 +13,13 @@ interface PageStructurePanelProps {
   onPageChange: (pageId: string) => void;
   role: StudioRole;
   onRenamePage: (pageId: string, currentTitle: string) => void;
-  onOpenDataSource: () => void;
+  activeDataSourceId: string;
+  onOpenDataSource: (dataSourceId: string) => void;
+  onUploadCsv: () => void;
 }
 
-export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange, role, onRenamePage, onOpenDataSource }: PageStructurePanelProps) {
+export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange, role, onRenamePage, activeDataSourceId, onOpenDataSource, onUploadCsv }: PageStructurePanelProps) {
   const activePage = appSpec.pages.find((page) => page.id === activePageId);
-  const dataset = dataProduct.datasets[0];
 
   return (
     <aside className="left-panel panel">
@@ -49,14 +50,18 @@ export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageC
         })}
       </div>
 
-      {dataset && (
-        <div className="data-card" onClick={onOpenDataSource}>
-          <div className="data-head"><span className="db">⌘</span><div><b>{dataset.name}</b><small>{dataset.rowCount.toLocaleString("zh-CN")} 行 · {dataset.columnCount} 列</small></div></div>
-          <div className="quality"><span>数据质量</span><b>{dataset.qualityScore}%</b></div>
-          <div className="quality-bar"><i style={{ width: `${dataset.qualityScore}%` }} /></div>
-          <button type="button" onClick={onOpenDataSource}>查看字段、预览与记录 →</button>
-        </div>
-      )}
+      <div className="section-label data-source-section-head"><span>数据源</span><button type="button" onClick={onUploadCsv}>上传 CSV</button></div>
+      <div className="data-source-card-list">
+        {dataProduct.datasets.map((dataset) => (
+          <div key={dataset.id} className={`data-card${activeDataSourceId === dataset.id ? " active" : ""}`} onClick={() => onOpenDataSource(dataset.id)}>
+            <div className="data-head"><span className="db">⌘</span><div><b>{dataset.name}</b><small>{dataset.rowCount.toLocaleString("zh-CN")} 行 · {dataset.columnCount} 列</small></div></div>
+            <div className="quality"><span>数据质量</span><b>{dataset.qualityScore}%</b></div>
+            <div className="quality-bar"><i style={{ width: `${dataset.qualityScore}%` }} /></div>
+            {dataset.ephemeral && <small className="dataset-retention">临时数据 · {dataset.expiresAt ? `${new Date(dataset.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 到期` : "服务重启后失效"}</small>}
+            <button type="button" onClick={() => onOpenDataSource(dataset.id)}>查看字段、预览与记录 →</button>
+          </div>
+        ))}
+      </div>
     </aside>
   );
 }

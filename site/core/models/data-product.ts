@@ -7,6 +7,10 @@ export interface DatasetReference {
   rowCount: number;
   columnCount: number;
   qualityScore: number;
+  expiresAt?: string;
+  ephemeral?: boolean;
+  sensitiveFieldCount?: number;
+  aiAccessPolicy?: "not-required" | "pending" | "masked" | "exclude-sensitive-samples";
 }
 
 export interface PageHeaderProps { eyebrow: string; title: string; description: string; dateRange: string }

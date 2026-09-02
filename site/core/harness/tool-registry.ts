@@ -57,7 +57,7 @@ function sourceAndRows(context: HarnessToolContext, dataSourceId: string) {
   const source = context.request.appSpec.dataSources.find((candidate) => candidate.id === dataSourceId);
   if (!source) throw new StudioValidationError("Harness 数据源校验失败", [`数据源不存在：${dataSourceId}`]);
   const rows = context.dataRuntime.rowsByDataSourceId[dataSourceId];
-  if (!rows) throw new StudioValidationError("Harness 数据源校验失败", [`数据源没有可用的本地 fixture：${dataSourceId}`]);
+  if (!rows) throw new StudioValidationError("Harness 数据源校验失败", [`数据源没有可用的服务端运行数据：${dataSourceId}`]);
   return { source, rows };
 }
 
@@ -114,7 +114,16 @@ const inspectFields = defineTool({
     }
     const analyses = analyzeDataSourceFields(source, rows)
       .filter((analysis) => !allowed || allowed.has(analysis.field))
-      .map((analysis) => ({ ...analysis, samples: analysis.samples.slice(0, 3) }));
+      .map((analysis) => {
+        const field = source.fields.find((candidate) => candidate.name === analysis.field);
+        const sensitive = field?.sensitiveCategories ?? [];
+        const samples = sensitive.length === 0
+          ? analysis.samples.slice(0, 3)
+          : source.aiAccessPolicy === "masked"
+            ? [`[已脱敏：${sensitive.join("/")}]`]
+            : [];
+        return { ...analysis, samples, sensitiveCategories: sensitive };
+      });
     return { summary: `已分析 ${analyses.length} 个字段，输入 ${rows.length} 行。`, data: { fields: analyses } };
   },
 });

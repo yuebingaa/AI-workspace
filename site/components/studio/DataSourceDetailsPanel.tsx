@@ -69,6 +69,8 @@ interface DataSourceDetailsPanelProps {
   recipe?: DataRecipe;
   queryRecords: QueryExecutionRecord[];
   onPreviewRecipeBinding: (changeSet: ChangeSet) => void;
+  onConfirmAiAccess?: (policy: "masked" | "exclude-sensitive-samples") => Promise<void>;
+  onDelete?: () => Promise<void>;
   onClose: () => void;
 }
 
@@ -78,12 +80,16 @@ export function DataSourceDetailsPanel({
   recipe,
   queryRecords,
   onPreviewRecipeBinding,
+  onConfirmAiAccess,
+  onDelete,
   onClose,
 }: DataSourceDetailsPanelProps) {
   const [tab, setTab] = useState<DataSourceTab>("overview");
   const [visibleFields, setVisibleFields] = useState(() => source.fields.map((field) => field.name));
   const [activeStepCount, setActiveStepCount] = useState(recipe?.steps.length ?? 0);
   const [bindingError, setBindingError] = useState<string | null>(null);
+  const [datasetActionError, setDatasetActionError] = useState<string | null>(null);
+  const [datasetActionBusy, setDatasetActionBusy] = useState(false);
   const analyses = useMemo(() => analyzeDataSourceFields(source, rows), [rows, source]);
   const preview = useMemo(() => createDataPreview(source, rows, visibleFields, 20), [rows, source, visibleFields]);
   const records = queryRecords.filter((record) => record.dataSourceId === source.id);
@@ -120,12 +126,26 @@ export function DataSourceDetailsPanel({
     }
   }
 
+  async function confirmAiAccess(policy: "masked" | "exclude-sensitive-samples") {
+    if (!onConfirmAiAccess) return;
+    setDatasetActionBusy(true);
+    setDatasetActionError(null);
+    try { await onConfirmAiAccess(policy); } catch (error) { setDatasetActionError(readableError(error)); } finally { setDatasetActionBusy(false); }
+  }
+
+  async function deleteDataset() {
+    if (!onDelete || !window.confirm("确定删除这个临时数据集吗？删除后无法恢复。")) return;
+    setDatasetActionBusy(true);
+    setDatasetActionError(null);
+    try { await onDelete(); } catch (error) { setDatasetActionError(readableError(error)); setDatasetActionBusy(false); }
+  }
+
   return (
     <div className="data-source-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="data-source-panel" role="dialog" aria-modal="true" aria-label={`${source.name} 数据源详情`}>
         <header className="data-source-panel-head">
           <div><span className="db">◉</span><div><small>数据源工作区</small><h2>{source.name}</h2></div></div>
-          <button type="button" aria-label="关闭数据源详情" onClick={onClose}>×</button>
+          <div className="data-source-head-actions">{source.ephemeral && onDelete && <button type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>删除数据集</button>}<button type="button" aria-label="关闭数据源详情" onClick={onClose}>×</button></div>
         </header>
         <nav className="data-source-tabs" aria-label="数据源详情标签">
           {tabs.map((item) => (
@@ -138,12 +158,25 @@ export function DataSourceDetailsPanel({
         </nav>
         <div className="data-source-panel-body">
           {tab === "overview" && (
+            <div>
             <div className="source-overview-grid">
               <article><span>数据源名称</span><b>{source.name}</b><small>{source.id}</small></article>
               <article><span>数据规模</span><b>{source.rowCount.toLocaleString("zh-CN")} 行</b><small>{source.columnCount} 个字段</small></article>
-              <article><span>更新时间</span><b>{new Date(source.updatedAt).toLocaleString("zh-CN")}</b><small>Fixture 固定时间</small></article>
-              <article><span>数据质量</span><b>{source.qualityScore}%</b><small>通过本地结构校验</small></article>
-              <article><span>数据类型</span><b>{sourceTypeLabels[source.sourceType]}</b><small>阶段 A 本地数据</small></article>
+              <article><span>更新时间</span><b>{new Date(source.updatedAt).toLocaleString("zh-CN")}</b><small>{source.ephemeral ? "上传解析时间" : "Fixture 固定时间"}</small></article>
+              <article><span>数据质量</span><b>{source.qualityScore}%</b><small>{source.quality ? `空值率 ${(source.quality.nullRate * 100).toFixed(1)}% · 重复行 ${source.quality.duplicateRowCount}` : "通过本地结构校验"}</small></article>
+              <article><span>数据类型</span><b>{sourceTypeLabels[source.sourceType]}</b><small>{source.ephemeral ? "服务端临时内存" : "阶段 A 本地数据"}</small></article>
+              {source.expiresAt && <article><span>保留时间</span><b>{new Date(source.expiresAt).toLocaleString("zh-CN")}</b><small>服务重启后也会立即失效</small></article>}
+            </div>
+            {source.quality && <div className="dataset-quality-summary"><span>类型冲突 <b>{source.quality.typeConflictCount}</b></span><span>异常提示 <b>{source.quality.anomalies.length}</b></span><span>重复行 <b>{source.quality.duplicateRowCount}</b></span></div>}
+            {source.ephemeral && <div className="dataset-ephemeral-notice">上传数据仅保存在当前服务进程内，不会写入 localStorage；服务重启或保留时间到期后失效。</div>}
+            {source.fields.some((field) => field.sensitiveCategories?.length) && (
+              <div className={`dataset-sensitive-card ${source.aiAccessPolicy === "pending" ? "pending" : "confirmed"}`}>
+                <b>敏感字段风险标记</b>
+                <p>{source.fields.filter((field) => field.sensitiveCategories?.length).map((field) => `${field.label}（${field.sensitiveCategories?.join("/")}）`).join("、")}</p>
+                {source.aiAccessPolicy === "pending" ? <><small>确认处理方式之前，Harness 不会向 AI 提供此数据集的任何摘要。</small><div><button type="button" disabled={datasetActionBusy} onClick={() => { void confirmAiAccess("masked"); }}>允许脱敏样本</button><button type="button" disabled={datasetActionBusy} onClick={() => { void confirmAiAccess("exclude-sensitive-samples"); }}>排除敏感样本</button></div></> : <small>已确认：{source.aiAccessPolicy === "masked" ? "仅提供脱敏样本" : "不提供敏感字段样本"}</small>}
+              </div>
+            )}
+            {datasetActionError && <div className="recipe-error" role="alert">{datasetActionError}</div>}
             </div>
           )}
           {tab === "fields" && (
@@ -151,7 +184,7 @@ export function DataSourceDetailsPanel({
               <thead><tr><th>字段 / 中文标签</th><th>类型</th><th>空值</th><th>唯一值</th><th>数值统计</th><th>示例值</th></tr></thead>
               <tbody>{analyses.map((analysis) => (
                 <tr key={analysis.field}>
-                  <td><b>{analysis.field}</b><small>{analysis.label}</small></td>
+                  <td><b>{analysis.field}</b><small>{analysis.label}{source.fields.find((field) => field.name === analysis.field)?.originalName !== analysis.field ? ` · 原始：${source.fields.find((field) => field.name === analysis.field)?.originalName || "空字段名"}` : ""}</small>{source.fields.find((field) => field.name === analysis.field)?.sensitiveCategories?.length ? <em className="sensitive-field-badge">敏感风险</em> : null}</td>
                   <td><span className={`field-type ${analysis.type}`}>{typeLabels[analysis.type]}</span></td>
                   <td>{analysis.nullCount}<small>{(analysis.nullRatio * 100).toFixed(1)}%</small></td>
                   <td>{analysis.uniqueCount}</td>

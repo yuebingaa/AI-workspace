@@ -71,9 +71,15 @@ export const dataBindingSchema: z.ZodType<DataBinding> = z.object({
 export const dataSourceFieldSchema: z.ZodType<DataSourceField> = z.object({
   name: idSchema,
   label: z.string().trim().min(1),
+  originalName: z.string().max(500).optional(),
   type: z.enum(["string", "number", "date", "boolean"]),
   aggregatable: z.boolean(),
   supportedAggregations: z.array(dataAggregationSchema).min(1),
+  nullCount: z.number().int().nonnegative().optional(),
+  nullRate: z.number().min(0).max(1).optional(),
+  uniqueCount: z.number().int().nonnegative().optional(),
+  typeConflictCount: z.number().int().nonnegative().optional(),
+  sensitiveCategories: z.array(z.enum(["name", "phone", "email", "nationalId", "address"])).max(5).optional(),
 }).strict().superRefine((field, context) => {
   if (!field.aggregatable && field.supportedAggregations.some((item) => item !== "none" && item !== "count" && item !== "countDistinct")) {
     context.addIssue({ code: "custom", message: "不可聚合字段不能声明数值聚合方式" });
@@ -89,6 +95,21 @@ export const dataSourceDefinitionSchema: z.ZodType<DataSourceDefinition> = z.obj
   updatedAt: z.iso.datetime(),
   sourceType: z.enum(["csv", "json", "local-fixture"]),
   fields: z.array(dataSourceFieldSchema).min(1),
+  expiresAt: z.iso.datetime().optional(),
+  ephemeral: z.boolean().optional(),
+  aiAccessPolicy: z.enum(["not-required", "pending", "masked", "exclude-sensitive-samples"]).optional(),
+  quality: z.object({
+    nullCellCount: z.number().int().nonnegative(),
+    nullRate: z.number().min(0).max(1),
+    duplicateRowCount: z.number().int().nonnegative(),
+    typeConflictCount: z.number().int().nonnegative(),
+    anomalies: z.array(z.object({
+      field: idSchema,
+      kind: z.enum(["numeric-outlier", "type-conflict"]),
+      count: z.number().int().positive(),
+      message: z.string().trim().min(1).max(300),
+    }).strict()).max(100),
+  }).strict().optional(),
 }).strict().superRefine((source, context) => {
   const names = source.fields.map((field) => field.name);
   if (new Set(names).size !== names.length) {
