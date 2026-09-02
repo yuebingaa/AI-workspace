@@ -152,4 +152,25 @@ describe("Harness 最小上下文选择器", () => {
     const input = request("检查 retail_orders 数据集是否可用，返回行数和列数。不要修改页面。");
     expect(classifyHarnessTask(input)).toEqual({ complexity: "simpleReadOnly", maxModelCalls: 2, maxToolCalls: 2 });
   });
+
+  it("仅在配方成功预览后动态暴露 Excel 导出工具", () => {
+    const input = { ...request("整理华东异常订单，创建复购分析，并提供 Excel 下载。"), pageId: "page_customers" };
+    const observations: HarnessObservation[] = [
+      { toolCallId: "dataset", toolName: "inspectDataset", summary: "数据集可用", data: { id: "dataset_retail_orders", rowCount: 48, columnCount: 14 } },
+      { toolCallId: "fields", toolName: "inspectFields", summary: "字段可用", data: { fields: [{ field: "region", type: "string" }] } },
+    ];
+    expect(buildHarnessContextSelection(input, observations, 3).toolNames).toEqual(["previewDataRecipe"]);
+    observations.push({
+      toolCallId: "recipe",
+      toolName: "previewDataRecipe",
+      summary: "配方执行成功",
+      data: { outputRowCount: 4, fields: ["region", "total_anomaly_count"] },
+    });
+    const selection = buildHarnessContextSelection(input, observations, 4);
+    const tools = harnessToolCatalog({ names: selection.toolNames, request: input, instruction: input.instruction });
+    expect(selection.toolNames).toEqual(["exportDataRecipeToExcel"]);
+    expect(tools).toHaveLength(1);
+    expect(JSON.stringify(tools[0].parameters)).toContain("recipe_east_anomalies");
+    expect(JSON.stringify(selection.context)).not.toContain("order_1_1");
+  });
 });

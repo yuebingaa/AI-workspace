@@ -3,6 +3,8 @@ import type { HarnessRequest } from "./contracts";
 import { compactHarnessToolResult, executeHarnessTool, harnessToolCatalog, MAX_HARNESS_TOOL_RESULT_BYTES } from "./tool-registry";
 import { jsonByteLength } from "./security";
 import { demoFixtureResult } from "@/fixtures/demo-product";
+import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
+import { excelExportStore } from "@/core/exports/server/excel-export-store";
 
 function context() {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
@@ -19,13 +21,14 @@ function context() {
 }
 
 describe("Harness 类型化工具注册表", () => {
-  it("只暴露首批六个工具及其参数 Schema", () => {
+  it("暴露包含 Excel 导出的七个类型化工具及其参数 Schema", () => {
     const catalog = harnessToolCatalog();
     expect(catalog.map((tool) => tool.name)).toEqual([
       "inspectDataset",
       "inspectFields",
       "previewDataRecipe",
       "validateDataRecipe",
+      "exportDataRecipeToExcel",
       "inspectAppSpec",
       "createChangeSetPreview",
     ]);
@@ -63,5 +66,21 @@ describe("Harness 类型化工具注册表", () => {
       dataSourceId: "dataset_retail_orders",
       fields: ["not_a_real_field"],
     }, context())).rejects.toThrow(/字段不存在/);
+  });
+
+  it("Excel 工具只返回下载元数据且不修改正式 AppSpec", async () => {
+    excelExportStore.clear();
+    const toolContext = context();
+    const formal = structuredClone(toolContext.request.appSpec);
+    const result = await executeHarnessTool("exportDataRecipeToExcel", {
+      recipeId: "recipe_east_anomalies",
+      fileName: "华东异常订单.xlsx",
+    }, { ...toolContext, excelExporter: harnessExcelExporter });
+
+    expect(result.exportArtifact).toMatchObject({ status: "ready", fileName: "华东异常订单.xlsx" });
+    expect(result.data).toMatchObject({ status: "ready", fileName: "华东异常订单.xlsx" });
+    expect(result.data).not.toHaveProperty("rows");
+    expect(JSON.stringify(result)).not.toContain("UEsDB");
+    expect(toolContext.request.appSpec).toEqual(formal);
   });
 });

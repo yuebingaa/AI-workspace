@@ -272,6 +272,8 @@ function compactObservation(observation: HarnessObservation | undefined, compact
       return { ...base, result: pick(data, ["outputRowCount", "fields", "steps", "lineage", "truncated"]) };
     case "validateDataRecipe":
       return { ...base, result: pick(data, ["valid", "outputRowCount", "outputFields"]) };
+    case "exportDataRecipeToExcel":
+      return { ...base, result: pick(data, ["fileName", "rowCount", "fieldCount", "sizeBytes", "status"]) };
     case "inspectAppSpec":
       return { ...base, result: pick(data, ["pageId", "nodeCount", "targetIds", "truncated"]) };
     case "createChangeSetPreview":
@@ -332,6 +334,9 @@ function buildWorkingMemory(request: HarnessRequest, observations: HarnessObserv
       const outputRowCount = numberValue(data.outputRowCount);
       if (outputRowCount !== undefined) keyStatistics.push(`配方输出 ${outputRowCount} 行`);
     }
+    if (observation.toolName === "exportDataRecipeToExcel") {
+      keyStatistics.push(`Excel 已生成：${String(data.fileName ?? "分析结果.xlsx")}`);
+    }
   }
 
   const pendingGoals: string[] = [];
@@ -339,10 +344,7 @@ function buildWorkingMemory(request: HarnessRequest, observations: HarnessObserv
   if (intent.wantsFields && !completedTools.includes("inspectFields")) pendingGoals.push("确认分析字段");
   if (intent.wantsRecipe && !completedTools.some((tool) => tool === "previewDataRecipe" || tool === "validateDataRecipe")) pendingGoals.push("预览数据配方");
   if (intent.wantsChange && !completedTools.includes("createChangeSetPreview")) pendingGoals.push("生成待确认页面变更");
-  if (intent.wantsExcel) pendingGoals.push("提供 Excel 下载");
-  const availableAnalysisComplete = (!intent.wantsData || completedTools.includes("inspectDataset"))
-    && (!intent.wantsFields || completedTools.includes("inspectFields"))
-    && (!intent.wantsRecipe || completedTools.some((tool) => tool === "previewDataRecipe" || tool === "validateDataRecipe"));
+  if (intent.wantsExcel && !completedTools.includes("exportDataRecipeToExcel")) pendingGoals.push("提供 Excel 下载");
 
   return {
     confirmedDataSources: [...new Map(confirmedDataSources.map((source) => [source.id, source])).values()].slice(0, 4),
@@ -350,7 +352,7 @@ function buildWorkingMemory(request: HarnessRequest, observations: HarnessObserv
     completedTools,
     keyStatistics: [...new Set(keyStatistics)].slice(0, 8),
     pendingGoals,
-    missingCapabilities: intent.wantsExcel && availableAnalysisComplete ? ["缺少 Excel 导出能力"] : [],
+    missingCapabilities: [],
   };
 }
 
@@ -365,21 +367,12 @@ function selectedToolNames(request: HarnessRequest, observations: HarnessObserva
     return ["previewDataRecipe"];
   }
   if (intent.wantsRecipe && called.has("validateDataRecipe") && !called.has("previewDataRecipe")) return ["previewDataRecipe"];
+  if (intent.wantsExcel
+    && (called.has("previewDataRecipe") || called.has("validateDataRecipe"))
+    && !called.has("exportDataRecipeToExcel")) return ["exportDataRecipeToExcel"];
   if (intent.wantsAppInspection && !intent.wantsChange && !called.has("inspectAppSpec")) return ["inspectAppSpec"];
   if (intent.wantsChange && !called.has("createChangeSetPreview") && canChange) return ["createChangeSetPreview"];
   return [];
-}
-
-function excelCapabilityBlockingReason(request: HarnessRequest, observations: HarnessObservation[]): string | undefined {
-  const intent = harnessIntent(request);
-  if (!intent.wantsExcel) return undefined;
-  const called = new Set(observations.map((observation) => observation.toolName));
-  const availableAnalysisComplete = (!intent.wantsData || called.has("inspectDataset"))
-    && (!intent.wantsFields || called.has("inspectFields"))
-    && (!intent.wantsRecipe || called.has("previewDataRecipe") || called.has("validateDataRecipe"));
-  return availableAnalysisComplete
-    ? "已完成当前可用的数据检查与配方预览，但缺少 Excel 导出能力，无法提供真实下载。任务已停止，正式 AppSpec 未修改。"
-    : undefined;
 }
 
 export function buildHarnessContextSelection(
@@ -402,7 +395,7 @@ export function buildHarnessContextSelection(
     ? "当前页面没有可解析的数据源，无法执行数据分析。"
     : intent.wantsRecipe && intent.relevantRecipeIds.length === 0
       ? "当前数据源没有可执行的数据配方，无法生成计算预览。"
-      : excelCapabilityBlockingReason(request, observations);
+      : undefined;
 
   if (observations.length > 0) {
     return {

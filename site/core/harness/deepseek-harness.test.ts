@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { applyChangeSet, createExecutionState, previewChangeSet } from "@/core/changesets";
 import type { HarnessModel, HarnessModelInput, HarnessModelResult, HarnessModelTurn, HarnessRequest } from "@/core/harness";
 import { demoFixtureResult } from "@/fixtures/demo-product";
+import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
+import { excelExportStore } from "@/core/exports/server/excel-export-store";
 import { redactedCompleteActionFailureFixture } from "./fixtures/redacted-complete-action";
 import {
   DeepSeekHarness,
@@ -195,7 +197,8 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.contextUsage?.requests.every((entry) => entry.promptTokens === 1)).toBe(true);
   });
 
-  it("复杂分析在合理预算内完成可用步骤，缺少 Excel 工具时明确 blocked", async () => {
+  it("复杂分析在合理预算内完成配方导出并保持正式 AppSpec 不变", async () => {
+    excelExportStore.clear();
     const data = fixtures();
     const input = {
       ...request("request_complex_excel", "整理华东异常订单，创建复购分析，并提供 Excel 下载。"),
@@ -209,29 +212,40 @@ describe("DeepSeekHarness 服务端状态机", () => {
         fields: ["region", "order_id", "customer_id", "anomaly_count", "repurchase_rate"],
       }, "call_complex_fields"),
       tool("previewDataRecipe", { recipeId: "recipe_east_anomalies" }, "call_complex_recipe"),
+      tool("exportDataRecipeToExcel", { recipeId: "recipe_east_anomalies", fileName: "华东异常订单复购分析.xlsx" }, "call_complex_excel"),
     ]);
 
-    const task = await new DeepSeekHarness().run(input, { dataRuntime: data.dataRuntime, modelClient: model });
+    const task = await new DeepSeekHarness().run(input, {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      excelExporter: harnessExcelExporter,
+    });
 
-    expect(task.state).toBe("blocked");
-    expect(task.error).toContain("缺少 Excel 导出能力");
-    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 3, toolCallCount: 3 });
+    expect(task.state).toBe("completed");
+    expect(task.error).toBeUndefined();
+    expect(task.counters).toEqual({ loopCount: 4, modelCallCount: 4, toolCallCount: 4 });
     expect(model.inputs.map((entry) => entry.tools.map((toolDefinition) => toolDefinition.name))).toEqual([
       ["inspectDataset"],
       ["inspectFields"],
       ["previewDataRecipe"],
+      ["exportDataRecipeToExcel"],
     ]);
     const serializedRounds = model.inputs.map((entry) => JSON.stringify(entry.context));
     expect(serializedRounds.every((serialized) => !serialized.includes("order_1_1"))).toBe(true);
     expect(serializedRounds[2]).not.toContain('"tool":"inspectDataset"');
-    expect(task.contextUsage?.totalInputChars).toBeLessThan(12_000);
+    expect(task.contextUsage?.totalInputChars).toBeLessThan(18_000);
     expect(task.contextUsage?.totalInputChars).toBeLessThan(task.contextUsage?.limits?.maxTotalInputChars ?? 0);
     expect(task.contextUsage?.requests.map((entry) => entry.toolObservationChars)).toEqual([
       0,
       expect.any(Number),
       expect.any(Number),
+      expect.any(Number),
     ]);
     expect(task.pendingChangeSet).toBeUndefined();
+    expect(task.exportArtifact).toMatchObject({ fileName: "华东异常订单复购分析.xlsx", status: "ready" });
+    expect(task.exportArtifact?.rowCount).toBeGreaterThan(0);
+    expect(task.exportArtifact?.fieldCount).toBeGreaterThan(0);
+    expect(JSON.stringify(task)).not.toContain("PK mock workbook");
     expect(input.appSpec).toEqual(formal);
   });
 

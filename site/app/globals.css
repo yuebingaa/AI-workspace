@@ -141,6 +141,12 @@ th { color:#87918e; font-weight:600; }
 .validation-error b { font-size:10px; }
 .validation-error p { margin:4px 0 0; color:#8f2f25; font-size:9px; line-height:1.5; overflow-wrap:anywhere; }
 .validation-error button { margin-top:7px; border:1px solid #d58d85; border-radius:6px; padding:4px 9px; background:#fff; color:#8f2f25; font-size:9px; font-weight:700; }
+.validation-error.blocked-warning { border-color:#e9c273; background:#fff8e8; color:#80550b; }
+.validation-error.blocked-warning p { color:#80550b; }
+.validation-error.blocked-warning button { border-color:#d9af5f; color:#80550b; }
+.excel-export-ready { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:8px 0; padding:9px 10px; border:1px solid #a9dccb; border-radius:9px; background:#eefaf6; color:#126b51; }
+.excel-export-ready b,.excel-export-ready small { display:block; }.excel-export-ready small { margin-top:2px; color:#5b7f73; }
+.excel-export-ready a { flex:none; border-radius:7px; padding:6px 10px; background:#126b51; color:#fff; font-weight:700; text-decoration:none; }
 .ai-request-state { display:flex; align-items:center; gap:7px; margin:0 0 10px; padding:9px 10px; border:1px solid #d8d4fa; border-radius:9px; background:#f7f6ff; color:#5748b5; font-size:9px; }
 .ai-spinner { width:12px; height:12px; border:2px solid #d5d0fa; border-top-color:var(--violet); border-radius:50%; animation:ai-spin .8s linear infinite; }
 @keyframes ai-spin { to { transform:rotate(360deg); } }

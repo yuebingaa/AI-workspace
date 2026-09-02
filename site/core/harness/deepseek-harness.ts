@@ -28,7 +28,7 @@ import {
   type HarnessContextBudget,
 } from "./context-selector";
 import { appendHarnessEvent, createHarnessTask, taskWithPendingChangeSet, type HarnessTaskClock } from "./task-state";
-import { executeHarnessTool, harnessToolCatalog } from "./tool-registry";
+import { executeHarnessTool, harnessToolCatalog, type HarnessExcelExporter } from "./tool-registry";
 
 export const DEFAULT_HARNESS_BOUNDS = DEFAULT_HARNESS_LIMITS;
 
@@ -52,6 +52,7 @@ export interface DeepSeekHarnessOptions {
   clock?: HarnessTaskClock;
   monotonicNow?: () => number;
   toolExecutor?: typeof executeHarnessTool;
+  excelExporter?: HarnessExcelExporter;
   contextBudget?: Partial<HarnessContextBudget>;
 }
 
@@ -482,6 +483,7 @@ export class DeepSeekHarness {
               id: () => clock.id().replaceAll("harness_event_", "tool_"),
               resultBudgetChars: contextBudget.maxToolResultChars,
               resultBudgetEntries: contextBudget.maxToolResultEntries,
+              ...(options.excelExporter ? { excelExporter: options.excelExporter } : {}),
             }),
             toolBudgetMs,
             controller.signal,
@@ -543,6 +545,19 @@ export class DeepSeekHarness {
             resultMessage: sanitizeHarnessText(turn.message),
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("awaitingConfirmation"),
+          });
+          return task;
+        }
+        if (result.exportArtifact) {
+          task = appendHarnessEvent(task, {
+            type: "state",
+            state: "completed",
+            message: `Excel 已生成：${result.exportArtifact.fileName}（${result.exportArtifact.rowCount} 行、${result.exportArtifact.fieldCount} 个字段）。`,
+          }, clock, {
+            exportArtifact: result.exportArtifact,
+            resultMessage: `分析已完成，Excel“${result.exportArtifact.fileName}”可以下载。正式 AppSpec 未修改。`,
+            totalDurationMs: elapsedMs(),
+            executionTiming: executionTiming("completed"),
           });
           return task;
         }

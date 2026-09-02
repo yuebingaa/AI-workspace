@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ChangeSet, DataRecipe } from "@/core/models";
+import { excelExportArtifactSchema, type ExcelExportArtifact } from "@/core/exports/contracts";
 import { appSpecSchema, changeSetSchema, dataRecipeSchema } from "@/core/schemas";
 
 export const MAX_HARNESS_INSTRUCTION_LENGTH = 1_000;
@@ -35,6 +36,7 @@ export const harnessToolNameSchema = z.enum([
   "inspectFields",
   "previewDataRecipe",
   "validateDataRecipe",
+  "exportDataRecipeToExcel",
   "inspectAppSpec",
   "createChangeSetPreview",
 ]);
@@ -148,6 +150,7 @@ export const harnessTaskSummarySchema = z.object({
   counters: harnessCountersSchema,
   resultMessage: z.string().max(2_000).optional(),
   pendingChangeSet: changeSetSchema.optional(),
+  exportArtifact: excelExportArtifactSchema.optional(),
   error: z.string().max(1_000).optional(),
   model: z.string().min(1).max(160).optional(),
   usage: harnessModelUsageSchema.optional(),
@@ -244,6 +247,7 @@ export interface HarnessToolExecutionResult {
   summary: string;
   data: unknown;
   pendingChangeSet?: ChangeSet;
+  exportArtifact?: ExcelExportArtifact;
 }
 
 export interface HarnessRecipeCollection {

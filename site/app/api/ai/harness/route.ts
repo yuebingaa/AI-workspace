@@ -11,6 +11,7 @@ import {
   harnessRequestSchema,
 } from "@/core/harness/contracts";
 import { demoFixtureResult } from "@/fixtures/demo-product";
+import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
 
 export const runtime = "nodejs";
 
@@ -54,6 +55,7 @@ export async function POST(request: Request) {
       apiKey: process.env.DEEPSEEK_API_KEY,
       model: process.env.DEEPSEEK_MODEL,
       signal: request.signal,
+      excelExporter: harnessExcelExporter,
       bounds: {
         maxModelCalls: positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 5),
         maxToolCalls: positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),

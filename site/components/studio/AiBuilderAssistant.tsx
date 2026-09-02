@@ -4,7 +4,7 @@ import type { ChangeOperation, ChangeSet, ChangeSetAuditRecord } from "@/core/mo
 import { studioRoleLabels } from "@/core/permissions";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
-export type AiRequestUiStatus = "idle" | "loading" | "success" | "error" | "cancelled" | "timeout";
+export type AiRequestUiStatus = "idle" | "loading" | "success" | "blocked" | "error" | "cancelled" | "timeout";
 
 interface AiBuilderAssistantProps {
   pageTitle: string;
@@ -161,6 +161,15 @@ export function AiBuilderAssistant({
                 模型 {(timing.modelDurationMs / 1_000).toFixed(2)}s · 工具 {(timing.toolDurationMs / 1_000).toFixed(2)}s · 其他 {(timing.otherDurationMs / 1_000).toFixed(2)}s · 已保留观察 {timing.retainedObservationCount}
               </p>
             )}
+            {harnessTask.exportArtifact && (
+              <div className="excel-export-ready">
+                <div>
+                  <b>{harnessTask.exportArtifact.fileName}</b>
+                  <small>{harnessTask.exportArtifact.rowCount} 行 · {harnessTask.exportArtifact.fieldCount} 个字段 · {(harnessTask.exportArtifact.sizeBytes / 1024).toFixed(1)} KB</small>
+                </div>
+                <a href={harnessTask.exportArtifact.downloadUrl} download={harnessTask.exportArtifact.fileName}>下载 Excel</a>
+              </div>
+            )}
             <ol className="harness-events">
               {harnessTask.events.map((event) => (
                 <li key={event.id} className={event.state}>
@@ -181,8 +190,8 @@ export function AiBuilderAssistant({
             <p>{aiMessage}</p>
             {isLoading && <div className="ai-request-state" role="status"><span className="ai-spinner" />正在请求 DeepSeek 并校验 JSON…</div>}
             {requestError && (
-              <div className="validation-error" role="alert">
-                <b>{requestStatus === "timeout" ? "请求超时" : requestStatus === "cancelled" ? "请求已取消" : "AI 生成失败"}</b>
+              <div className={`validation-error${requestStatus === "blocked" ? " blocked-warning" : ""}`} role={requestStatus === "blocked" ? "status" : "alert"}>
+                <b>{requestStatus === "blocked" ? "任务受限/缺少能力" : requestStatus === "timeout" ? "请求超时" : requestStatus === "cancelled" ? "请求已取消" : "AI 生成失败"}</b>
                 <p>{requestError}</p>
                 {canRetry && <button type="button" onClick={onRetry}>重试</button>}
               </div>

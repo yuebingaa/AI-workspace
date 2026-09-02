@@ -373,10 +373,10 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setAiRequestStatus("success");
         setAiRequestError(null);
         setHasValidAiPlan(false);
-        setSaveLabel("Harness 已完成 · 只读任务");
+        setSaveLabel(task.exportArtifact ? "Harness 已完成 · Excel 可下载" : "Harness 已完成 · 只读任务");
       } else {
         const taskError = task.error ?? (task.state === "cancelled" ? "Harness 任务已取消。" : "Harness 任务执行失败。");
-        setAiRequestStatus(task.state === "cancelled" ? "cancelled" : "error");
+        setAiRequestStatus(task.state === "blocked" ? "blocked" : task.state === "cancelled" ? "cancelled" : "error");
         setAiRequestError(taskError);
         setHasValidAiPlan(false);
         setSaveLabel("已保存 · Harness 未修改 AppSpec");

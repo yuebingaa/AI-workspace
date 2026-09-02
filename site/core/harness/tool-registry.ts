@@ -28,7 +28,18 @@ export interface HarnessToolContext {
   id(): string;
   resultBudgetChars?: number;
   resultBudgetEntries?: number;
+  excelExporter?: HarnessExcelExporter;
 }
+
+export interface HarnessExcelExporterArgs {
+  recipeId: string;
+  fileName?: string;
+}
+
+export type HarnessExcelExporter = (
+  args: HarnessExcelExporterArgs,
+  context: HarnessToolContext,
+) => Promise<HarnessToolExecutionResult>;
 
 interface HarnessToolDefinition<Name extends HarnessToolName, Args> {
   name: Name;
@@ -154,6 +165,20 @@ const validateDataRecipe = defineTool({
   },
 });
 
+const exportDataRecipeToExcel = defineTool({
+  name: "exportDataRecipeToExcel",
+  description: "把已成功预览的 DataRecipe 结果导出为临时 XLSX 下载文件。只导出配方结果，不修改 AppSpec。",
+  mode: "readOnly",
+  schema: z.object({
+    recipeId: z.string().min(1).max(120),
+    fileName: z.string().trim().min(1).max(100).optional(),
+  }).strict(),
+  execute: async (args, context) => {
+    if (!context.excelExporter) throw new StudioValidationError("Excel 导出能力不可用", ["服务端没有配置 Excel 导出器"]);
+    return context.excelExporter(args, context);
+  },
+});
+
 const inspectAppSpec = defineTool({
   name: "inspectAppSpec",
   description: "检查 AppSpec 页面、组件树和可用数据源。只读。",
@@ -204,6 +229,7 @@ export const harnessToolRegistry = {
   inspectFields,
   previewDataRecipe,
   validateDataRecipe,
+  exportDataRecipeToExcel,
   inspectAppSpec,
   createChangeSetPreview,
 } satisfies Record<HarnessToolName, HarnessToolDefinition<HarnessToolName, unknown>>;
@@ -382,6 +408,17 @@ function scopedToolParameters(tool: (typeof harnessToolRegistry)[HarnessToolName
   if (tool.name === "validateDataRecipe") {
     return { type: "object", additionalProperties: false, required: ["recipeId"], properties: { recipeId: stringEnum(recipeIds) } };
   }
+  if (tool.name === "exportDataRecipeToExcel") {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipeId"],
+      properties: {
+        recipeId: stringEnum(recipeIds),
+        fileName: { type: "string", minLength: 1, maxLength: 100, description: "仅文件名，不得包含路径；可省略" },
+      },
+    };
+  }
   return z.toJSONSchema(tool.schema) as Record<string, unknown>;
 }
 
@@ -464,6 +501,7 @@ export async function executeHarnessTool(
       case "inspectFields": return run(inspectFields);
       case "previewDataRecipe": return run(previewDataRecipe);
       case "validateDataRecipe": return run(validateDataRecipe);
+      case "exportDataRecipeToExcel": return run(exportDataRecipeToExcel);
       case "inspectAppSpec": return run(inspectAppSpec);
       case "createChangeSetPreview": return run(createChangeSetPreview);
     }
