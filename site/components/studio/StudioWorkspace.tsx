@@ -55,6 +55,7 @@ import {
 import { readableValidationError } from "@/core/schemas";
 import { demoFixtureResult, type DemoFixtures } from "@/fixtures/demo-product";
 import { AiBuilderAssistant, type AiRequestUiStatus, type ChangeSetUiStatus } from "./AiBuilderAssistant";
+import { ActivityHistoryPanel, restoreDialogTrigger } from "./ActivityHistoryPanel";
 import { CsvUploadDialog } from "./CsvUploadDialog";
 import { DataProductCanvas, type CanvasMode } from "./DataProductCanvas";
 import { DataSourceDetailsPanel } from "./DataSourceDetailsPanel";
@@ -159,6 +160,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [hasValidAiPlan, setHasValidAiPlan] = useState(true);
   const [harnessTasks, setHarnessTasks] = useState<HarnessTaskSummary[]>([]);
   const [lastHarnessTaskId, setLastHarnessTaskId] = useState("");
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
   const repositoryRef = useRef<StudioRepository | null>(null);
   const puckDraftOriginRef = useRef<PuckDraftOrigin | null>(null);
   const aiRequestAbortRef = useRef<AbortController | null>(null);
@@ -216,6 +220,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       }
       setSaveLabel(restored.restored ? "已恢复 · 本地草稿" : "已保存 · 演示草稿");
       setPersistenceNotice(restored.notice?.includes("回退") ? restored.notice : null);
+      setIsHistoryLoading(false);
     });
     return () => { cancelled = true; };
   }, [fixtures.dataProduct, fixtures.dataRuntime]);
@@ -256,6 +261,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const handlePuckDataChange = useCallback((data: StudioPuckData) => {
     setPuckDraft((current) => updatePuckDraft(current, data));
   }, []);
+  const handleOpenHistory = useCallback(() => setIsHistoryOpen(true), []);
+  const handleCloseHistory = useCallback(() => setIsHistoryOpen(false), []);
+  const handleRestoreHistoryFocus = useCallback(() => restoreDialogTrigger(historyButtonRef.current), []);
 
   function toAuditMetadata(metadata: AiPlanMetadata | AiChangeSetAuditMetadata | null): AiChangeSetAuditMetadata | undefined {
     return metadata ? {
@@ -776,10 +784,13 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         canUndo={role !== "viewer" && execution.history.length > 0}
         saveLabel={saveLabel}
         role={role}
+        historyCount={harnessTasks.length + auditRecords.length}
+        historyButtonRef={historyButtonRef}
         onDeviceChange={setDevice}
         onUndo={handleUndo}
         onRoleChange={handleRoleChange}
         onResetDemo={handleResetDemo}
+        onOpenHistory={handleOpenHistory}
       />
       {persistenceNotice && <div className="persistence-notice" role="alert"><span>{persistenceNotice}</span><button type="button" onClick={() => setPersistenceNotice(null)}>知道了</button></div>}
       <div className="workspace">
@@ -855,6 +866,14 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         />
       )}
       {isCsvUploadOpen && <CsvUploadDialog onUploaded={handleCsvUploaded} onClose={() => setIsCsvUploadOpen(false)} />}
+      <ActivityHistoryPanel
+        open={isHistoryOpen}
+        harnessTasks={harnessTasks}
+        auditRecords={auditRecords}
+        loading={isHistoryLoading}
+        onRestoreFocus={handleRestoreHistoryFocus}
+        onClose={handleCloseHistory}
+      />
     </main>
   );
 }

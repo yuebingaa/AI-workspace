@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import { studioRoleLabels, type StudioRole } from "@/core/permissions";
 
 export type PreviewDevice = "desktop" | "mobile";
@@ -8,13 +9,16 @@ interface StudioHeaderProps {
   canUndo: boolean;
   saveLabel: string;
   role: StudioRole;
+  historyCount: number;
+  historyButtonRef: RefObject<HTMLButtonElement | null>;
   onDeviceChange: (device: PreviewDevice) => void;
   onUndo: () => void;
   onRoleChange: (role: StudioRole) => void;
   onResetDemo: () => void;
+  onOpenHistory: () => void;
 }
 
-export function StudioHeader({ productName, device, canUndo, saveLabel, role, onDeviceChange, onUndo, onRoleChange, onResetDemo }: StudioHeaderProps) {
+export function StudioHeader({ productName, device, canUndo, saveLabel, role, historyCount, historyButtonRef, onDeviceChange, onUndo, onRoleChange, onResetDemo, onOpenHistory }: StudioHeaderProps) {
   return (
     <header className="topbar">
       <div className="brand">
@@ -31,6 +35,7 @@ export function StudioHeader({ productName, device, canUndo, saveLabel, role, on
         </label>
         <button type="button" className={device === "desktop" ? "active" : ""} onClick={() => onDeviceChange("desktop")}>桌面</button>
         <button type="button" className={device === "mobile" ? "active" : ""} onClick={() => onDeviceChange("mobile")}>手机</button>
+        <button ref={historyButtonRef} type="button" className="history-entry" onClick={onOpenHistory}>任务历史 <span>{historyCount}</span></button>
         <button type="button" disabled={!canUndo} onClick={onUndo}>撤销</button>
         <button type="button" onClick={onResetDemo}>恢复演示数据</button>
         <span className="saved">{saveLabel}</span>

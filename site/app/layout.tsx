@@ -15,6 +15,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'DataCanvas AI｜AI 数据产品工作室',
   description: '通过自然语言、可视化画布与结构化变更集，把原始数据转化为可信、可发布的数据产品。',
+  icons: {
+    icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
+    shortcut: '/favicon.svg',
+  },
 };
 
 export default function RootLayout({
