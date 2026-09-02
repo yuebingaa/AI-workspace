@@ -5,6 +5,7 @@ import {
   MAX_HARNESS_TASKS,
   harnessTaskSummarySchema,
   type HarnessEvent,
+  type HarnessExecutionTiming,
   type HarnessState,
   type HarnessTaskSummary,
 } from "./contracts";
@@ -20,6 +21,7 @@ export function createHarnessTask(
   pageId: string,
   role: StudioRole,
   clock: HarnessTaskClock,
+  options: { executionTiming?: HarnessExecutionTiming; retryOfTaskId?: string } = {},
 ): HarnessTaskSummary {
   const timestamp = clock.now().toISOString();
   return harnessTaskSummarySchema.parse({
@@ -33,6 +35,8 @@ export function createHarnessTask(
     updatedAt: timestamp,
     counters: { loopCount: 0, modelCallCount: 0, toolCallCount: 0 },
     events: [{ id: clock.id(), type: "state", state: "planning", timestamp, message: "Harness 开始规划任务。" }],
+    ...(options.executionTiming ? { executionTiming: options.executionTiming } : {}),
+    ...(options.retryOfTaskId ? { retryOfTaskId: options.retryOfTaskId } : {}),
   });
 }
 
@@ -56,6 +60,10 @@ export function appendHarnessTask(tasks: HarnessTaskSummary[], task: HarnessTask
   return [task, ...tasks.filter((candidate) => candidate.id !== task.id)].slice(0, MAX_HARNESS_TASKS);
 }
 
+function executionTimingWithPhase(task: HarnessTaskSummary, phase: HarnessExecutionTiming["phase"]) {
+  return task.executionTiming ? { ...task.executionTiming, phase } : undefined;
+}
+
 export function settleHarnessConfirmation(
   task: HarnessTaskSummary,
   accepted: boolean,
@@ -68,6 +76,7 @@ export function settleHarnessConfirmation(
     message: accepted ? "用户确认并应用了待确认 ChangeSet。" : "用户拒绝了待确认 ChangeSet，正式 AppSpec 未修改。",
   }, clock, {
     resultMessage: accepted ? "待确认变更已由用户正式应用。" : "用户已拒绝本次变更。",
+    ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, accepted ? "completed" : "cancelled") } : {}),
     ...(accepted ? {} : { pendingChangeSet: undefined }),
   });
 }
@@ -86,13 +95,17 @@ export function recoverHarnessTasksAfterRefresh(
       }, clock, {
         error: "历史任务缺少必要的数据工具执行记录。",
         resultMessage: "任务已阻塞，正式 AppSpec 未修改。",
+        ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, "blocked") } : {}),
       });
     }
     return interrupted.has(task.state) ? appendHarnessEvent(task, {
       type: "error",
       state: "cancelled",
       message: "页面刷新后已安全终止未完成任务，不会自动继续执行。",
-    }, clock, { error: "任务因页面刷新而终止。" })
+    }, clock, {
+      error: "任务因页面刷新而终止。",
+      ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, "cancelled") } : {}),
+    })
       : task;
   });
 }

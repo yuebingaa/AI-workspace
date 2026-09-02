@@ -4,8 +4,11 @@ import { DEEPSEEK_CHAT_COMPLETIONS_URL } from "@/core/ai/server/deepseek-planner
 import type { LocalDataRuntime } from "@/core/models";
 import { StudioValidationError } from "@/core/schemas";
 import {
+  DEFAULT_HARNESS_LIMITS,
   harnessRequestSchema,
   harnessToolNameSchema,
+  type HarnessExecutionPhase,
+  type HarnessExecutionTiming,
   type HarnessModel,
   type HarnessModelInput,
   type HarnessModelResult,
@@ -26,20 +29,15 @@ import {
 import { appendHarnessEvent, createHarnessTask, taskWithPendingChangeSet, type HarnessTaskClock } from "./task-state";
 import { executeHarnessTool, harnessToolCatalog } from "./tool-registry";
 
-export const DEFAULT_HARNESS_BOUNDS = {
-  maxLoops: 8,
-  maxModelCalls: 5,
-  maxToolCalls: 6,
-  totalTimeoutMs: 25_000,
-  toolTimeoutMs: 4_000,
-} as const;
+export const DEFAULT_HARNESS_BOUNDS = DEFAULT_HARNESS_LIMITS;
 
 export interface HarnessBounds {
   maxLoops: number;
   maxModelCalls: number;
   maxToolCalls: number;
-  totalTimeoutMs: number;
-  toolTimeoutMs: number;
+  modelRequestTimeoutMs: number;
+  toolCallTimeoutMs: number;
+  totalExecutionTimeoutMs: number;
 }
 
 export interface DeepSeekHarnessOptions {
@@ -50,7 +48,8 @@ export interface DeepSeekHarnessOptions {
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   bounds?: Partial<HarnessBounds>;
-  clock?: HarnessTaskClock & { elapsed(): number };
+  clock?: HarnessTaskClock;
+  monotonicNow?: () => number;
   toolExecutor?: typeof executeHarnessTool;
   contextBudget?: Partial<HarnessContextBudget>;
 }
@@ -137,13 +136,11 @@ export class DeepSeekHarnessModel implements HarnessModel {
   }
 }
 
-function defaultClock(): HarnessTaskClock & { elapsed(): number } {
-  const started = performance.now();
+function defaultClock(): HarnessTaskClock {
   let sequence = 0;
   return {
     now: () => new Date(),
     id: () => `harness_event_${Date.now()}_${++sequence}`,
-    elapsed: () => performance.now() - started,
   };
 }
 
@@ -155,8 +152,8 @@ function resolvedBounds(input?: Partial<HarnessBounds>): HarnessBounds {
   return bounds;
 }
 
-function abortError(signal: AbortSignal, timedOut: boolean): Error {
-  return new Error(timedOut ? "Harness 总执行时间已超出限制。" : signal.reason instanceof Error ? signal.reason.message : "Harness 任务已取消。");
+function abortError(signal: AbortSignal): Error {
+  return new Error(signal.reason instanceof Error ? signal.reason.message : "Harness 任务已取消。");
 }
 
 function addUsage(
@@ -190,7 +187,13 @@ function requiredDataFieldsBlockingReason(request: HarnessRequest): string | und
     : undefined;
 }
 
-async function withToolTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, timeoutMs: number, outerSignal: AbortSignal): Promise<T> {
+async function withPhaseTimeout<T>(
+  factory: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  outerSignal: AbortSignal,
+  timeoutMessage: string,
+  outerAbortError: () => Error,
+): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
   const abortOuter = () => controller.abort(outerSignal.reason);
@@ -199,27 +202,13 @@ async function withToolTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, 
   try {
     return await Promise.race([
       factory(controller.signal),
-      new Promise<T>((_, reject) => controller.signal.addEventListener("abort", () => reject(abortError(controller.signal, timedOut)), { once: true })),
+      new Promise<T>((_, reject) => controller.signal.addEventListener("abort", () => reject(
+        timedOut ? new Error(timeoutMessage) : outerAbortError(),
+      ), { once: true })),
     ]);
   } finally {
     clearTimeout(timer);
     outerSignal.removeEventListener("abort", abortOuter);
-  }
-}
-
-async function withAbort<T>(promise: Promise<T>, signal: AbortSignal, timedOut: () => boolean): Promise<T> {
-  if (signal.aborted) throw abortError(signal, timedOut());
-  let abortListener: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        abortListener = () => reject(abortError(signal, timedOut()));
-        signal.addEventListener("abort", abortListener, { once: true });
-      }),
-    ]);
-  } finally {
-    if (abortListener) signal.removeEventListener("abort", abortListener);
   }
 }
 
@@ -232,22 +221,54 @@ export class DeepSeekHarness {
     const bounds = resolvedBounds(options.bounds);
     const contextBudget = resolveHarnessContextBudget(options.contextBudget);
     const clock = options.clock ?? defaultClock();
+    const monotonicNow = options.monotonicNow ?? (() => performance.now());
+    let modelDurationMs = 0;
+    let toolDurationMs = 0;
+    const observations: HarnessObservation[] = [];
+    const elapsedMs = () => Math.max(0, Math.round(modelDurationMs + toolDurationMs));
+    const remainingMs = () => Math.max(0, bounds.totalExecutionTimeoutMs - elapsedMs());
+    const executionTiming = (phase: HarnessExecutionPhase): HarnessExecutionTiming => {
+      const activeElapsedMs = elapsedMs();
+      return {
+        phase,
+        activeElapsedMs,
+        remainingMs: Math.max(0, bounds.totalExecutionTimeoutMs - activeElapsedMs),
+        totalBudgetMs: bounds.totalExecutionTimeoutMs,
+        modelRequestTimeoutMs: bounds.modelRequestTimeoutMs,
+        toolCallTimeoutMs: bounds.toolCallTimeoutMs,
+        modelDurationMs: Math.max(0, Math.round(modelDurationMs)),
+        toolDurationMs: Math.max(0, Math.round(toolDurationMs)),
+        otherDurationMs: 0,
+        retainedObservationCount: observations.length,
+      };
+    };
+    const eventTiming = (phase: HarnessExecutionPhase, durationMs = 0) => ({
+      phase,
+      durationMs: Math.max(0, Math.round(durationMs)),
+      elapsedMs: elapsedMs(),
+      remainingMs: remainingMs(),
+    });
+    const phaseBudget = (phaseLabel: string, phaseLimitMs: number) => {
+      const remaining = remainingMs();
+      if (remaining <= 0) throw new Error(`Harness 总执行时间预算已用尽，未启动下一次${phaseLabel}。`);
+      return Math.min(phaseLimitMs, remaining);
+    };
     const apiKey = options.apiKey?.trim();
     const modelClient = options.modelClient ?? (apiKey
       ? new DeepSeekHarnessModel({ apiKey, model: options.model?.trim() || DEFAULT_DEEPSEEK_MODEL, fetchImpl: options.fetchImpl })
       : null);
-    let task = createHarnessTask(request.idempotencyKey, request.instruction, request.pageId, request.role, clock);
+    let task = createHarnessTask(request.idempotencyKey, request.instruction, request.pageId, request.role, clock, {
+      executionTiming: executionTiming("planning"),
+      ...(request.retryOfTaskId ? { retryOfTaskId: request.retryOfTaskId } : {}),
+    });
     const controller = new AbortController();
-    let totalTimedOut = false;
     const abortOuter = () => controller.abort(options.signal?.reason);
     options.signal?.addEventListener("abort", abortOuter, { once: true });
-    const totalTimer = setTimeout(() => { totalTimedOut = true; controller.abort(); }, bounds.totalTimeoutMs);
-    const observations: HarnessObservation[] = [];
 
     try {
       if (!modelClient) throw new Error("AI 服务尚未配置。");
       while (task.counters.loopCount < bounds.maxLoops) {
-        if (controller.signal.aborted) throw abortError(controller.signal, totalTimedOut);
+        if (controller.signal.aborted) throw abortError(controller.signal);
         if (task.counters.modelCallCount >= bounds.maxModelCalls) throw new Error("Harness 已达到最大模型调用次数。");
         const iteration = task.counters.loopCount + 1;
         let selection = buildHarnessContextSelection(request, observations, iteration);
@@ -259,7 +280,8 @@ export class DeepSeekHarness {
           }, clock, {
             error: selection.blockingReason,
             resultMessage: selection.blockingReason,
-            totalDurationMs: Math.round(clock.elapsed()),
+            totalDurationMs: elapsedMs(),
+            executionTiming: executionTiming("blocked"),
           });
           return task;
         }
@@ -282,22 +304,52 @@ export class DeepSeekHarness {
         if (previousInputChars + inputChars > contextBudget.maxTotalInputChars) {
           throw new Error("Harness 任务累计模型上下文超过预算，未继续调用模型。");
         }
-        task = {
-          ...task,
+        const modelBudgetMs = phaseBudget("模型请求", bounds.modelRequestTimeoutMs);
+        task = appendHarnessEvent(task, {
+          type: "state",
+          state: "planning",
+          message: `开始第 ${iteration} 次模型请求，剩余执行预算 ${remainingMs()} ms。`,
+          timing: eventTiming("modelRequest"),
+        }, clock, {
           counters: { ...task.counters, loopCount: iteration, modelCallCount: task.counters.modelCallCount + 1 },
           contextUsage: {
             totalInputChars: previousInputChars + inputChars,
             requests: [...(task.contextUsage?.requests ?? []), { iteration, inputChars, compacted: selection.compacted }],
           },
-        };
-        const modelResult = await withAbort(modelClient.next({
-          tools,
-          context: selection.context,
-          estimatedInputChars: inputChars,
-          iteration,
-          signal: controller.signal,
-        }), controller.signal, () => totalTimedOut);
-        task = { ...task, model: modelResult.model, usage: addUsage(task.usage, modelResult.usage) };
+          executionTiming: executionTiming("modelRequest"),
+        });
+        const modelStarted = monotonicNow();
+        let modelResult: HarnessModelResult;
+        try {
+          modelResult = await withPhaseTimeout(
+            (signal) => modelClient.next({
+              tools,
+              context: selection.context,
+              estimatedInputChars: inputChars,
+              iteration,
+              signal,
+            }),
+            modelBudgetMs,
+            controller.signal,
+            modelBudgetMs < bounds.modelRequestTimeoutMs
+              ? "Harness 总执行时间预算已在模型请求期间用尽。"
+              : `Harness 单次模型请求已超过 ${bounds.modelRequestTimeoutMs} ms 限制。`,
+            () => abortError(controller.signal),
+          );
+        } finally {
+          modelDurationMs += Math.max(0, monotonicNow() - modelStarted);
+        }
+        const modelCallDurationMs = Math.max(0, Math.round(monotonicNow() - modelStarted));
+        task = appendHarnessEvent(task, {
+          type: "state",
+          state: "planning",
+          message: `第 ${iteration} 次模型请求完成，耗时 ${modelCallDurationMs} ms。`,
+          timing: eventTiming("planning", modelCallDurationMs),
+        }, clock, {
+          model: modelResult.model,
+          usage: addUsage(task.usage, modelResult.usage),
+          executionTiming: executionTiming("planning"),
+        });
         const { turn } = modelResult;
         if (turn.type === "complete") {
           if (selection.toolNames.length > 0) {
@@ -307,7 +359,11 @@ export class DeepSeekHarness {
             type: "state",
             state: "completed",
             message: sanitizeHarnessText(turn.message),
-          }, clock, { resultMessage: sanitizeHarnessText(turn.message), totalDurationMs: Math.round(clock.elapsed()) });
+          }, clock, {
+            resultMessage: sanitizeHarnessText(turn.message),
+            totalDurationMs: elapsedMs(),
+            executionTiming: executionTiming("completed"),
+          });
           return task;
         }
         if (turn.type === "blocked") {
@@ -323,7 +379,8 @@ export class DeepSeekHarness {
           }, clock, {
             error: blockedMessage,
             resultMessage: blockedMessage,
-            totalDurationMs: Math.round(clock.elapsed()),
+            totalDurationMs: elapsedMs(),
+            executionTiming: executionTiming("blocked"),
           });
           return task;
         }
@@ -335,16 +392,21 @@ export class DeepSeekHarness {
         if (!selection.toolNames.includes(toolName)) {
           throw new StudioValidationError("Harness 工具状态校验失败", [`当前规划状态不允许调用工具：${toolName}`]);
         }
+        const toolBudgetMs = phaseBudget("工具调用", bounds.toolCallTimeoutMs);
         task = appendHarnessEvent(task, {
           type: "toolCall",
           state: "executingTool",
           message: `${sanitizeHarnessText(turn.message)}（执行工具：${toolName}）`,
           toolCall: { id: toolAction.toolCallId, name: toolName, status: "running", durationMs: 0 },
-        }, clock, { counters: { ...task.counters, toolCallCount: task.counters.toolCallCount + 1 } });
-        const toolStarted = clock.elapsed();
+          timing: eventTiming("toolExecution"),
+        }, clock, {
+          counters: { ...task.counters, toolCallCount: task.counters.toolCallCount + 1 },
+          executionTiming: executionTiming("toolExecution"),
+        });
+        const toolStarted = monotonicNow();
         let result: Awaited<ReturnType<typeof executeHarnessTool>>;
         try {
-          result = await withToolTimeout(
+          result = await withPhaseTimeout(
             () => (options.toolExecutor ?? executeHarnessTool)(toolAction.name, toolAction.arguments, {
               request,
               dataRuntime: options.dataRuntime,
@@ -353,31 +415,40 @@ export class DeepSeekHarness {
               resultBudgetChars: contextBudget.maxToolResultChars,
               resultBudgetEntries: contextBudget.maxToolResultEntries,
             }),
-            bounds.toolTimeoutMs,
+            toolBudgetMs,
             controller.signal,
+            toolBudgetMs < bounds.toolCallTimeoutMs
+              ? "Harness 总执行时间预算已在工具调用期间用尽。"
+              : `Harness 单次工具调用已超过 ${bounds.toolCallTimeoutMs} ms 限制。`,
+            () => abortError(controller.signal),
           );
         } catch (toolError) {
+          const failedDurationMs = Math.max(0, Math.round(monotonicNow() - toolStarted));
+          toolDurationMs += failedDurationMs;
           task = appendHarnessEvent(task, {
             type: "toolCall",
-            state: controller.signal.aborted && !totalTimedOut ? "cancelled" : "failed",
+            state: controller.signal.aborted ? "cancelled" : "failed",
             message: sanitizeHarnessText(toolError),
             toolCall: {
               id: toolAction.toolCallId,
               name: toolName,
               status: "failure",
-              durationMs: Math.max(0, Math.round(clock.elapsed() - toolStarted)),
+              durationMs: failedDurationMs,
             },
-          }, clock);
+            timing: eventTiming("failed", failedDurationMs),
+          }, clock, { executionTiming: executionTiming("failed") });
           throw toolError;
         }
-        const durationMs = Math.max(0, Math.round(clock.elapsed() - toolStarted));
+        const durationMs = Math.max(0, Math.round(monotonicNow() - toolStarted));
+        toolDurationMs += durationMs;
         observations.push({ toolCallId: toolAction.toolCallId, toolName, summary: result.summary, data: result.data });
         task = appendHarnessEvent(task, {
           type: "observation",
           state: "observing",
           message: result.summary,
           toolCall: { id: toolAction.toolCallId, name: toolName, status: "success", durationMs },
-        }, clock);
+          timing: eventTiming("planning", durationMs),
+        }, clock, { executionTiming: executionTiming("planning") });
         if (toolName === "inspectFields") {
           const blockingReason = requiredDataFieldsBlockingReason(request);
           if (blockingReason) {
@@ -388,7 +459,8 @@ export class DeepSeekHarness {
             }, clock, {
               error: blockingReason,
               resultMessage: blockingReason,
-              totalDurationMs: Math.round(clock.elapsed()),
+              totalDurationMs: elapsedMs(),
+              executionTiming: executionTiming("blocked"),
             });
             return task;
           }
@@ -399,18 +471,23 @@ export class DeepSeekHarness {
             type: "confirmation",
             state: "awaitingConfirmation",
             message: "已生成待确认 ChangeSet，Harness 已暂停，等待用户预览和确认。",
-          }, clock, { resultMessage: sanitizeHarnessText(turn.message), totalDurationMs: Math.round(clock.elapsed()) });
+          }, clock, {
+            resultMessage: sanitizeHarnessText(turn.message),
+            totalDurationMs: elapsedMs(),
+            executionTiming: executionTiming("awaitingConfirmation"),
+          });
           return task;
         }
         task = appendHarnessEvent(task, {
           type: "state",
           state: "planning",
           message: "已接收工具观察结果，继续规划下一步。",
-        }, clock);
+          timing: eventTiming("planning"),
+        }, clock, { executionTiming: executionTiming("planning") });
       }
       throw new Error("Harness 已达到最大循环次数。");
     } catch (error) {
-      const cancelled = controller.signal.aborted && !totalTimedOut;
+      const cancelled = controller.signal.aborted;
       const message = sanitizeHarnessText(error, cancelled ? "Harness 任务已取消。" : "Harness 执行失败。");
       task = appendHarnessEvent(task, {
         type: cancelled ? "state" : "error",
@@ -419,11 +496,11 @@ export class DeepSeekHarness {
       }, clock, {
         error: message,
         resultMessage: cancelled ? "任务已取消，正式 AppSpec 未修改。" : "任务失败，正式 AppSpec 未修改。",
-        totalDurationMs: Math.round(clock.elapsed()),
+        totalDurationMs: elapsedMs(),
+        executionTiming: executionTiming(cancelled ? "cancelled" : "failed"),
       });
       return task;
     } finally {
-      clearTimeout(totalTimer);
       options.signal?.removeEventListener("abort", abortOuter);
     }
   }

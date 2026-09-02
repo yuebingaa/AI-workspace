@@ -57,6 +57,9 @@ export async function POST(request: Request) {
       bounds: {
         maxModelCalls: positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 5),
         maxToolCalls: positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
+        modelRequestTimeoutMs: positiveInteger(process.env.HARNESS_MODEL_REQUEST_TIMEOUT_MS, 25_000),
+        toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 10_000),
+        totalExecutionTimeoutMs: positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
       },
     }));
     return NextResponse.json({ task }, { status: 200, headers: noStoreHeaders });

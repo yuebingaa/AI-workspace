@@ -27,6 +27,25 @@ class ScriptedModel implements HarnessModel {
   }
 }
 
+class DelayedScriptedModel implements HarnessModel {
+  calls = 0;
+  constructor(private readonly turns: HarnessModelTurn[], private readonly delaysMs: number[]) {}
+  async next(input: HarnessModelInput): Promise<HarnessModelResult> {
+    const turn = this.turns[this.calls];
+    const delayMs = this.delaysMs[this.calls] ?? 0;
+    this.calls += 1;
+    if (!turn) throw new Error("延迟 mock 没有更多动作");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, delayMs);
+      input.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new Error("延迟 mock 已取消"));
+      }, { once: true });
+    });
+    return { turn, model: "delayed-mock", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+  }
+}
+
 function fixtures() {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
   return structuredClone(demoFixtureResult.data);
@@ -449,7 +468,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const timedOut = await new DeepSeekHarness().run(request("request_total_timeout"), {
       dataRuntime: data.dataRuntime,
       modelClient: neverModel,
-      bounds: { totalTimeoutMs: 10 },
+      bounds: { modelRequestTimeoutMs: 100, totalExecutionTimeoutMs: 20 },
     });
     expect(timedOut.state).toBe("failed");
     expect(timedOut.error).toContain("总执行时间");
@@ -457,11 +476,11 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const toolTimedOut = await new DeepSeekHarness().run(request("request_tool_timeout"), {
       dataRuntime: data.dataRuntime,
       modelClient: new ScriptedModel([tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_slow")]),
-      bounds: { toolTimeoutMs: 5 },
+      bounds: { toolCallTimeoutMs: 5 },
       toolExecutor: () => new Promise((resolve) => setTimeout(() => resolve({ summary: "迟到结果", data: {} }), 30)),
     });
     expect(toolTimedOut.state).toBe("failed");
-    expect(toolTimedOut.error).toContain("超出限制");
+    expect(toolTimedOut.error).toContain("单次工具调用");
 
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 5);
@@ -471,6 +490,134 @@ describe("DeepSeekHarness 服务端状态机", () => {
       signal: controller.signal,
     });
     expect(cancelled.state).toBe("cancelled");
+  });
+
+  it("两次正常延迟模型调用不会误触发总超时，并记录分阶段耗时", async () => {
+    const data = fixtures();
+    const formal = structuredClone(data.dataProduct.appSpec);
+    const model = new DelayedScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_delayed_dataset"),
+      complete("两次模型调用均正常完成。"),
+    ], [12, 12]);
+
+    const task = await new DeepSeekHarness().run(request("request_two_delayed_calls"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      bounds: { modelRequestTimeoutMs: 50, toolCallTimeoutMs: 30, totalExecutionTimeoutMs: 120 },
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.executionTiming?.phase).toBe("completed");
+    expect(task.executionTiming?.modelDurationMs).toBeGreaterThanOrEqual(20);
+    expect(task.executionTiming?.activeElapsedMs).toBe(
+      (task.executionTiming?.modelDurationMs ?? 0) + (task.executionTiming?.toolDurationMs ?? 0),
+    );
+    expect(task.executionTiming?.otherDurationMs).toBe(0);
+    expect(task.executionTiming?.remainingMs).toBeGreaterThan(0);
+    expect(task.events.filter((event) => event.timing?.phase === "modelRequest")).toHaveLength(2);
+    expect(data.dataProduct.appSpec).toEqual(formal);
+  });
+
+  it("单次模型请求超时会独立终止，不误报为任务总超时", async () => {
+    const data = fixtures();
+    const formal = structuredClone(data.dataProduct.appSpec);
+    const task = await new DeepSeekHarness().run(request("request_model_timeout"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: new DelayedScriptedModel([complete("迟到结果")], [30]),
+      bounds: { modelRequestTimeoutMs: 5, totalExecutionTimeoutMs: 80 },
+    });
+
+    expect(task.state).toBe("failed");
+    expect(task.error).toContain("单次模型请求");
+    expect(task.error).not.toContain("总时间");
+    expect(task.executionTiming?.phase).toBe("failed");
+    expect(data.dataProduct.appSpec).toEqual(formal);
+  });
+
+  it("超时后保留已完成只读观察，但不生成或应用写操作", async () => {
+    const data = fixtures();
+    const input = request("request_observation_then_timeout");
+    const formal = structuredClone(input.appSpec);
+    const task = await new DeepSeekHarness().run(input, {
+      dataRuntime: data.dataRuntime,
+      modelClient: new DelayedScriptedModel([
+        tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_before_timeout"),
+        complete("迟到总结"),
+      ], [1, 30]),
+      bounds: { modelRequestTimeoutMs: 8, totalExecutionTimeoutMs: 80 },
+    });
+
+    expect(task.state).toBe("failed");
+    expect(task.executionTiming?.retainedObservationCount).toBe(1);
+    expect(task.events.some((event) => event.type === "observation" && event.toolCall?.status === "success")).toBe(true);
+    expect(task.pendingChangeSet).toBeUndefined();
+    expect(input.appSpec).toEqual(formal);
+  });
+
+  it("等待人工确认和历史墙钟时间不计入执行预算", async () => {
+    const data = fixtures();
+    const formal = structuredClone(data.dataProduct.appSpec);
+    const model = new DelayedScriptedModel([tool("createChangeSetPreview", {
+      message: "建议修改收入指标标题。",
+      operations: [{ type: "updateNodeProps", pageId: "page_home", nodeId: "page_home_revenue", props: { label: "月度总收入" } }],
+    }, "call_waiting_confirmation")], [5]);
+    const task = await new DeepSeekHarness().run(request("request_waiting_budget", "将本月收入标题改为月度总收入"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      bounds: { modelRequestTimeoutMs: 30, totalExecutionTimeoutMs: 80 },
+    });
+    expect(task.state).toBe("awaitingConfirmation");
+    const activeElapsedMs = task.executionTiming?.activeElapsedMs;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const settled = settleHarnessConfirmation(task, false, {
+      now: () => new Date("2035-01-01T00:00:00.000Z"),
+      id: () => "settled_after_idle",
+    });
+
+    expect(settled.executionTiming?.activeElapsedMs).toBe(activeElapsedMs);
+    expect(settled.totalDurationMs).toBe(task.totalDurationMs);
+    expect(data.dataProduct.appSpec).toEqual(formal);
+  });
+
+  it("刷新后的重试使用新单调预算并关联原任务", async () => {
+    const data = fixtures();
+    const oldClock = { now: () => new Date("2020-01-01T00:00:00.000Z"), id: () => "old_event" };
+    const oldTask = createHarnessTask("request_old_wall_clock", "检查零售数据", "page_home", "editor", oldClock, {
+      executionTiming: {
+        phase: "planning",
+        activeElapsedMs: 59,
+        remainingMs: 1,
+        totalBudgetMs: 60,
+        modelRequestTimeoutMs: 30,
+        toolCallTimeoutMs: 10,
+        modelDurationMs: 49,
+        toolDurationMs: 10,
+        otherDurationMs: 0,
+        retainedObservationCount: 1,
+      },
+    });
+    const [recovered] = recoverHarnessTasksAfterRefresh([oldTask], {
+      now: () => new Date("2035-01-01T00:00:00.000Z"),
+      id: () => "recovery_event",
+    });
+    expect(recovered.state).toBe("cancelled");
+
+    const retryRequest = request("request_retry_new_budget");
+    retryRequest.retryOfTaskId = recovered.id;
+    const retry = await new DeepSeekHarness().run(retryRequest, {
+      dataRuntime: data.dataRuntime,
+      modelClient: new DelayedScriptedModel([
+        tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_retry_dataset"),
+        complete("重试完成"),
+      ], [4, 4]),
+      bounds: { modelRequestTimeoutMs: 30, totalExecutionTimeoutMs: 60 },
+    });
+
+    expect(retry.state).toBe("completed");
+    expect(retry.retryOfTaskId).toBe(recovered.id);
+    expect(retry.executionTiming?.totalBudgetMs).toBe(60);
+    expect(retry.executionTiming?.remainingMs).toBeGreaterThan(40);
+    expect(retry.executionTiming?.activeElapsedMs).toBeLessThan(60);
   });
 
   it("幂等请求只执行一次，冲突请求被拒绝", async () => {

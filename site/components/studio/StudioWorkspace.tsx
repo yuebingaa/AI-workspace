@@ -24,7 +24,11 @@ import {
   HarnessClientError,
   requestHarnessTask,
 } from "@/core/harness/client";
-import type { HarnessTaskSummary } from "@/core/harness/contracts";
+import {
+  DEFAULT_HARNESS_LIMITS,
+  type HarnessExecutionTiming,
+  type HarnessTaskSummary,
+} from "@/core/harness/contracts";
 import {
   appendHarnessEvent,
   appendHarnessTask,
@@ -53,6 +57,21 @@ const harnessUiClock: HarnessTaskClock = {
   now: () => new Date(),
   id: () => `harness_ui_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`,
 };
+
+function initialHarnessTiming(): HarnessExecutionTiming {
+  return {
+    phase: "planning",
+    activeElapsedMs: 0,
+    remainingMs: DEFAULT_HARNESS_LIMITS.totalExecutionTimeoutMs,
+    totalBudgetMs: DEFAULT_HARNESS_LIMITS.totalExecutionTimeoutMs,
+    modelRequestTimeoutMs: DEFAULT_HARNESS_LIMITS.modelRequestTimeoutMs,
+    toolCallTimeoutMs: DEFAULT_HARNESS_LIMITS.toolCallTimeoutMs,
+    modelDurationMs: 0,
+    toolDurationMs: 0,
+    otherDurationMs: 0,
+    retainedObservationCount: 0,
+  };
+}
 
 export function StudioWorkspace() {
   if (!demoFixtureResult.success) {
@@ -97,7 +116,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [aiRequestError, setAiRequestError] = useState<string | null>(null);
   const [hasValidAiPlan, setHasValidAiPlan] = useState(true);
   const [harnessTasks, setHarnessTasks] = useState<HarnessTaskSummary[]>([]);
-  const [lastHarnessIdempotencyKey, setLastHarnessIdempotencyKey] = useState("");
+  const [lastHarnessTaskId, setLastHarnessTaskId] = useState("");
   const repositoryRef = useRef<StudioRepository | null>(null);
   const puckDraftOriginRef = useRef<PuckDraftOrigin | null>(null);
   const aiRequestAbortRef = useRef<AbortController | null>(null);
@@ -300,7 +319,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     persistExplicitly(nextExecution, appendChangeSetAuditRecord(auditRecords, audit), queryRecords, dataProduct, nextHarnessTasks);
   }
 
-  async function handleGenerateAiPlan(instructionOverride?: string, idempotencyOverride?: string) {
+  async function handleGenerateAiPlan(instructionOverride?: string, retryOfTaskId?: string) {
     const submittedInstruction = (instructionOverride ?? aiInstruction).trim();
     if (!submittedInstruction || harnessRequestActiveRef.current) return;
 
@@ -310,8 +329,11 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     harnessRequestActiveRef.current = true;
     const baseExecution = cancelPreview(execution);
     if (execution.preview) auditCurrentPreviewCancellation();
-    const idempotencyKey = idempotencyOverride || `request_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`;
-    const initialTask = createHarnessTask(idempotencyKey, submittedInstruction, activePageId, role, harnessUiClock);
+    const idempotencyKey = `request_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`;
+    const initialTask = createHarnessTask(idempotencyKey, submittedInstruction, activePageId, role, harnessUiClock, {
+      executionTiming: initialHarnessTiming(),
+      ...(retryOfTaskId ? { retryOfTaskId } : {}),
+    });
     const initialTasks = appendHarnessTask(harnessTasks, initialTask);
     setExecution(baseExecution);
     setHarnessTasks(initialTasks);
@@ -319,7 +341,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setPendingChangeSource(null);
     setCanvasMode("preview");
     setLastSubmittedInstruction(submittedInstruction);
-    setLastHarnessIdempotencyKey(idempotencyKey);
+    setLastHarnessTaskId(initialTask.id);
     setAiRequestStatus("loading");
     setAiRequestError(null);
     setHasValidAiPlan(false);
@@ -335,7 +357,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         appSpec: baseExecution.present,
         recipes: dataProduct.recipes,
         role,
-      }, { signal: controller.signal, timeoutMs: 30_000 });
+        ...(retryOfTaskId ? { retryOfTaskId } : {}),
+      }, { signal: controller.signal });
       const nextTasks = appendHarnessTask(initialTasks, task);
       setHarnessTasks(nextTasks);
       setAiMetadata(null);
@@ -393,7 +416,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   }
 
   function handleRetryAiRequest() {
-    if (lastSubmittedInstruction) void handleGenerateAiPlan(lastSubmittedInstruction, lastHarnessIdempotencyKey || undefined);
+    if (lastSubmittedInstruction) void handleGenerateAiPlan(lastSubmittedInstruction, lastHarnessTaskId || undefined);
   }
 
   function handleUndo() {
@@ -602,7 +625,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setLastSubmittedInstruction("");
     setHasValidAiPlan(true);
     setHarnessTasks([]);
-    setLastHarnessIdempotencyKey("");
+    setLastHarnessTaskId("");
   }
 
   return (

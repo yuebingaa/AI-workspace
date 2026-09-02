@@ -7,6 +7,17 @@ export const MAX_HARNESS_REQUEST_BYTES = 180_000;
 export const MAX_HARNESS_EVENTS = 80;
 export const MAX_HARNESS_TASKS = 20;
 
+export const DEFAULT_HARNESS_LIMITS = {
+  maxLoops: 8,
+  maxModelCalls: 5,
+  maxToolCalls: 6,
+  modelRequestTimeoutMs: 25_000,
+  toolCallTimeoutMs: 10_000,
+  totalExecutionTimeoutMs: 90_000,
+} as const;
+
+export const HARNESS_CLIENT_TIMEOUT_MS = 95_000;
+
 export const harnessStateSchema = z.enum([
   "planning",
   "executingTool",
@@ -29,6 +40,32 @@ export const harnessToolNameSchema = z.enum([
 ]);
 export type HarnessToolName = z.infer<typeof harnessToolNameSchema>;
 
+export const harnessExecutionPhaseSchema = z.enum([
+  "planning",
+  "modelRequest",
+  "toolExecution",
+  "awaitingConfirmation",
+  "completed",
+  "blocked",
+  "failed",
+  "cancelled",
+]);
+export type HarnessExecutionPhase = z.infer<typeof harnessExecutionPhaseSchema>;
+
+export const harnessExecutionTimingSchema = z.object({
+  phase: harnessExecutionPhaseSchema,
+  activeElapsedMs: z.number().int().nonnegative(),
+  remainingMs: z.number().int().nonnegative(),
+  totalBudgetMs: z.number().int().positive(),
+  modelRequestTimeoutMs: z.number().int().positive(),
+  toolCallTimeoutMs: z.number().int().positive(),
+  modelDurationMs: z.number().int().nonnegative(),
+  toolDurationMs: z.number().int().nonnegative(),
+  otherDurationMs: z.number().int().nonnegative(),
+  retainedObservationCount: z.number().int().nonnegative(),
+}).strict();
+export type HarnessExecutionTiming = z.infer<typeof harnessExecutionTimingSchema>;
+
 export const harnessEventSchema = z.object({
   id: z.string().min(1).max(160),
   type: z.enum(["state", "toolCall", "observation", "confirmation", "error"]),
@@ -40,6 +77,12 @@ export const harnessEventSchema = z.object({
     name: harnessToolNameSchema,
     status: z.enum(["running", "success", "failure"]),
     durationMs: z.number().int().nonnegative(),
+  }).strict().optional(),
+  timing: z.object({
+    phase: harnessExecutionPhaseSchema,
+    durationMs: z.number().int().nonnegative(),
+    elapsedMs: z.number().int().nonnegative(),
+    remainingMs: z.number().int().nonnegative(),
   }).strict().optional(),
 }).strict();
 export type HarnessEvent = z.infer<typeof harnessEventSchema>;
@@ -83,6 +126,8 @@ export const harnessTaskSummarySchema = z.object({
   usage: harnessModelUsageSchema.optional(),
   contextUsage: harnessContextUsageSchema.optional(),
   totalDurationMs: z.number().int().nonnegative().optional(),
+  executionTiming: harnessExecutionTimingSchema.optional(),
+  retryOfTaskId: z.string().min(1).max(160).optional(),
 }).strict();
 export type HarnessTaskSummary = z.infer<typeof harnessTaskSummarySchema>;
 
@@ -93,6 +138,7 @@ export const harnessRequestSchema = z.object({
   appSpec: appSpecSchema,
   recipes: z.array(dataRecipeSchema).max(10),
   role: z.enum(["viewer", "editor", "admin"]),
+  retryOfTaskId: z.string().min(1).max(160).optional(),
 }).strict();
 export type HarnessRequest = z.infer<typeof harnessRequestSchema>;
 

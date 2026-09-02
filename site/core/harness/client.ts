@@ -1,4 +1,5 @@
 import {
+  HARNESS_CLIENT_TIMEOUT_MS,
   harnessResponseSchema,
   type HarnessRequest,
   type HarnessResponse,
@@ -29,7 +30,7 @@ export async function requestHarnessTask(
   let timedOut = false;
   const abortOuter = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", abortOuter, { once: true });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? 30_000);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? HARNESS_CLIENT_TIMEOUT_MS);
   try {
     const response = await (options.fetchImpl ?? fetch)("/api/ai/harness", {
       method: "POST",

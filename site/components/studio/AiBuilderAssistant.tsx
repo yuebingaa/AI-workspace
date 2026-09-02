@@ -1,5 +1,5 @@
 import type { AiPlanMetadata } from "@/core/ai/contracts";
-import type { HarnessTaskSummary } from "@/core/harness/contracts";
+import type { HarnessExecutionPhase, HarnessTaskSummary } from "@/core/harness/contracts";
 import type { ChangeOperation, ChangeSet, ChangeSetAuditRecord } from "@/core/models";
 import { studioRoleLabels } from "@/core/permissions";
 
@@ -48,6 +48,16 @@ const harnessStateLabels: Record<HarnessTaskSummary["state"], string> = {
   failed: "失败",
   cancelled: "已取消",
 };
+const harnessPhaseLabels: Record<HarnessExecutionPhase, string> = {
+  planning: "规划上下文",
+  modelRequest: "模型请求",
+  toolExecution: "工具执行",
+  awaitingConfirmation: "等待人工确认",
+  completed: "已完成",
+  blocked: "已阻塞",
+  failed: "执行失败",
+  cancelled: "已取消",
+};
 
 function operationTargets(operation: ChangeOperation): string[] {
   if (operation.type === "addNode") return [operation.parentId, operation.node.id];
@@ -86,6 +96,10 @@ export function AiBuilderAssistant({
   const needsAdmin = changeSet.operations.some((operation) => operation.type === "removeNode" || operation.type === "updatePage");
   const isLoading = requestStatus === "loading";
   const showChangePlan = !harnessTask || Boolean(harnessTask.pendingChangeSet);
+  const timing = harnessTask?.executionTiming;
+  const displayedElapsedMs = timing?.activeElapsedMs ?? 0;
+  const displayedRemainingMs = Math.max(0, (timing?.totalBudgetMs ?? 0) - displayedElapsedMs);
+  const displayedPhase = isLoading ? "等待服务端执行结果（客户端等待不计时）" : timing ? harnessPhaseLabels[timing.phase] : "未开始";
 
   return (
     <aside className="right-panel panel">
@@ -120,10 +134,18 @@ export function AiBuilderAssistant({
               <span>循环 {harnessTask.counters.loopCount}</span>
               <span>模型 {harnessTask.counters.modelCallCount}</span>
               <span>工具 {harnessTask.counters.toolCallCount}</span>
+              {timing && <span>阶段 {displayedPhase}</span>}
+              {timing && <span>已用 {(displayedElapsedMs / 1_000).toFixed(1)}s</span>}
+              {timing && <span>剩余 {(displayedRemainingMs / 1_000).toFixed(1)}s</span>}
               {harnessTask.usage && <span>Tokens {harnessTask.usage.totalTokens}</span>}
               {harnessTask.contextUsage && <span>输入估算 {harnessTask.contextUsage.totalInputChars} chars</span>}
               <span>历史任务 {harnessTaskCount}</span>
             </div>
+            {timing && (
+              <p className="harness-timing-detail">
+                模型 {(timing.modelDurationMs / 1_000).toFixed(2)}s · 工具 {(timing.toolDurationMs / 1_000).toFixed(2)}s · 其他 {(timing.otherDurationMs / 1_000).toFixed(2)}s · 已保留观察 {timing.retainedObservationCount}
+              </p>
+            )}
             <ol className="harness-events">
               {harnessTask.events.map((event) => (
                 <li key={event.id} className={event.state}>
