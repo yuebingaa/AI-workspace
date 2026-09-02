@@ -1,10 +1,15 @@
 import { datasetConsentRequestSchema } from "@/core/datasets";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
+import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { StudioValidationError } from "@/core/schemas";
 
 export const runtime = "nodejs";
 
-const noStoreHeaders = { "cache-control": "private, no-store, max-age=0", "x-content-type-options": "nosniff" };
+const noStoreHeaders = {
+  "cache-control": "private, no-store, max-age=0",
+  "x-content-type-options": "nosniff",
+  ...DEMO_IDENTITY_RESPONSE_HEADERS,
+};
 const datasetIdPattern = /^dataset_upload_[A-Za-z0-9_-]{16,160}$/u;
 
 export async function POST(request: Request) {
@@ -20,7 +25,7 @@ export async function POST(request: Request) {
   const parsed = datasetConsentRequestSchema.safeParse(raw);
   if (!parsed.success) return Response.json({ error: { message: "敏感字段处理方式无效。" } }, { status: 400, headers: noStoreHeaders });
   try {
-    const dataset = datasetRepository.setAiAccessPolicy(datasetId, parsed.data.policy);
+    const dataset = await datasetRepository.setAiAccessPolicy(resolveDemoRequestIdentity(), datasetId, parsed.data.policy);
     return Response.json({ dataset }, { headers: noStoreHeaders });
   } catch (error) {
     const message = error instanceof StudioValidationError ? error.message : "敏感字段处理方式保存失败。";

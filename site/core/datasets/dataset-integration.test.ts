@@ -11,6 +11,8 @@ import { demoFixtureResult } from "@/fixtures/demo-product";
 import { parseCsvUpload } from "./server/csv-dataset";
 import { MemoryDatasetRepository } from "./server/dataset-repository";
 
+const demoOwnership = { tenantId: "tenant_demo", ownerId: "owner_demo" };
+
 function stream(text: string) {
   return new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } });
 }
@@ -25,8 +27,8 @@ async function uploaded() {
     id: () => `a${String(++sequence).padStart(31, "0")}`,
   });
   const repository = new MemoryDatasetRepository({ now: () => new Date("2026-09-02T06:00:00.000Z") });
-  const stored = repository.put(parsed);
-  const descriptor = repository.setAiAccessPolicy(stored.descriptor.datasetId, "masked");
+  const stored = await repository.put(demoOwnership, parsed);
+  const descriptor = await repository.setAiAccessPolicy(demoOwnership, stored.descriptor.datasetId, "masked");
   return { descriptor, rows: stored.rows };
 }
 

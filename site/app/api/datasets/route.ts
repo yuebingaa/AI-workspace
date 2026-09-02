@@ -1,18 +1,24 @@
 import { CSV_UPLOAD_LIMITS } from "@/core/datasets";
 import { CsvDatasetError, parseCsvUpload } from "@/core/datasets/server/csv-dataset";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
+import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { StudioValidationError } from "@/core/schemas";
 
 export const runtime = "nodejs";
 
-const noStoreHeaders = { "cache-control": "private, no-store, max-age=0", "x-content-type-options": "nosniff" };
+const noStoreHeaders = {
+  "cache-control": "private, no-store, max-age=0",
+  "x-content-type-options": "nosniff",
+  ...DEMO_IDENTITY_RESPONSE_HEADERS,
+};
 
 function jsonError(message: string, status: number) {
   return Response.json({ error: { message } }, { status, headers: noStoreHeaders });
 }
 
 export async function GET() {
-  return Response.json({ datasets: datasetRepository.list() }, { headers: noStoreHeaders });
+  const identity = resolveDemoRequestIdentity();
+  return Response.json({ datasets: await datasetRepository.list(identity) }, { headers: noStoreHeaders });
 }
 
 export async function POST(request: Request) {
@@ -22,8 +28,9 @@ export async function POST(request: Request) {
   const originalFileName = request.headers.get("x-file-name") ?? "";
   const mimeType = request.headers.get("content-type") ?? "";
   try {
+    const identity = resolveDemoRequestIdentity();
     const parsed = await parseCsvUpload({ stream: request.body, originalFileName, mimeType });
-    const stored = datasetRepository.put(parsed);
+    const stored = await datasetRepository.put(identity, parsed);
     return Response.json({ dataset: stored.descriptor, rows: stored.rows }, { status: 201, headers: noStoreHeaders });
   } catch (error) {
     if (error instanceof CsvDatasetError) return jsonError(error.message, error.status);

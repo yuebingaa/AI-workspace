@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseCsvUpload } from "@/core/datasets/server/csv-dataset";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
+import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { POST } from "./route";
 
@@ -20,7 +21,7 @@ describe("Harness 上传数据隐私门", () => {
       mimeType: "text/csv",
       id: () => `a${String(++sequence).padStart(31, "0")}`,
     });
-    datasetRepository.put(uploaded);
+    await datasetRepository.put(resolveDemoRequestIdentity(), uploaded);
     const fixture = demoFixtureResult.data.dataProduct;
     const body = {
       idempotencyKey: "request_pending_sensitive_001",
@@ -38,5 +39,33 @@ describe("Harness 上传数据隐私门", () => {
     }));
     expect(response.status).toBe(403);
     expect(JSON.stringify(await response.json())).toContain("敏感字段");
+  });
+
+  it("拒绝读取其他所有者的数据集", async () => {
+    if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+    let sequence = 0;
+    const uploaded = await parseCsvUpload({
+      stream: stream("region,value\n区域甲,1"),
+      originalFileName: "other-owner.csv",
+      mimeType: "text/csv",
+      id: () => `b${String(++sequence).padStart(31, "0")}`,
+    });
+    await datasetRepository.put({ tenantId: "tenant_demo_local", ownerId: "owner_other" }, uploaded);
+    const fixture = demoFixtureResult.data.dataProduct;
+    const response = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        idempotencyKey: "request_other_owner_001",
+        instruction: "检查数据集。",
+        pageId: "page_home",
+        dataSourceId: uploaded.dataset.datasetId,
+        appSpec: { ...fixture.appSpec, dataSources: [...fixture.appSpec.dataSources, uploaded.dataset.source] },
+        recipes: [...fixture.recipes, uploaded.dataset.recipe],
+        role: "editor",
+      }),
+    }));
+
+    expect(response.status).toBe(410);
   });
 });

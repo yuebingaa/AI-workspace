@@ -607,17 +607,18 @@ export class HarnessIdempotencyStore {
 
   constructor(private readonly maxEntries = 100, private readonly ttlMs = 10 * 60_000) {}
 
-  execute(request: HarnessRequest, factory: () => Promise<HarnessTaskSummary>): Promise<HarnessTaskSummary> {
+  execute(request: HarnessRequest, factory: () => Promise<HarnessTaskSummary>, namespace = "default"): Promise<HarnessTaskSummary> {
     const fingerprint = JSON.stringify({ ...request, idempotencyKey: undefined });
     const now = Date.now();
     for (const [key, entry] of this.entries) if (now - entry.createdAt > this.ttlMs) this.entries.delete(key);
-    const existing = this.entries.get(request.idempotencyKey);
+    const storageKey = `${namespace}:${request.idempotencyKey}`;
+    const existing = this.entries.get(storageKey);
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new HarnessIdempotencyConflictError();
       return existing.task;
     }
     const task = factory();
-    this.entries.set(request.idempotencyKey, { fingerprint, task, createdAt: now });
+    this.entries.set(storageKey, { fingerprint, task, createdAt: now });
     while (this.entries.size > this.maxEntries) this.entries.delete(this.entries.keys().next().value!);
     return task;
   }

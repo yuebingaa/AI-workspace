@@ -1,4 +1,5 @@
 import type { DataRow, DatasetAiAccessPolicy } from "@/core/models";
+import { ownershipNamespace, type OwnershipScope } from "@/core/identity/ownership";
 import { StudioValidationError } from "@/core/schemas";
 import {
   CSV_UPLOAD_LIMITS,
@@ -9,17 +10,21 @@ import {
 } from "../contracts";
 
 export interface StoredDataset {
+  ownership: OwnershipScope;
   descriptor: UploadedDatasetDescriptor;
   rows: DataRow[];
 }
 
 export interface DatasetRepository {
-  put(dataset: DatasetUploadResponse): StoredDataset;
-  get(datasetId: string): StoredDataset | null;
-  list(): UploadedDatasetDescriptor[];
-  setAiAccessPolicy(datasetId: string, policy: Extract<DatasetAiAccessPolicy, "masked" | "exclude-sensitive-samples">): UploadedDatasetDescriptor;
-  delete(datasetId: string): boolean;
-  clear(): void;
+  put(ownership: OwnershipScope, dataset: DatasetUploadResponse): Promise<StoredDataset>;
+  get(ownership: OwnershipScope, datasetId: string): Promise<StoredDataset | null>;
+  list(ownership: OwnershipScope): Promise<UploadedDatasetDescriptor[]>;
+  setAiAccessPolicy(
+    ownership: OwnershipScope,
+    datasetId: string,
+    policy: Extract<DatasetAiAccessPolicy, "masked" | "exclude-sensitive-samples">,
+  ): Promise<UploadedDatasetDescriptor>;
+  delete(ownership: OwnershipScope, datasetId: string): Promise<boolean>;
 }
 
 export interface MemoryDatasetRepositoryOptions {
@@ -44,33 +49,47 @@ export class MemoryDatasetRepository implements DatasetRepository {
     }
   }
 
-  put(dataset: DatasetUploadResponse): StoredDataset {
+  private key(ownership: OwnershipScope, datasetId: string): string {
+    return `${ownershipNamespace(ownership)}:${datasetId}`;
+  }
+
+  async put(ownership: OwnershipScope, dataset: DatasetUploadResponse): Promise<StoredDataset> {
     this.purgeExpired();
     const parsed = datasetUploadResponseSchema.parse(dataset);
-    if (!this.datasets.has(parsed.dataset.datasetId) && this.datasets.size >= this.maxDatasets) {
+    const key = this.key(ownership, parsed.dataset.datasetId);
+    if (!this.datasets.has(key) && this.datasets.size >= this.maxDatasets) {
       throw new StudioValidationError("上传数据集数量已达上限", [`当前最多保存 ${this.maxDatasets} 个临时数据集，请先删除不再使用的数据集`]);
     }
-    const stored = { descriptor: structuredClone(parsed.dataset), rows: structuredClone(parsed.rows) };
-    this.datasets.set(parsed.dataset.datasetId, stored);
-    return { descriptor: structuredClone(stored.descriptor), rows: structuredClone(stored.rows) };
+    const stored = {
+      ownership: { tenantId: ownership.tenantId, ownerId: ownership.ownerId },
+      descriptor: structuredClone(parsed.dataset),
+      rows: structuredClone(parsed.rows),
+    };
+    this.datasets.set(key, stored);
+    return structuredClone(stored);
   }
 
-  get(datasetId: string): StoredDataset | null {
+  async get(ownership: OwnershipScope, datasetId: string): Promise<StoredDataset | null> {
     this.purgeExpired();
-    const stored = this.datasets.get(datasetId);
-    return stored ? { descriptor: structuredClone(stored.descriptor), rows: structuredClone(stored.rows) } : null;
+    const stored = this.datasets.get(this.key(ownership, datasetId));
+    return stored ? structuredClone(stored) : null;
   }
 
-  list(): UploadedDatasetDescriptor[] {
+  async list(ownership: OwnershipScope): Promise<UploadedDatasetDescriptor[]> {
     this.purgeExpired();
     return [...this.datasets.values()]
+      .filter((dataset) => dataset.ownership.tenantId === ownership.tenantId && dataset.ownership.ownerId === ownership.ownerId)
       .map((dataset) => structuredClone(dataset.descriptor))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
-  setAiAccessPolicy(datasetId: string, policy: Extract<DatasetAiAccessPolicy, "masked" | "exclude-sensitive-samples">): UploadedDatasetDescriptor {
+  async setAiAccessPolicy(
+    ownership: OwnershipScope,
+    datasetId: string,
+    policy: Extract<DatasetAiAccessPolicy, "masked" | "exclude-sensitive-samples">,
+  ): Promise<UploadedDatasetDescriptor> {
     this.purgeExpired();
-    const stored = this.datasets.get(datasetId);
+    const stored = this.datasets.get(this.key(ownership, datasetId));
     if (!stored) throw new StudioValidationError("上传数据集不存在或已过期", [`无法更新数据集：${datasetId}`]);
     const descriptor = uploadedDatasetDescriptorSchema.parse({
       ...stored.descriptor,
@@ -81,9 +100,9 @@ export class MemoryDatasetRepository implements DatasetRepository {
     return structuredClone(descriptor);
   }
 
-  delete(datasetId: string): boolean {
+  async delete(ownership: OwnershipScope, datasetId: string): Promise<boolean> {
     this.purgeExpired();
-    return this.datasets.delete(datasetId);
+    return this.datasets.delete(this.key(ownership, datasetId));
   }
 
   clear(): void {

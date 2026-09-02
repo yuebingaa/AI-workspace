@@ -698,10 +698,19 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const harness = new DeepSeekHarness();
     const store = new HarnessIdempotencyStore();
     const input = request("request_idempotent");
-    const first = store.execute(input, () => harness.run(input, { dataRuntime: data.dataRuntime, modelClient: model }));
-    const second = store.execute(input, () => harness.run(input, { dataRuntime: data.dataRuntime, modelClient: model }));
+    const first = store.execute(input, () => harness.run(input, { dataRuntime: data.dataRuntime, modelClient: model }), "owner-a");
+    const second = store.execute(input, () => harness.run(input, { dataRuntime: data.dataRuntime, modelClient: model }), "owner-a");
     expect(await first).toEqual(await second);
     expect(model.calls).toBe(1);
-    expect(() => store.execute({ ...input, instruction: "不同请求" }, async () => await first)).toThrow(HarnessIdempotencyConflictError);
+    expect(() => store.execute({ ...input, instruction: "不同请求" }, async () => await first, "owner-a")).toThrow(HarnessIdempotencyConflictError);
+
+    const otherOwnerModel = new ScriptedModel([complete("其他所有者独立完成")]);
+    const otherOwner = await store.execute(
+      { ...input, instruction: "其他所有者请求" },
+      () => harness.run({ ...input, instruction: "其他所有者请求" }, { dataRuntime: data.dataRuntime, modelClient: otherOwnerModel }),
+      "owner-b",
+    );
+    expect(otherOwner.state).toBe("completed");
+    expect(otherOwnerModel.calls).toBe(1);
   });
 });

@@ -23,6 +23,7 @@ describe("CSV 数据集 API", () => {
   it("上传、读取、确认敏感策略并删除，不接受用户磁盘路径", async () => {
     const uploaded = await uploadDataset(uploadRequest("email,amount\nsynthetic-a@example.invalid,10\nsynthetic-b@example.invalid,20"));
     expect(uploaded.status).toBe(201);
+    expect(uploaded.headers.get("x-datacanvas-identity-mode")).toBe("demo-single-user");
     const payload = await uploaded.json() as { dataset: { datasetId: string; aiAccessPolicy: string }; rows: unknown[] };
     expect(payload.dataset.datasetId).toMatch(/^dataset_upload_/u);
     expect(payload.dataset.aiAccessPolicy).toBe("pending");

@@ -11,12 +11,14 @@ import {
   harnessRequestSchema,
 } from "@/core/harness/contracts";
 import { demoFixtureResult } from "@/fixtures/demo-product";
-import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
+import { createHarnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
+import { ownershipNamespace } from "@/core/identity/ownership";
+import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 
 export const runtime = "nodejs";
 
-const noStoreHeaders = { "cache-control": "no-store" };
+const noStoreHeaders = { "cache-control": "no-store", ...DEMO_IDENTITY_RESPONSE_HEADERS };
 const harness = new DeepSeekHarness();
 const idempotencyStore = new HarnessIdempotencyStore();
 
@@ -51,15 +53,16 @@ export async function POST(request: Request) {
   if (!demoFixtureResult.success) return error("服务端演示数据不可用。", 500);
   const fixtures = demoFixtureResult.data;
   try {
+    const identity = resolveDemoRequestIdentity();
     const uploadedSourceIds = parsed.data.appSpec.dataSources.filter((source) => source.sourceType === "csv").map((source) => source.id);
-    const uploaded = uploadedSourceIds.map((datasetId) => {
-      const stored = datasetRepository.get(datasetId);
+    const uploaded = await Promise.all(uploadedSourceIds.map(async (datasetId) => {
+      const stored = await datasetRepository.get(identity, datasetId);
       if (!stored) throw new HarnessRequestError(`上传数据集 ${datasetId} 不存在或已过期，请重新上传。`, 410);
       if (stored.descriptor.aiAccessPolicy === "pending") {
         throw new HarnessRequestError(`数据集“${stored.descriptor.source.name}”包含可能的敏感字段，请先确认 AI 数据处理方式。`, 403);
       }
       return stored;
-    });
+    }));
     const canonicalSources = parsed.data.appSpec.dataSources.map((source) => (
       source.sourceType === "csv"
         ? uploaded.find((dataset) => dataset.descriptor.datasetId === source.id)?.descriptor.source ?? source
@@ -85,7 +88,7 @@ export async function POST(request: Request) {
       apiKey: process.env.DEEPSEEK_API_KEY,
       model: process.env.DEEPSEEK_MODEL,
       signal: request.signal,
-      excelExporter: harnessExcelExporter,
+      excelExporter: createHarnessExcelExporter({ ownership: identity, repository: datasetRepository }),
       bounds: {
         maxModelCalls: positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 5),
         maxToolCalls: positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
@@ -93,7 +96,7 @@ export async function POST(request: Request) {
         toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 10_000),
         totalExecutionTimeoutMs: positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
       },
-    }));
+    }), ownershipNamespace(identity));
     return NextResponse.json({ task }, { status: 200, headers: noStoreHeaders });
   } catch (caught) {
     if (caught instanceof HarnessIdempotencyConflictError) return error(caught.message, 409);
