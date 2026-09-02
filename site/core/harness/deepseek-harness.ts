@@ -20,6 +20,7 @@ import { normalizeHarnessModelTurn } from "./action-normalizer";
 import { sanitizeHarnessText } from "./security";
 import {
   buildHarnessContextSelection,
+  classifyHarnessTask,
   estimateHarnessModelInputChars,
   harnessSystemPrompt,
   resolveHarnessPageDataSourceIds,
@@ -122,7 +123,7 @@ export class DeepSeekHarnessModel implements HarnessModel {
     const readonlyResultComplete = readonlyTask
       && input.context.phase === "followUp"
       && input.tools.length === 0
-      && input.context.lastObservation !== undefined;
+      && (input.context.latestObservation !== undefined || input.context.lastObservation !== undefined);
     const turn = normalizeHarnessModelTurn(candidate, { readonlyTask, readonlyResultComplete });
     return {
       turn: turn.turn,
@@ -150,6 +151,10 @@ function resolvedBounds(input?: Partial<HarnessBounds>): HarnessBounds {
     if (!Number.isInteger(value) || value <= 0) throw new HarnessRequestError(`Harness 执行边界不合法：${name}`);
   }
   return bounds;
+}
+
+function estimatedPromptTokens(inputChars: number): number {
+  return Math.ceil(inputChars / 4);
 }
 
 function abortError(signal: AbortSignal): Error {
@@ -218,8 +223,14 @@ export class DeepSeekHarness {
     if (!parsed.success) throw new HarnessRequestError("Harness 请求格式不正确，请检查指令、页面和配方上下文。");
     const request = parsed.data;
     if (!request.appSpec.pages.some((page) => page.id === request.pageId)) throw new HarnessRequestError("Harness 当前页面不存在。");
-    const bounds = resolvedBounds(options.bounds);
-    const contextBudget = resolveHarnessContextBudget(options.contextBudget);
+    const taskProfile = classifyHarnessTask(request);
+    const configuredBounds = resolvedBounds(options.bounds);
+    const bounds = {
+      ...configuredBounds,
+      maxModelCalls: Math.min(configuredBounds.maxModelCalls, taskProfile.maxModelCalls),
+      maxToolCalls: Math.min(configuredBounds.maxToolCalls, taskProfile.maxToolCalls),
+    };
+    const contextBudget = resolveHarnessContextBudget(options.contextBudget, taskProfile.complexity);
     const clock = options.clock ?? defaultClock();
     const monotonicNow = options.monotonicNow ?? (() => performance.now());
     let modelDurationMs = 0;
@@ -259,6 +270,13 @@ export class DeepSeekHarness {
       : null);
     let task = createHarnessTask(request.idempotencyKey, request.instruction, request.pageId, request.role, clock, {
       executionTiming: executionTiming("planning"),
+      contextUsage: {
+        totalInputChars: 0,
+        totalPromptTokens: 0,
+        complexity: taskProfile.complexity,
+        limits: contextBudget,
+        requests: [],
+      },
       ...(request.retryOfTaskId ? { retryOfTaskId: request.retryOfTaskId } : {}),
     });
     const controller = new AbortController();
@@ -287,22 +305,47 @@ export class DeepSeekHarness {
         }
         let tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction, request });
         let inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
-        if (inputChars > contextBudget.maxRequestInputChars) {
-          selection = buildHarnessContextSelection(request, observations, iteration, true);
-          tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction, request });
-          inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
-        }
         const previousInputChars = task.contextUsage?.totalInputChars ?? 0;
-        if (!selection.compacted && previousInputChars + inputChars > contextBudget.maxTotalInputChars) {
+        const previousPromptTokens = task.contextUsage?.totalPromptTokens ?? task.usage?.promptTokens ?? 0;
+        const needsCompaction = () => inputChars > contextBudget.maxRequestInputChars
+          || previousInputChars + inputChars > contextBudget.maxTotalInputChars
+          || previousPromptTokens + estimatedPromptTokens(inputChars) > contextBudget.maxTotalPromptTokens;
+        if (needsCompaction()) {
           selection = buildHarnessContextSelection(request, observations, iteration, true);
           tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction, request });
           inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
         }
+        const failContextBudget = (limitReached: "singleRequestChars" | "taskInputChars" | "taskPromptTokens", message: string): never => {
+          task = appendHarnessEvent(task, {
+            type: "error",
+            state: "failed",
+            message,
+          }, clock, {
+            error: message,
+            resultMessage: `${message} 正式 AppSpec 未修改。`,
+            contextUsage: {
+              ...(task.contextUsage ?? {
+                totalInputChars: previousInputChars,
+                totalPromptTokens: previousPromptTokens,
+                complexity: taskProfile.complexity,
+                requests: [],
+              }),
+              limits: contextBudget,
+              limitReached,
+            },
+            executionTiming: executionTiming("failed"),
+          });
+          throw new Error(message);
+        };
         if (inputChars > contextBudget.maxRequestInputChars) {
-          throw new Error("Harness 单次模型上下文压缩后仍超过预算，未调用模型。");
+          failContextBudget("singleRequestChars", `Harness 单次模型输入超过 ${contextBudget.maxRequestInputChars} 字符限制，压缩后仍无法安全调用模型。`);
         }
         if (previousInputChars + inputChars > contextBudget.maxTotalInputChars) {
-          throw new Error("Harness 任务累计模型上下文超过预算，未继续调用模型。");
+          failContextBudget("taskInputChars", `Harness 任务累计模型输入超过 ${contextBudget.maxTotalInputChars} 字符限制，未继续调用模型。`);
+        }
+        const estimatedTokens = estimatedPromptTokens(inputChars);
+        if (previousPromptTokens + estimatedTokens > contextBudget.maxTotalPromptTokens) {
+          failContextBudget("taskPromptTokens", `Harness 任务预计输入 token 将超过 ${contextBudget.maxTotalPromptTokens} 限制，未继续调用模型。`);
         }
         const modelBudgetMs = phaseBudget("模型请求", bounds.modelRequestTimeoutMs);
         task = appendHarnessEvent(task, {
@@ -314,7 +357,18 @@ export class DeepSeekHarness {
           counters: { ...task.counters, loopCount: iteration, modelCallCount: task.counters.modelCallCount + 1 },
           contextUsage: {
             totalInputChars: previousInputChars + inputChars,
-            requests: [...(task.contextUsage?.requests ?? []), { iteration, inputChars, compacted: selection.compacted }],
+            totalPromptTokens: previousPromptTokens,
+            complexity: taskProfile.complexity,
+            limits: contextBudget,
+            requests: [...(task.contextUsage?.requests ?? []), {
+              iteration,
+              inputChars,
+              estimatedPromptTokens: estimatedTokens,
+              toolObservationChars: selection.toolObservationChars,
+              toolObservationEntries: selection.toolObservationEntries,
+              budgetCheck: "beforeModel",
+              compacted: selection.compacted,
+            }],
           },
           executionTiming: executionTiming("modelRequest"),
         });
@@ -340,6 +394,10 @@ export class DeepSeekHarness {
           modelDurationMs += Math.max(0, monotonicNow() - modelStarted);
         }
         const modelCallDurationMs = Math.max(0, Math.round(monotonicNow() - modelStarted));
+        const totalPromptTokens = previousPromptTokens + modelResult.usage.promptTokens;
+        const requestUsage = task.contextUsage?.requests.map((entry) => entry.iteration === iteration
+          ? { ...entry, promptTokens: modelResult.usage.promptTokens }
+          : entry) ?? [];
         task = appendHarnessEvent(task, {
           type: "state",
           state: "planning",
@@ -348,8 +406,18 @@ export class DeepSeekHarness {
         }, clock, {
           model: modelResult.model,
           usage: addUsage(task.usage, modelResult.usage),
+          contextUsage: {
+            totalInputChars: task.contextUsage?.totalInputChars ?? inputChars,
+            totalPromptTokens,
+            complexity: taskProfile.complexity,
+            limits: contextBudget,
+            requests: requestUsage,
+          },
           executionTiming: executionTiming("planning"),
         });
+        if (totalPromptTokens > contextBudget.maxTotalPromptTokens) {
+          failContextBudget("taskPromptTokens", `DeepSeek 实际累计输入 token 已超过 ${contextBudget.maxTotalPromptTokens} 限制，已停止后续工具和写操作。`);
+        }
         const { turn } = modelResult;
         if (turn.type === "complete") {
           if (selection.toolNames.length > 0) {
@@ -487,6 +555,13 @@ export class DeepSeekHarness {
       }
       throw new Error("Harness 已达到最大循环次数。");
     } catch (error) {
+      if (task.state === "failed" && task.contextUsage?.limitReached) {
+        return {
+          ...task,
+          totalDurationMs: elapsedMs(),
+          executionTiming: executionTiming("failed"),
+        };
+      }
       const cancelled = controller.signal.aborted;
       const message = sanitizeHarnessText(error, cancelled ? "Harness 任务已取消。" : "Harness 执行失败。");
       task = appendHarnessEvent(task, {

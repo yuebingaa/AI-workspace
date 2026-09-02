@@ -18,12 +18,15 @@ import {
 class ScriptedModel implements HarnessModel {
   calls = 0;
   inputs: HarnessModelInput[] = [];
-  constructor(private readonly turns: HarnessModelTurn[]) {}
+  constructor(
+    private readonly turns: HarnessModelTurn[],
+    private readonly usages: Array<{ promptTokens: number; completionTokens: number; totalTokens: number }> = [],
+  ) {}
   async next(input: HarnessModelInput): Promise<HarnessModelResult> {
     this.inputs.push(input);
     const turn = this.turns[this.calls++];
     if (!turn) throw new Error("mock 没有更多动作");
-    return { turn, model: "mock-deepseek", usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
+    return { turn, model: "mock-deepseek", usage: this.usages[this.calls - 1] ?? { promptTokens: 1, completionTokens: 1, totalTokens: 2 } };
   }
 }
 
@@ -136,6 +139,8 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(model.inputs[1].tools).toEqual([]);
     expect(task.events.some((event) => event.toolCall?.name === "createChangeSetPreview")).toBe(false);
     expect(task.pendingChangeSet).toBeUndefined();
+    expect(task.contextUsage?.complexity).toBe("simpleReadOnly");
+    expect(task.contextUsage?.limits).toMatchObject({ maxTotalInputChars: 12_000, maxTotalPromptTokens: 3_500 });
     expect(input.appSpec).toEqual(formal);
   });
 
@@ -175,13 +180,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.error).toBeUndefined();
     expect(task.state).toBe("awaitingConfirmation");
     expect(task.counters).toEqual({ loopCount: 4, modelCallCount: 4, toolCallCount: 4 });
-    expect(model.inputs[0].tools.map((item) => item.name)).toEqual([
-      "inspectDataset",
-      "inspectFields",
-      "previewDataRecipe",
-      "validateDataRecipe",
-      "createChangeSetPreview",
-    ]);
+    expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["inspectDataset"]);
     expect(task.events.filter((event) => event.type === "toolCall").map((event) => event.toolCall?.name))
       .toEqual(["inspectDataset", "inspectFields", "previewDataRecipe", "createChangeSetPreview"]);
     expect(task.pendingChangeSet?.operations).toEqual([expect.objectContaining({
@@ -191,7 +190,49 @@ describe("DeepSeekHarness 服务端状态机", () => {
       node: expect.objectContaining({ type: "MetricCard", props: expect.objectContaining({ label: "复购率" }) }),
     })]);
     expect(data.dataProduct.appSpec).toEqual(formal);
-    expect(task.contextUsage?.totalInputChars).toBeLessThanOrEqual(18_000);
+    expect(task.contextUsage?.totalInputChars).toBeLessThanOrEqual(32_000);
+    expect(task.contextUsage?.totalPromptTokens).toBe(4);
+    expect(task.contextUsage?.requests.every((entry) => entry.promptTokens === 1)).toBe(true);
+  });
+
+  it("复杂分析在合理预算内完成可用步骤，缺少 Excel 工具时明确 blocked", async () => {
+    const data = fixtures();
+    const input = {
+      ...request("request_complex_excel", "整理华东异常订单，创建复购分析，并提供 Excel 下载。"),
+      pageId: "page_customers",
+    };
+    const formal = structuredClone(input.appSpec);
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_complex_dataset"),
+      tool("inspectFields", {
+        dataSourceId: "dataset_retail_orders",
+        fields: ["region", "order_id", "customer_id", "anomaly_count", "repurchase_rate"],
+      }, "call_complex_fields"),
+      tool("previewDataRecipe", { recipeId: "recipe_east_anomalies" }, "call_complex_recipe"),
+    ]);
+
+    const task = await new DeepSeekHarness().run(input, { dataRuntime: data.dataRuntime, modelClient: model });
+
+    expect(task.state).toBe("blocked");
+    expect(task.error).toContain("缺少 Excel 导出能力");
+    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 3, toolCallCount: 3 });
+    expect(model.inputs.map((entry) => entry.tools.map((toolDefinition) => toolDefinition.name))).toEqual([
+      ["inspectDataset"],
+      ["inspectFields"],
+      ["previewDataRecipe"],
+    ]);
+    const serializedRounds = model.inputs.map((entry) => JSON.stringify(entry.context));
+    expect(serializedRounds.every((serialized) => !serialized.includes("order_1_1"))).toBe(true);
+    expect(serializedRounds[2]).not.toContain('"tool":"inspectDataset"');
+    expect(task.contextUsage?.totalInputChars).toBeLessThan(12_000);
+    expect(task.contextUsage?.totalInputChars).toBeLessThan(task.contextUsage?.limits?.maxTotalInputChars ?? 0);
+    expect(task.contextUsage?.requests.map((entry) => entry.toolObservationChars)).toEqual([
+      0,
+      expect.any(Number),
+      expect.any(Number),
+    ]);
+    expect(task.pendingChangeSet).toBeUndefined();
+    expect(input.appSpec).toEqual(formal);
   });
 
   it("复购与异常字段不足时进入 blocked，并明确报告缺失能力", async () => {
@@ -343,6 +384,24 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.events.some((event) => event.message.includes("48 行"))).toBe(true);
   });
 
+  it("实际累计输入 token 达到硬上限时在下一次模型调用前安全失败", async () => {
+    const data = fixtures();
+    const input = request("request_prompt_token_limit", "检查 retail_orders 数据集是否可用，返回行数和列数。不要修改页面。");
+    const formal = structuredClone(input.appSpec);
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_token_limit"),
+    ], [{ promptTokens: 3_450, completionTokens: 10, totalTokens: 3_460 }]);
+
+    const task = await new DeepSeekHarness().run(input, { dataRuntime: data.dataRuntime, modelClient: model });
+
+    expect(task.state).toBe("failed");
+    expect(task.contextUsage?.limitReached).toBe("taskPromptTokens");
+    expect(task.error).toContain("输入 token");
+    expect(model.calls).toBe(1);
+    expect(task.events.some((event) => event.toolCall?.name === "inspectDataset" && event.toolCall.status === "success")).toBe(true);
+    expect(input.appSpec).toEqual(formal);
+  });
+
   it("只读检查后可用规范 blocked 终止并报告缺失条件", async () => {
     const data = fixtures();
     const model = new ScriptedModel([
@@ -366,13 +425,12 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const model = new ScriptedModel([
       tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_source"),
       tool("inspectFields", { dataSourceId: "dataset_retail_orders", fields: ["repurchase_rate", "anomaly_count"] }, "call_fields"),
-      tool("validateDataRecipe", { recipeId: "recipe_east_anomalies" }, "call_validate"),
       tool("previewDataRecipe", { recipeId: "recipe_east_anomalies" }, "call_recipe"),
       complete("配方执行和字段血缘均正常。"),
     ]);
-    const task = await new DeepSeekHarness().run(request("request_recipe_steps", "检查零售数据配方并预览结果"), { dataRuntime: data.dataRuntime, modelClient: model, bounds: { maxModelCalls: 5 } });
+    const task = await new DeepSeekHarness().run(request("request_recipe_steps", "检查零售数据配方并预览结果"), { dataRuntime: data.dataRuntime, modelClient: model });
     expect(task.state).toBe("completed");
-    expect(task.counters.toolCallCount).toBe(4);
+    expect(task.counters.toolCallCount).toBe(3);
     expect(task.events.some((event) => event.message.includes("8 步"))).toBe(true);
   });
 

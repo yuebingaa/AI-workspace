@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { HarnessModel, HarnessModelResult, HarnessObservation, HarnessRequest } from "./contracts";
 import {
   buildHarnessContextSelection,
+  classifyHarnessTask,
   DeepSeekHarness,
   estimateHarnessModelInputChars,
   executeHarnessTool,
@@ -41,7 +42,7 @@ describe("Harness 最小上下文选择器", () => {
     }
   });
 
-  it("从客户洞察页面绑定发现 retail_orders，并向复杂任务提供五个相关工具", () => {
+  it("从客户洞察页面绑定发现 retail_orders，并仅提供当前步骤所需工具", () => {
     const input = { ...request("检查销售数据，找出异常订单，并生成复购率指标。"), pageId: "page_customers" };
     const selection = buildHarnessContextSelection(input, [], 1);
     const tools = harnessToolCatalog({
@@ -53,13 +54,8 @@ describe("Harness 最小上下文选择器", () => {
     const serialized = JSON.stringify({ ...selection.context, tools });
 
     expect(resolveHarnessPageDataSourceIds(input)).toEqual(["dataset_retail_orders"]);
-    expect(selection.toolNames).toEqual([
-      "inspectDataset",
-      "inspectFields",
-      "previewDataRecipe",
-      "validateDataRecipe",
-      "createChangeSetPreview",
-    ]);
+    expect(classifyHarnessTask(input)).toEqual({ complexity: "multiStep", maxModelCalls: 4, maxToolCalls: 6 });
+    expect(selection.toolNames).toEqual(["inspectDataset"]);
     expect(serialized).toContain("retail_orders");
     expect(serialized).toContain("page_customers_metrics");
     expect(serialized).not.toContain("order_1_1");
@@ -147,8 +143,13 @@ describe("Harness 最小上下文选择器", () => {
     });
 
     expect(task.state).toBe("failed");
-    expect(task.error).toContain("上下文");
+    expect(task.error).toContain("模型输入");
     expect(task.counters.modelCallCount).toBe(0);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it("简单只读任务使用较低调用和上下文预算", () => {
+    const input = request("检查 retail_orders 数据集是否可用，返回行数和列数。不要修改页面。");
+    expect(classifyHarnessTask(input)).toEqual({ complexity: "simpleReadOnly", maxModelCalls: 2, maxToolCalls: 2 });
   });
 });

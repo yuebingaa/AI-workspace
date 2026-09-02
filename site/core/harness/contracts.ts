@@ -99,11 +99,38 @@ export const harnessModelUsageSchema = z.object({
   totalTokens: z.number().int().nonnegative(),
 }).strict();
 
+export const harnessTaskComplexitySchema = z.enum(["simpleReadOnly", "multiStep"]);
+export type HarnessTaskComplexity = z.infer<typeof harnessTaskComplexitySchema>;
+
+export const harnessContextLimitSchema = z.enum([
+  "singleRequestChars",
+  "taskInputChars",
+  "taskPromptTokens",
+]);
+export type HarnessContextLimit = z.infer<typeof harnessContextLimitSchema>;
+
+export const harnessContextBudgetSchema = z.object({
+  maxRequestInputChars: z.number().int().positive(),
+  maxToolResultChars: z.number().int().positive(),
+  maxToolResultEntries: z.number().int().positive(),
+  maxTotalInputChars: z.number().int().positive(),
+  maxTotalPromptTokens: z.number().int().positive(),
+}).strict();
+
 export const harnessContextUsageSchema = z.object({
   totalInputChars: z.number().int().nonnegative(),
+  totalPromptTokens: z.number().int().nonnegative().default(0),
+  complexity: harnessTaskComplexitySchema.default("multiStep"),
+  limits: harnessContextBudgetSchema.optional(),
+  limitReached: harnessContextLimitSchema.optional(),
   requests: z.array(z.object({
     iteration: z.number().int().positive(),
     inputChars: z.number().int().nonnegative(),
+    estimatedPromptTokens: z.number().int().nonnegative().default(0),
+    promptTokens: z.number().int().nonnegative().optional(),
+    toolObservationChars: z.number().int().nonnegative().default(0),
+    toolObservationEntries: z.number().int().nonnegative().default(0),
+    budgetCheck: z.literal("beforeModel").default("beforeModel"),
     compacted: z.boolean(),
   }).strict()).max(8),
 }).strict();

@@ -58,6 +58,11 @@ const harnessPhaseLabels: Record<HarnessExecutionPhase, string> = {
   failed: "执行失败",
   cancelled: "已取消",
 };
+const harnessContextLimitLabels = {
+  singleRequestChars: "单次模型输入字符限制",
+  taskInputChars: "任务累计输入字符限制",
+  taskPromptTokens: "任务累计实际输入 token 限制",
+} as const;
 
 function operationTargets(operation: ChangeOperation): string[] {
   if (operation.type === "addNode") return [operation.parentId, operation.node.id];
@@ -100,6 +105,8 @@ export function AiBuilderAssistant({
   const displayedElapsedMs = timing?.activeElapsedMs ?? 0;
   const displayedRemainingMs = Math.max(0, (timing?.totalBudgetMs ?? 0) - displayedElapsedMs);
   const displayedPhase = isLoading ? "等待服务端执行结果（客户端等待不计时）" : timing ? harnessPhaseLabels[timing.phase] : "未开始";
+  const contextUsage = harnessTask?.contextUsage;
+  const contextLimits = contextUsage?.limits;
 
   return (
     <aside className="right-panel panel">
@@ -138,9 +145,17 @@ export function AiBuilderAssistant({
               {timing && <span>已用 {(displayedElapsedMs / 1_000).toFixed(1)}s</span>}
               {timing && <span>剩余 {(displayedRemainingMs / 1_000).toFixed(1)}s</span>}
               {harnessTask.usage && <span>Tokens {harnessTask.usage.totalTokens}</span>}
-              {harnessTask.contextUsage && <span>输入估算 {harnessTask.contextUsage.totalInputChars} chars</span>}
+              {contextUsage && <span>输入 {contextUsage.totalInputChars}/{contextLimits?.maxTotalInputChars ?? "-"} chars</span>}
+              {contextUsage && <span>输入 Tokens {contextUsage.totalPromptTokens}/{contextLimits?.maxTotalPromptTokens ?? "-"}</span>}
+              {contextUsage && <span>{contextUsage.complexity === "simpleReadOnly" ? "简单只读" : "多步骤"}</span>}
               <span>历史任务 {harnessTaskCount}</span>
             </div>
+            {contextUsage && contextLimits && (
+              <p className="harness-timing-detail">
+                输入字符剩余 {Math.max(0, contextLimits.maxTotalInputChars - contextUsage.totalInputChars)} · 输入 token 剩余 {Math.max(0, contextLimits.maxTotalPromptTokens - contextUsage.totalPromptTokens)}
+                {contextUsage.limitReached ? ` · 触发限制：${harnessContextLimitLabels[contextUsage.limitReached]}` : ""}
+              </p>
+            )}
             {timing && (
               <p className="harness-timing-detail">
                 模型 {(timing.modelDurationMs / 1_000).toFixed(2)}s · 工具 {(timing.toolDurationMs / 1_000).toFixed(2)}s · 其他 {(timing.otherDurationMs / 1_000).toFixed(2)}s · 已保留观察 {timing.retainedObservationCount}

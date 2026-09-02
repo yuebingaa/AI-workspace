@@ -21,7 +21,11 @@ export function createHarnessTask(
   pageId: string,
   role: StudioRole,
   clock: HarnessTaskClock,
-  options: { executionTiming?: HarnessExecutionTiming; retryOfTaskId?: string } = {},
+  options: {
+    executionTiming?: HarnessExecutionTiming;
+    retryOfTaskId?: string;
+    contextUsage?: HarnessTaskSummary["contextUsage"];
+  } = {},
 ): HarnessTaskSummary {
   const timestamp = clock.now().toISOString();
   return harnessTaskSummarySchema.parse({
@@ -37,6 +41,7 @@ export function createHarnessTask(
     events: [{ id: clock.id(), type: "state", state: "planning", timestamp, message: "Harness 开始规划任务。" }],
     ...(options.executionTiming ? { executionTiming: options.executionTiming } : {}),
     ...(options.retryOfTaskId ? { retryOfTaskId: options.retryOfTaskId } : {}),
+    ...(options.contextUsage ? { contextUsage: options.contextUsage } : {}),
   });
 }
 
