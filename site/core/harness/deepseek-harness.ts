@@ -55,10 +55,13 @@ export interface DeepSeekHarnessOptions {
   toolExecutor?: typeof executeHarnessTool;
   excelExporter?: HarnessExcelExporter;
   contextBudget?: Partial<HarnessContextBudget>;
+  modelMaxCompletionTokens?: number;
+  requireProviderUsage?: boolean;
+  providerPromptTokenLimit?: number;
 }
 
 const providerResponseSchema = z.object({
-  model: z.string().min(1).optional(),
+  model: z.string().min(1).max(160).optional(),
   choices: z.array(z.object({
     message: z.object({ content: z.string().nullable().optional() }).strip(),
   }).strip()).min(1),
@@ -83,10 +86,30 @@ export class HarnessIdempotencyConflictError extends Error {
   }
 }
 
+export class DeepSeekProviderProtocolError extends Error {
+  readonly code = "provider_model_mismatch" as const;
+
+  constructor() {
+    super("DeepSeek 返回的模型标识与本次服务端配置不一致。");
+    this.name = "DeepSeekProviderProtocolError";
+  }
+}
+
 export class DeepSeekHarnessModel implements HarnessModel {
-  constructor(private readonly options: { apiKey: string; model: string; fetchImpl?: typeof fetch }) {}
+  constructor(private readonly options: {
+    apiKey: string;
+    model: string;
+    fetchImpl?: typeof fetch;
+    maxCompletionTokens?: number;
+    requireProviderUsage?: boolean;
+    promptTokenLimit?: number;
+  }) {}
 
   async next(input: HarnessModelInput): Promise<HarnessModelResult> {
+    const maxCompletionTokens = this.options.maxCompletionTokens ?? 2_000;
+    if (!Number.isInteger(maxCompletionTokens) || maxCompletionTokens <= 0) {
+      throw new Error("DeepSeek 输出 token 上限配置无效。");
+    }
     const response = await (this.options.fetchImpl ?? fetch)(DEEPSEEK_CHAT_COMPLETIONS_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` },
@@ -95,7 +118,7 @@ export class DeepSeekHarnessModel implements HarnessModel {
         response_format: { type: "json_object" },
         stream: false,
         temperature: 0.1,
-        max_tokens: 2_000,
+        max_tokens: maxCompletionTokens,
         messages: [
           {
             role: "system",
@@ -113,6 +136,13 @@ export class DeepSeekHarnessModel implements HarnessModel {
     const raw = await response.json().catch(() => null) as unknown;
     const provider = providerResponseSchema.safeParse(raw);
     if (!provider.success) throw new Error("DeepSeek 返回了无法识别的响应。");
+    if (
+      this.options.requireProviderUsage
+      && provider.data.model !== undefined
+      && provider.data.model !== this.options.model
+    ) {
+      throw new DeepSeekProviderProtocolError();
+    }
     const content = provider.data.choices[0].message.content;
     if (!content) throw new Error("DeepSeek 未返回 Harness 动作。");
     let candidate: unknown;
@@ -127,13 +157,27 @@ export class DeepSeekHarnessModel implements HarnessModel {
       && input.tools.length === 0
       && (input.context.latestObservation !== undefined || input.context.lastObservation !== undefined);
     const turn = normalizeHarnessModelTurn(candidate, { readonlyTask, readonlyResultComplete });
+    const rawUsage = provider.data.usage;
+    if (this.options.requireProviderUsage) {
+      const promptTokens = rawUsage?.prompt_tokens;
+      const completionTokens = rawUsage?.completion_tokens;
+      const totalTokens = rawUsage?.total_tokens;
+      const promptLimit = this.options.promptTokenLimit;
+      const invalidUsage = promptTokens === undefined
+        || completionTokens === undefined
+        || totalTokens === undefined
+        || totalTokens !== promptTokens + completionTokens
+        || completionTokens > maxCompletionTokens
+        || (promptLimit !== undefined && promptTokens > promptLimit);
+      if (invalidUsage) throw new Error("DeepSeek 未返回可信的 token 用量，Live 评测已安全停止。");
+    }
     return {
       turn: turn.turn,
-      model: provider.data.model ?? this.options.model,
+      model: this.options.model,
       usage: {
-        promptTokens: provider.data.usage?.prompt_tokens ?? 0,
-        completionTokens: provider.data.usage?.completion_tokens ?? 0,
-        totalTokens: provider.data.usage?.total_tokens ?? 0,
+        promptTokens: rawUsage?.prompt_tokens ?? 0,
+        completionTokens: rawUsage?.completion_tokens ?? 0,
+        totalTokens: rawUsage?.total_tokens ?? 0,
       },
     };
   }
@@ -268,7 +312,14 @@ export class DeepSeekHarness {
     };
     const apiKey = options.apiKey?.trim();
     const modelClient = options.modelClient ?? (apiKey
-      ? new DeepSeekHarnessModel({ apiKey, model: options.model?.trim() || DEFAULT_DEEPSEEK_MODEL, fetchImpl: options.fetchImpl })
+      ? new DeepSeekHarnessModel({
+          apiKey,
+          model: options.model?.trim() || DEFAULT_DEEPSEEK_MODEL,
+          fetchImpl: options.fetchImpl,
+          maxCompletionTokens: options.modelMaxCompletionTokens,
+          requireProviderUsage: options.requireProviderUsage,
+          promptTokenLimit: options.providerPromptTokenLimit,
+        })
       : null);
     let task = createHarnessTask(request.idempotencyKey, request.instruction, request.pageId, request.role, clock, {
       executionTiming: executionTiming("planning"),
@@ -395,6 +446,9 @@ export class DeepSeekHarness {
               : `Harness 单次模型请求已超过 ${bounds.modelRequestTimeoutMs} ms 限制。`,
             () => abortError(controller.signal),
           );
+        } catch (modelError) {
+          if (modelError instanceof DeepSeekProviderProtocolError) failureTerminationCode = "protocolViolation";
+          throw modelError;
         } finally {
           modelDurationMs += Math.max(0, monotonicNow() - modelStarted);
         }

@@ -315,6 +315,129 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(userPayload).not.toHaveProperty("observations");
   });
 
+  it("Live 模式收紧 completion 上限并要求可信 provider usage", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "mock-deepseek-chat",
+      choices: [{ message: { content: JSON.stringify(complete("只读检查完成。")) } }],
+      usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const model = new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "mock-deepseek-chat",
+      fetchImpl,
+      maxCompletionTokens: 400,
+      requireProviderUsage: true,
+      promptTokenLimit: 2_500,
+    });
+
+    await expect(model.next({
+      tools: [],
+      context: { phase: "followUp", taskMode: "readOnly", latestObservation: { summary: "完成" } },
+      estimatedInputChars: 100,
+      iteration: 2,
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({ usage: { promptTokens: 10, completionTokens: 4, totalTokens: 14 } });
+    const body = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body)) as { max_tokens: number };
+    expect(body.max_tokens).toBe(400);
+  });
+
+  it.each([
+    ["虚假密钥 canary", "FAKE_LIVE_SECRET_CANARY_7D2C"],
+    ["session nonce", "a".repeat(64)],
+    ["数据 canary", "FAKE_LIVE_DATA_CANARY_91B4"],
+    ["指令 canary", "FAKE_LIVE_INSTRUCTION_CANARY_E6A8"],
+    ["换行", "deepseek-v4-flash\nINJECTED"],
+    ["反引号", "deepseek-v4-flash`injected"],
+    ["HTML", "deepseek-v4-flash<script>"],
+    ["Markdown", "deepseek-v4-flash|injected"],
+  ])("Live 模式拒绝 provider 污染的 model（%s），且错误不回显不可信值", async (_label, untrustedModel) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: untrustedModel,
+      choices: [{ message: { content: JSON.stringify(complete("只读检查完成。")) } }],
+      usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const model = new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "deepseek-v4-flash",
+      fetchImpl,
+      maxCompletionTokens: 400,
+      requireProviderUsage: true,
+    });
+
+    let caught: unknown;
+    try {
+      await model.next({
+        tools: [],
+        context: { phase: "followUp", taskMode: "readOnly", latestObservation: { summary: "完成" } },
+        estimatedInputChars: 100,
+        iteration: 2,
+        signal: new AbortController().signal,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ code: "provider_model_mismatch" });
+    expect(String(caught)).not.toContain(untrustedModel);
+  });
+
+  it("Live 模式只返回本次请求使用的可信 model 标识", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "deepseek-v4-flash",
+      choices: [{ message: { content: JSON.stringify(complete("只读检查完成。")) } }],
+      usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const model = new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "deepseek-v4-flash",
+      fetchImpl,
+      maxCompletionTokens: 400,
+      requireProviderUsage: true,
+    });
+
+    await expect(model.next({
+      tools: [],
+      context: { phase: "followUp", taskMode: "readOnly", latestObservation: { summary: "完成" } },
+      estimatedInputChars: 100,
+      iteration: 2,
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({ model: "deepseek-v4-flash" });
+  });
+
+  it.each([
+    ["缺失", undefined, "可信的 token 用量"],
+    ["总量不一致", { prompt_tokens: 10, completion_tokens: 4, total_tokens: 99 }, "可信的 token 用量"],
+    ["负数", { prompt_tokens: -1, completion_tokens: 4, total_tokens: 3 }, "无法识别的响应"],
+    ["非数字", { prompt_tokens: "10", completion_tokens: 4, total_tokens: 14 }, "无法识别的响应"],
+    ["NaN", { prompt_tokens: Number.NaN, completion_tokens: 4, total_tokens: 14 }, "无法识别的响应"],
+    ["Infinity", { prompt_tokens: Number.POSITIVE_INFINITY, completion_tokens: 4, total_tokens: 14 }, "无法识别的响应"],
+    ["-Infinity", { prompt_tokens: Number.NEGATIVE_INFINITY, completion_tokens: 4, total_tokens: 14 }, "无法识别的响应"],
+    ["超出 prompt 上限", { prompt_tokens: 2_501, completion_tokens: 4, total_tokens: 2_505 }, "可信的 token 用量"],
+    ["超出 completion 上限", { prompt_tokens: 10, completion_tokens: 401, total_tokens: 411 }, "可信的 token 用量"],
+  ])("Live 模式对不可信 provider usage fail closed：%s", async (_label, usage, expectedError) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "mock-deepseek-chat",
+      choices: [{ message: { content: JSON.stringify(complete("只读检查完成。")) } }],
+      ...(usage ? { usage } : {}),
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const model = new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "mock-deepseek-chat",
+      fetchImpl,
+      maxCompletionTokens: 400,
+      requireProviderUsage: true,
+      promptTokenLimit: 2_500,
+    });
+
+    await expect(model.next({
+      tools: [],
+      context: { phase: "followUp", taskMode: "readOnly", latestObservation: { summary: "完成" } },
+      estimatedInputChars: 100,
+      iteration: 2,
+      signal: new AbortController().signal,
+    })).rejects.toThrow(expectedError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("只读工具成功后可兼容脱敏 fixture 的 completed 动作包装", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       model: "mock-deepseek-chat",

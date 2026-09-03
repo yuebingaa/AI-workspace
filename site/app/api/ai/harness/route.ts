@@ -16,6 +16,19 @@ import { createHarnessExcelExporter } from "@/core/exports/server/harness-excel-
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
 import { ownershipNamespace } from "@/core/identity/ownership";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
+import { findLiveHarnessCase } from "@/core/evaluation/live/manifest";
+import { liveHarnessTrustedModelSchema, type LiveHarnessEvaluationCase } from "@/core/evaluation/live/contracts";
+import {
+  LIVE_EVALUATION_CASE_HEADER,
+  LIVE_EVALUATION_NONCE_ENV,
+  LIVE_EVALUATION_NONCE_HEADER,
+  LIVE_EVALUATION_RUN_HEADER,
+  LIVE_EVALUATION_SERVER_FLAG,
+  LIVE_EVALUATION_SESSION_HEADER,
+  LIVE_EVALUATION_SESSION_VALUE,
+  isLoopbackHttpUrl,
+  safeNonceMatches,
+} from "@/core/evaluation/live/protocol";
 
 export const runtime = "nodejs";
 
@@ -37,7 +50,41 @@ function error(message: string, status: number) {
   return NextResponse.json({ error: { message } }, { status, headers: noStoreHeaders });
 }
 
+function liveEvaluationCase(request: Request): LiveHarnessEvaluationCase | NextResponse | null {
+  const session = request.headers.get(LIVE_EVALUATION_SESSION_HEADER);
+  const hasLiveHeader = session !== null
+    || request.headers.has(LIVE_EVALUATION_NONCE_HEADER)
+    || request.headers.has(LIVE_EVALUATION_CASE_HEADER)
+    || request.headers.has(LIVE_EVALUATION_RUN_HEADER);
+  if (!hasLiveHeader) return null;
+  if (session !== LIVE_EVALUATION_SESSION_VALUE || process.env[LIVE_EVALUATION_SERVER_FLAG] !== "1") {
+    return error("Live Harness 评测服务端开关未启用。", 403);
+  }
+  if (!isLoopbackHttpUrl(request.url)) return error("Live Harness 评测仅允许本机 loopback 请求。", 403);
+  if (!safeNonceMatches(
+    process.env[LIVE_EVALUATION_NONCE_ENV],
+    request.headers.get(LIVE_EVALUATION_NONCE_HEADER),
+  )) {
+    return error("Live Harness 评测会话校验失败。", 403);
+  }
+  const runId = request.headers.get(LIVE_EVALUATION_RUN_HEADER);
+  if (!runId || !/^[a-f0-9]{32}$/.test(runId)) return error("Live Harness 评测运行标识无效。", 400);
+  const evaluationCase = findLiveHarnessCase(request.headers.get(LIVE_EVALUATION_CASE_HEADER) ?? "");
+  if (!evaluationCase) return error("Live Harness 评测用例不在允许列表中。", 400);
+  const configuredModel = process.env.DEEPSEEK_MODEL?.trim();
+  if (
+    !process.env.DEEPSEEK_API_KEY?.trim()
+    || !configuredModel
+    || !liveHarnessTrustedModelSchema.safeParse(configuredModel).success
+  ) {
+    return error("Live Harness 评测所需的服务端 AI 配置尚未完成。", 503);
+  }
+  return evaluationCase;
+}
+
 export async function POST(request: Request) {
+  const liveEvaluation = liveEvaluationCase(request);
+  if (liveEvaluation instanceof NextResponse) return liveEvaluation;
   if (!aiPlannerRateLimiter.consume(clientKey(request))) return error("Harness 请求过于频繁，请稍后重试。", 429);
   const declaredLength = Number(request.headers.get("content-length") ?? 0);
   if (declaredLength > MAX_HARNESS_REQUEST_BYTES) return error("Harness 请求上下文过大。", 413);
@@ -53,9 +100,24 @@ export async function POST(request: Request) {
   if (!parsed.success) return error("Harness 请求格式不正确。", 400);
   if (!demoFixtureResult.success) return error("服务端演示数据不可用。", 500);
   const fixtures = demoFixtureResult.data;
+  if (liveEvaluation) {
+    const expected = liveEvaluation.request;
+    const matchesManifest = parsed.data.instruction === expected.instruction
+      && parsed.data.pageId === expected.pageId
+      && parsed.data.dataSourceId === expected.dataSourceId
+      && parsed.data.appSpec.dataSources.every((source) => source.sourceType !== "csv");
+    if (!matchesManifest) return error("Live Harness 评测请求与服务端用例清单不一致。", 400);
+  }
   try {
     const identity = resolveDemoRequestIdentity();
-    const uploadedSourceIds = parsed.data.appSpec.dataSources.filter((source) => source.sourceType === "csv").map((source) => source.id);
+    const publicRequest = liveEvaluation
+      ? {
+          ...parsed.data,
+          appSpec: structuredClone(fixtures.dataProduct.appSpec),
+          recipes: structuredClone(fixtures.dataProduct.recipes),
+        }
+      : parsed.data;
+    const uploadedSourceIds = publicRequest.appSpec.dataSources.filter((source) => source.sourceType === "csv").map((source) => source.id);
     const uploaded = await Promise.all(uploadedSourceIds.map(async (datasetId) => {
       const stored = await datasetRepository.get(identity, datasetId);
       if (!stored) throw new HarnessRequestError(`上传数据集 ${datasetId} 不存在或已过期，请重新上传。`, 410);
@@ -64,18 +126,18 @@ export async function POST(request: Request) {
       }
       return stored;
     }));
-    const canonicalSources = parsed.data.appSpec.dataSources.map((source) => (
+    const canonicalSources = publicRequest.appSpec.dataSources.map((source) => (
       source.sourceType === "csv"
         ? uploaded.find((dataset) => dataset.descriptor.datasetId === source.id)?.descriptor.source ?? source
         : source
     ));
     const canonicalRecipes = [
-      ...parsed.data.recipes.filter((recipe) => !uploadedSourceIds.includes(recipe.sourceDatasetId)),
+      ...publicRequest.recipes.filter((recipe) => !uploadedSourceIds.includes(recipe.sourceDatasetId)),
       ...uploaded.map((dataset) => dataset.descriptor.recipe),
     ];
     const serverRequest = harnessRequestSchema.parse({
-      ...parsed.data,
-      appSpec: { ...parsed.data.appSpec, dataSources: canonicalSources },
+      ...publicRequest,
+      appSpec: { ...publicRequest.appSpec, dataSources: canonicalSources },
       recipes: canonicalRecipes,
       role: identity.role,
     });
@@ -85,20 +147,31 @@ export async function POST(request: Request) {
         ...Object.fromEntries(uploaded.map((dataset) => [dataset.descriptor.datasetId, dataset.rows])),
       },
     };
-    const task = await idempotencyStore.execute(serverRequest, () => harness.run(serverRequest, {
+    const runHarness = () => harness.run(serverRequest, {
       dataRuntime,
       apiKey: process.env.DEEPSEEK_API_KEY,
       model: process.env.DEEPSEEK_MODEL,
       signal: request.signal,
       excelExporter: createHarnessExcelExporter({ ownership: identity, repository: datasetRepository }),
       bounds: {
-        maxModelCalls: positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 5),
-        maxToolCalls: positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
+        maxModelCalls: liveEvaluation?.limits.maxModelCalls ?? positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 5),
+        maxToolCalls: liveEvaluation?.limits.maxToolCalls ?? positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
         modelRequestTimeoutMs: positiveInteger(process.env.HARNESS_MODEL_REQUEST_TIMEOUT_MS, 25_000),
         toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 10_000),
-        totalExecutionTimeoutMs: positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
+        totalExecutionTimeoutMs: liveEvaluation?.limits.activeElapsedReservationMs
+          ?? positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
       },
-    }), ownershipNamespace(identity));
+      ...(liveEvaluation ? {
+        contextBudget: { maxTotalPromptTokens: liveEvaluation.limits.promptTokenReservation },
+        modelMaxCompletionTokens: liveEvaluation.limits.maxCompletionTokensPerCall,
+        requireProviderUsage: true,
+        providerPromptTokenLimit: liveEvaluation.limits.promptTokenReservation,
+      } : {}),
+    });
+    // Live 评测使用一次性 run ID 且不写入常规幂等任务缓存；普通工作台请求保持原行为。
+    const task = liveEvaluation
+      ? await runHarness()
+      : await idempotencyStore.execute(serverRequest, runHarness, ownershipNamespace(identity));
     return NextResponse.json({ task }, { status: 200, headers: noStoreHeaders });
   } catch (caught) {
     if (caught instanceof HarnessIdempotencyConflictError) return error(caught.message, 409);

@@ -179,7 +179,7 @@ function normalizeOperation(operation: ChangeOperation | HarnessExpectedOperatio
   }
 }
 
-function operationsMatchExactly(
+export function operationsMatchExactly(
   actual: ChangeOperation[],
   expected: HarnessExpectedOperation[],
 ): boolean {

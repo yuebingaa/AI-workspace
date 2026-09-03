@@ -45,7 +45,7 @@ const evaluationRequestSchema = z.object({
   dataSourceId: z.string().min(1).max(160).optional(),
 }).strict();
 
-const operationExpectationSchema = z.discriminatedUnion("type", [
+export const operationExpectationSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("addNode"),
     pageId: z.string().min(1).max(120),
