@@ -15,6 +15,7 @@ import {
   type HarnessObservation,
   type HarnessRequest,
   type HarnessTaskSummary,
+  type HarnessTerminationCode,
 } from "./contracts";
 import { normalizeHarnessModelTurn } from "./action-normalizer";
 import { sanitizeHarnessText } from "./security";
@@ -280,6 +281,7 @@ export class DeepSeekHarness {
       },
       ...(request.retryOfTaskId ? { retryOfTaskId: request.retryOfTaskId } : {}),
     });
+    let failureTerminationCode: HarnessTerminationCode = "executionFailed";
     const controller = new AbortController();
     const abortOuter = () => controller.abort(options.signal?.reason);
     options.signal?.addEventListener("abort", abortOuter, { once: true });
@@ -299,6 +301,7 @@ export class DeepSeekHarness {
           }, clock, {
             error: selection.blockingReason,
             resultMessage: selection.blockingReason,
+            terminationCode: "missingContext",
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("blocked"),
           });
@@ -334,6 +337,7 @@ export class DeepSeekHarness {
               limits: contextBudget,
               limitReached,
             },
+            terminationCode: "contextBudgetExceeded",
             executionTiming: executionTiming("failed"),
           });
           throw new Error(message);
@@ -422,6 +426,7 @@ export class DeepSeekHarness {
         const { turn } = modelResult;
         if (turn.type === "complete") {
           if (selection.toolNames.length > 0) {
+            failureTerminationCode = "protocolViolation";
             throw new StudioValidationError("Harness 模型协议失败", ["仍有可用工具时模型提前结束，未接受其‘没有工具或数据’的结论。"]);
           }
           task = appendHarnessEvent(task, {
@@ -430,6 +435,7 @@ export class DeepSeekHarness {
             message: sanitizeHarnessText(turn.message),
           }, clock, {
             resultMessage: sanitizeHarnessText(turn.message),
+            terminationCode: "completed",
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("completed"),
           });
@@ -437,6 +443,7 @@ export class DeepSeekHarness {
         }
         if (turn.type === "blocked") {
           if (selection.toolNames.length > 0) {
+            failureTerminationCode = "protocolViolation";
             throw new StudioValidationError("Harness 模型协议失败", ["仍有可用工具时模型不得跳过检查并宣告缺少条件。"]);
           }
           const missing = turn.missingRequirements.map((item) => sanitizeHarnessText(item)).join("、");
@@ -448,6 +455,7 @@ export class DeepSeekHarness {
           }, clock, {
             error: blockedMessage,
             resultMessage: blockedMessage,
+            terminationCode: "missingRequirements",
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("blocked"),
           });
@@ -456,9 +464,13 @@ export class DeepSeekHarness {
         const toolAction = turn;
         if (task.counters.toolCallCount >= bounds.maxToolCalls) throw new Error("Harness 已达到最大工具调用次数。");
         const parsedToolName = harnessToolNameSchema.safeParse(toolAction.name);
-        if (!parsedToolName.success) throw new StudioValidationError("Harness 工具校验失败", [`不允许调用工具：${sanitizeHarnessText(toolAction.name, "未知工具")}`]);
+        if (!parsedToolName.success) {
+          failureTerminationCode = "invalidTool";
+          throw new StudioValidationError("Harness 工具校验失败", [`不允许调用工具：${sanitizeHarnessText(toolAction.name, "未知工具")}`]);
+        }
         const toolName = parsedToolName.data;
         if (!selection.toolNames.includes(toolName)) {
+          failureTerminationCode = "invalidTool";
           throw new StudioValidationError("Harness 工具状态校验失败", [`当前规划状态不允许调用工具：${toolName}`]);
         }
         const toolBudgetMs = phaseBudget("工具调用", bounds.toolCallTimeoutMs);
@@ -493,6 +505,7 @@ export class DeepSeekHarness {
             () => abortError(controller.signal),
           );
         } catch (toolError) {
+          failureTerminationCode = controller.signal.aborted ? "cancelled" : "toolExecutionFailed";
           const failedDurationMs = Math.max(0, Math.round(monotonicNow() - toolStarted));
           toolDurationMs += failedDurationMs;
           task = appendHarnessEvent(task, {
@@ -529,6 +542,7 @@ export class DeepSeekHarness {
             }, clock, {
               error: blockingReason,
               resultMessage: blockingReason,
+              terminationCode: "missingDataFields",
               totalDurationMs: elapsedMs(),
               executionTiming: executionTiming("blocked"),
             });
@@ -543,6 +557,7 @@ export class DeepSeekHarness {
             message: "已生成待确认 ChangeSet，Harness 已暂停，等待用户预览和确认。",
           }, clock, {
             resultMessage: sanitizeHarnessText(turn.message),
+            terminationCode: "awaitingConfirmation",
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("awaitingConfirmation"),
           });
@@ -556,6 +571,7 @@ export class DeepSeekHarness {
           }, clock, {
             exportArtifact: result.exportArtifact,
             resultMessage: `分析已完成，Excel“${result.exportArtifact.fileName}”可以下载。正式 AppSpec 未修改。`,
+            terminationCode: "completed",
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("completed"),
           });
@@ -586,6 +602,7 @@ export class DeepSeekHarness {
       }, clock, {
         error: message,
         resultMessage: cancelled ? "任务已取消，正式 AppSpec 未修改。" : "任务失败，正式 AppSpec 未修改。",
+        terminationCode: cancelled ? "cancelled" : failureTerminationCode,
         totalDurationMs: elapsedMs(),
         executionTiming: executionTiming(cancelled ? "cancelled" : "failed"),
       });

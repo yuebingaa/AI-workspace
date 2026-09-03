@@ -151,6 +151,7 @@ export function classifyHarnessTask(request: HarnessRequest): HarnessTaskProfile
   const intent = harnessIntent(request);
   const complexity: HarnessTaskComplexity = intent.wantsChange
     || intent.wantsRecipe
+    || intent.wantsFields
     || intent.wantsExcel
     || intent.wantsAppInspection
     ? "multiStep"

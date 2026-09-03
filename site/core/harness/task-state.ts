@@ -81,6 +81,7 @@ export function settleHarnessConfirmation(
     message: accepted ? "用户确认并应用了待确认 ChangeSet。" : "用户拒绝了待确认 ChangeSet，正式 AppSpec 未修改。",
   }, clock, {
     resultMessage: accepted ? "待确认变更已由用户正式应用。" : "用户已拒绝本次变更。",
+    terminationCode: accepted ? "completed" : "cancelled",
     ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, accepted ? "completed" : "cancelled") } : {}),
     ...(accepted ? {} : { pendingChangeSet: undefined }),
   });
@@ -100,6 +101,7 @@ export function recoverHarnessTasksAfterRefresh(
       }, clock, {
         error: "历史任务缺少必要的数据工具执行记录。",
         resultMessage: "任务已阻塞，正式 AppSpec 未修改。",
+        terminationCode: "missingContext",
         ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, "blocked") } : {}),
       });
     }
@@ -109,6 +111,7 @@ export function recoverHarnessTasksAfterRefresh(
       message: "页面刷新后已安全终止未完成任务，不会自动继续执行。",
     }, clock, {
       error: "任务因页面刷新而终止。",
+      terminationCode: "cancelled",
       ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, "cancelled") } : {}),
     })
       : task;

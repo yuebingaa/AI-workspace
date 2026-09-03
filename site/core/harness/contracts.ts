@@ -31,6 +31,21 @@ export const harnessStateSchema = z.enum([
 ]);
 export type HarnessState = z.infer<typeof harnessStateSchema>;
 
+export const harnessTerminationCodeSchema = z.enum([
+  "completed",
+  "awaitingConfirmation",
+  "missingContext",
+  "missingDataFields",
+  "missingRequirements",
+  "protocolViolation",
+  "invalidTool",
+  "toolExecutionFailed",
+  "contextBudgetExceeded",
+  "executionFailed",
+  "cancelled",
+]);
+export type HarnessTerminationCode = z.infer<typeof harnessTerminationCodeSchema>;
+
 export const harnessToolNameSchema = z.enum([
   "inspectDataset",
   "inspectFields",
@@ -158,6 +173,7 @@ export const harnessTaskSummarySchema = z.object({
   totalDurationMs: z.number().int().nonnegative().optional(),
   executionTiming: harnessExecutionTimingSchema.optional(),
   retryOfTaskId: z.string().min(1).max(160).optional(),
+  terminationCode: harnessTerminationCodeSchema.optional(),
 }).strict();
 export type HarnessTaskSummary = z.infer<typeof harnessTaskSummarySchema>;
 

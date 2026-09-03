@@ -2,8 +2,10 @@ import { z } from "zod";
 import {
   harnessModelTurnSchema,
   harnessStateSchema,
+  harnessTerminationCodeSchema,
   harnessToolNameSchema,
   type HarnessState,
+  type HarnessTerminationCode,
   type HarnessToolName,
 } from "@/core/harness/contracts";
 import { appNodeSchema } from "@/core/schemas";
@@ -14,7 +16,27 @@ export const HARNESS_EVALUATION_CANARIES = [
   "FAKE_EVAL_PRIVATE_APP_SPEC_7d9c2a",
   "FAKE_EVAL_PRIVATE_DATA_ROW_41b8ef",
   "FAKE_EVAL_AUTHORIZATION_TOKEN_93ac10",
+  "FAKE_EVAL_REASONING_CONTENT_c741de",
+  "FAKE_EVAL_WORKBOOK_CONTENT_1f6e2b",
 ] as const;
+
+export const harnessEvaluationCategorySchema = z.enum([
+  "simpleReadOnly",
+  "multiStepAnalysis",
+  "changePreview",
+  "capabilityBlocked",
+  "protocolAdversarial",
+  "securityAdversarial",
+]);
+export type HarnessEvaluationCategory = z.infer<typeof harnessEvaluationCategorySchema>;
+
+export const harnessEvaluationTagSchema = z.enum(["illegalOperation", "leakageProbe"]);
+export type HarnessEvaluationTag = z.infer<typeof harnessEvaluationTagSchema>;
+
+const harnessEvaluationFixtureIdSchema = z.enum([
+  "demo-retail-orders",
+  "retail-orders-missing-repurchase-fields",
+]);
 
 const evaluationRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(160).regex(/^[A-Za-z0-9_-]+$/),
@@ -71,21 +93,24 @@ const harnessExpectedSchema = z.object({
   maximumToolCalls: z.number().int().nonnegative(),
   maximumInputChars: z.number().int().positive(),
   maximumPromptTokens: z.number().int().positive(),
+  terminationCode: harnessTerminationCodeSchema.optional(),
+  evaluationTags: z.array(harnessEvaluationTagSchema).default([]),
 }).strict();
 
 const baseEvaluationCaseShape = {
   schemaVersion: z.literal(HARNESS_EVALUATION_SCHEMA_VERSION),
   id: z.string().min(1).max(120).regex(/^[a-z0-9_-]+$/),
   title: z.string().min(1).max(160),
-  fixtureId: z.literal("demo-retail-orders"),
+  fixtureId: harnessEvaluationFixtureIdSchema,
 } as const;
 
 const harnessExecutionEvaluationCaseSchema = z.object({
   ...baseEvaluationCaseShape,
   kind: z.literal("harness"),
-  category: z.enum(["simpleReadOnly", "multiStepAnalysis", "changePreview"]),
+  category: harnessEvaluationCategorySchema,
   request: evaluationRequestSchema,
   mockTurns: z.array(harnessModelTurnSchema).min(1).max(8),
+  mockCapabilities: z.object({ excelExport: z.boolean().default(false) }).strict().optional(),
   expected: harnessExpectedSchema,
 }).strict();
 
@@ -113,6 +138,7 @@ export const harnessEvaluationCaseSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type HarnessEvaluationCase = z.infer<typeof harnessEvaluationCaseSchema>;
+export type HarnessEvaluationTerminationCode = HarnessTerminationCode | "requestRejected";
 
 export interface HarnessEvaluationHardGates {
   formalAppSpecUnchanged: boolean;
@@ -151,6 +177,7 @@ export interface HarnessEvaluationCaseResult {
   category: HarnessEvaluationCase["category"];
   passed: boolean;
   terminalState: HarnessState | "requestRejected";
+  terminationCode: HarnessEvaluationTerminationCode;
   toolSequence: HarnessToolName[];
   modelInputCount: number;
   pendingChangeSetOperationTypes: string[];
@@ -159,6 +186,14 @@ export interface HarnessEvaluationCaseResult {
   scores: HarnessEvaluationScores;
   usage: HarnessEvaluationUsage;
   error?: string;
+}
+
+export interface HarnessEvaluationCategorySummary {
+  category: HarnessEvaluationCategory;
+  total: number;
+  passed: number;
+  failed: number;
+  successRate: number;
 }
 
 export interface HarnessEvaluationReport {
@@ -173,12 +208,23 @@ export interface HarnessEvaluationReport {
     passed: number;
     failed: number;
     hardGateFailures: number;
-    simpleTaskSuccessRate: number | null;
-    complexTaskSuccessRate: number | null;
+    categories: Record<HarnessEvaluationCategory, HarnessEvaluationCategorySummary>;
+    simpleTaskSuccessRate: number;
+    complexTaskSuccessRate: number;
+    correctBlockedRate: number;
+    erroneousCompletedRate: number;
+    firstToolAccuracy: number;
     toolPrecision: number;
     toolRecall: number;
     sequenceExactRate: number;
-    changeSetSchemaComplianceRate: number | null;
+    sequenceScore: number;
+    changeSetSchemaComplianceRate: number;
+    changeSetTargetAccuracy: number;
+    illegalOperationBlockRate: number;
+    unexpectedAppSpecMutationRate: number;
+    leakageRate: number;
+    qualityScore: number;
+    hardGatesPassed: boolean;
     unexpectedAppSpecMutationCount: number;
     clientIdentityFieldsAcceptedCount: number;
     invalidPendingChangeSetCount: number;

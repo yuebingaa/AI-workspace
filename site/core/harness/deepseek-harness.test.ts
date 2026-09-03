@@ -158,6 +158,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
 
     const [recovered] = recoverHarnessTasksAfterRefresh([task], clock);
     expect(recovered.state).toBe("blocked");
+    expect(recovered.terminationCode).toBe("missingContext");
     expect(recovered.error).toContain("缺少必要的数据工具执行记录");
   });
 
@@ -265,6 +266,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const task = await new DeepSeekHarness().run(input, { dataRuntime: data.dataRuntime, modelClient: model });
 
     expect(task.state).toBe("blocked");
+    expect(task.terminationCode).toBe("missingDataFields");
     expect(task.error).toContain("数据字段不足");
     expect(task.error).toContain("anomaly_count 或 refunded");
     expect(task.error).toContain("customer_id、order_id");
@@ -282,6 +284,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
 
     expect(model.inputs[0].tools.length).toBeGreaterThan(0);
     expect(task.state).toBe("failed");
+    expect(task.terminationCode).toBe("protocolViolation");
     expect(task.error).toContain("模型协议失败");
     expect(task.counters.toolCallCount).toBe(0);
   });
@@ -485,6 +488,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const applied = applyChangeSet(previewed, task.pendingChangeSet, "editor");
     const confirmed = settleHarnessConfirmation(task, true, { now: () => new Date(), id: () => "confirm_event" });
     expect(confirmed.state).toBe("completed");
+    expect(confirmed.terminationCode).toBe("completed");
     expect(applied.present).not.toEqual(initial.present);
   });
 
@@ -495,6 +499,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
       modelClient: new ScriptedModel([tool("deleteDatabase", {}, "call_bad_tool")]),
     });
     expect(illegalTool.state).toBe("failed");
+    expect(illegalTool.terminationCode).toBe("invalidTool");
     expect(illegalTool.error).toContain("不允许调用工具");
 
     const illegalArgs = await new DeepSeekHarness().run(request("request_illegal_args"), {
@@ -502,6 +507,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
       modelClient: new ScriptedModel([tool("inspectDataset", { dataSourceId: 123 }, "call_bad_args")]),
     });
     expect(illegalArgs.state).toBe("failed");
+    expect(illegalArgs.terminationCode).toBe("toolExecutionFailed");
     expect(illegalArgs.error).toContain("参数不符合定义");
   });
 
