@@ -8,6 +8,7 @@ import {
 } from "@/core/harness/deepseek-harness";
 import {
   MAX_HARNESS_REQUEST_BYTES,
+  harnessPublicRequestSchema,
   harnessRequestSchema,
 } from "@/core/harness/contracts";
 import { demoFixtureResult } from "@/fixtures/demo-product";
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
   } catch {
     return error("Harness 请求体不是有效 JSON。", 400);
   }
-  const parsed = harnessRequestSchema.safeParse(raw);
+  const parsed = harnessPublicRequestSchema.safeParse(raw);
   if (!parsed.success) return error("Harness 请求格式不正确。", 400);
   if (!demoFixtureResult.success) return error("服务端演示数据不可用。", 500);
   const fixtures = demoFixtureResult.data;
@@ -76,6 +77,7 @@ export async function POST(request: Request) {
       ...parsed.data,
       appSpec: { ...parsed.data.appSpec, dataSources: canonicalSources },
       recipes: canonicalRecipes,
+      role: identity.role,
     });
     const dataRuntime = {
       rowsByDataSourceId: {

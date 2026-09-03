@@ -269,7 +269,15 @@ function compactObservation(observation: HarnessObservation | undefined, compact
         },
       };
     case "previewDataRecipe":
-      return { ...base, result: pick(data, ["outputRowCount", "fields", "steps", "lineage", "truncated"]) };
+      return {
+        ...base,
+        result: {
+          ...pick(data, ["outputRowCount", "fields", "lineage", "truncated"]),
+          steps: Array.isArray(data.steps) ? data.steps.map((step) => (
+            pick(record(step), ["stepId", "stepType", "status", "inputRowCount", "outputRowCount", "error"])
+          )) : [],
+        },
+      };
     case "validateDataRecipe":
       return { ...base, result: pick(data, ["valid", "outputRowCount", "outputFields"]) };
     case "exportDataRecipeToExcel":
@@ -277,7 +285,7 @@ function compactObservation(observation: HarnessObservation | undefined, compact
     case "inspectAppSpec":
       return { ...base, result: pick(data, ["pageId", "nodeCount", "targetIds", "truncated"]) };
     case "createChangeSetPreview":
-      return { ...base, result: pick(data, ["changeSetId", "operationCount", "operationTypes", "affectedPages"]) };
+      return { ...base, result: pick(data, ["operationCount", "operationTypes", "affectedPages"]) };
   }
 }
 

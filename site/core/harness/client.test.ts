@@ -11,7 +11,6 @@ function request() {
     pageId: "page_home",
     appSpec: demoFixtureResult.data.dataProduct.appSpec,
     recipes: demoFixtureResult.data.dataProduct.recipes,
-    role: "editor" as const,
   };
 }
 
@@ -21,9 +20,14 @@ describe("Harness 客户端", () => {
       now: () => new Date("2026-01-01T00:00:00.000Z"),
       id: () => "event_client",
     });
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ task }), { status: 200 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ task }), { status: 200 }));
     await expect(requestHarnessTask(request(), { fetchImpl })).resolves.toEqual({ task });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("role");
+    expect(body).not.toHaveProperty("tenantId");
+    expect(body).not.toHaveProperty("ownerId");
+    expect(body).not.toHaveProperty("userId");
   });
 
   it("支持取消且不会自动重试", async () => {

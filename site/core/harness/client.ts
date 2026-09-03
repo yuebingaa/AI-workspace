@@ -1,7 +1,7 @@
 import {
   HARNESS_CLIENT_TIMEOUT_MS,
   harnessResponseSchema,
-  type HarnessRequest,
+  type HarnessPublicRequest,
   type HarnessResponse,
 } from "./contracts";
 
@@ -23,7 +23,7 @@ export interface HarnessClientOptions {
 }
 
 export async function requestHarnessTask(
-  payload: HarnessRequest,
+  payload: HarnessPublicRequest,
   options: HarnessClientOptions = {},
 ): Promise<HarnessResponse> {
   const controller = new AbortController();

@@ -422,7 +422,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         ...(activeDataSource ? { dataSourceId: activeDataSource.id } : {}),
         appSpec: baseExecution.present,
         recipes: dataProduct.recipes,
-        role,
         ...(retryOfTaskId ? { retryOfTaskId } : {}),
       }, { signal: controller.signal });
       const nextTasks = appendHarnessTask(initialTasks, task);

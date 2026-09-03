@@ -10,7 +10,8 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:eval": "vitest run core/evaluation/harness-evaluation.test.ts --reporter=verbose"
   },
   "dependencies": {
     "@puckeditor/core": "0.23.0",

@@ -1,7 +1,7 @@
 import {
   aiPlanErrorPayloadSchema,
   aiPlanSuccessSchema,
-  type AiPlanRequest,
+  type AiPlanPublicRequest,
   type AiPlanSuccess,
 } from "./contracts";
 
@@ -26,7 +26,7 @@ export interface AiPlanClientOptions {
 }
 
 export async function requestAiPlan(
-  payload: AiPlanRequest,
+  payload: AiPlanPublicRequest,
   options: AiPlanClientOptions = {},
 ): Promise<AiPlanSuccess> {
   const fetchImpl = options.fetchImpl ?? fetch;

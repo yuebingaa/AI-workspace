@@ -1,15 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { demoFixtureResult } from "@/fixtures/demo-product";
-import type { AiPlanRequest } from "./contracts";
+import type { AiPlanPublicRequest } from "./contracts";
 import { AiPlanClientError, requestAiPlan } from "./client";
 
-function request(): AiPlanRequest {
+function request(): AiPlanPublicRequest {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
   return {
     instruction: "修改指标标题",
     pageId: "page_home",
     appSpec: structuredClone(demoFixtureResult.data.dataProduct.appSpec),
-    role: "editor",
   };
 }
 
@@ -43,5 +42,10 @@ describe("AI 规划客户端", () => {
       message: "AI 服务尚未配置。",
       retryable: false,
     } satisfies Partial<AiPlanClientError>);
+    const body = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("role");
+    expect(body).not.toHaveProperty("tenantId");
+    expect(body).not.toHaveProperty("ownerId");
+    expect(body).not.toHaveProperty("userId");
   });
 });

@@ -6,10 +6,18 @@ export const MAX_AI_INSTRUCTION_LENGTH = 1_000;
 export const MAX_AI_REQUEST_BYTES = 180_000;
 export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 
-export const aiPlanRequestSchema = z.object({
+const aiPlanPublicRequestShape = {
   instruction: z.string().trim().min(1).max(MAX_AI_INSTRUCTION_LENGTH),
   pageId: z.string().trim().min(1).max(120),
   appSpec: appSpecSchema,
+} as const;
+
+export const aiPlanPublicRequestSchema = z.object(aiPlanPublicRequestShape).strict();
+
+export type AiPlanPublicRequest = z.infer<typeof aiPlanPublicRequestSchema>;
+
+export const aiPlanRequestSchema = z.object({
+  ...aiPlanPublicRequestShape,
   role: z.enum(["viewer", "editor", "admin"]),
 }).strict();
 

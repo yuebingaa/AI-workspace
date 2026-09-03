@@ -161,15 +161,22 @@ export const harnessTaskSummarySchema = z.object({
 }).strict();
 export type HarnessTaskSummary = z.infer<typeof harnessTaskSummarySchema>;
 
-export const harnessRequestSchema = z.object({
+const harnessPublicRequestShape = {
   idempotencyKey: z.string().min(8).max(160).regex(/^[A-Za-z0-9_-]+$/),
   instruction: z.string().trim().min(1).max(MAX_HARNESS_INSTRUCTION_LENGTH),
   pageId: z.string().min(1).max(120),
   dataSourceId: z.string().min(1).max(160).optional(),
   appSpec: appSpecSchema,
   recipes: z.array(dataRecipeSchema).max(20),
-  role: z.enum(["viewer", "editor", "admin"]),
   retryOfTaskId: z.string().min(1).max(160).optional(),
+} as const;
+
+export const harnessPublicRequestSchema = z.object(harnessPublicRequestShape).strict();
+export type HarnessPublicRequest = z.infer<typeof harnessPublicRequestSchema>;
+
+export const harnessRequestSchema = z.object({
+  ...harnessPublicRequestShape,
+  role: z.enum(["viewer", "editor", "admin"]),
 }).strict();
 export type HarnessRequest = z.infer<typeof harnessRequestSchema>;
 

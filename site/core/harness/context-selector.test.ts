@@ -132,6 +132,35 @@ describe("Harness 最小上下文选择器", () => {
       .toBeLessThan(estimateHarnessModelInputChars(first.context, firstTools, 1));
   });
 
+  it("模型语义观察不受配方步骤实际耗时影响", () => {
+    const input = { ...request("执行华东异常订单配方预览，不要修改页面。"), pageId: "page_customers" };
+    const observation = (durationMs: number): HarnessObservation => ({
+      toolCallId: "recipe_preview",
+      toolName: "previewDataRecipe",
+      summary: "配方执行成功",
+      data: {
+        outputRowCount: 4,
+        fields: [{ name: "region", type: "string" }],
+        steps: [{
+          stepId: "filter_east",
+          stepType: "filter",
+          inputRowCount: 48,
+          outputRowCount: 12,
+          durationMs,
+        }],
+        lineage: { region: { sourceFields: ["region"], stepIds: ["filter_east"] } },
+      },
+    });
+    const fast = buildHarnessContextSelection(input, [observation(1)], 2);
+    const slow = buildHarnessContextSelection(input, [observation(9_999)], 2);
+    const fastTools = harnessToolCatalog({ names: fast.toolNames, editableNodes: fast.editableNodes, instruction: input.instruction, request: input });
+    const slowTools = harnessToolCatalog({ names: slow.toolNames, editableNodes: slow.editableNodes, instruction: input.instruction, request: input });
+
+    expect(fast.context).toEqual(slow.context);
+    expect(estimateHarnessModelInputChars(fast.context, fastTools, 2))
+      .toBe(estimateHarnessModelInputChars(slow.context, slowTools, 2));
+  });
+
   it("上下文超限时在模型调用前安全失败", async () => {
     const data = fixtures();
     const next = vi.fn<() => Promise<HarnessModelResult>>();

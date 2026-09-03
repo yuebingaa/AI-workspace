@@ -2,6 +2,7 @@ import type { OwnershipScope } from "../ownership";
 
 export interface DemoRequestIdentity extends OwnershipScope {
   identityMode: "demo-single-user";
+  role: "editor";
 }
 
 /**
@@ -13,6 +14,7 @@ const DEMO_REQUEST_IDENTITY: DemoRequestIdentity = Object.freeze({
   tenantId: "tenant_demo_local",
   ownerId: "owner_demo_workspace",
   identityMode: "demo-single-user",
+  role: "editor",
 });
 
 export const DEMO_IDENTITY_RESPONSE_HEADERS = {

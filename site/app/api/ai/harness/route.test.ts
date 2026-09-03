@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { aiPlannerRateLimiter } from "@/core/ai/server/rate-limit";
 import { parseCsvUpload } from "@/core/datasets/server/csv-dataset";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
 import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
@@ -10,7 +11,45 @@ function stream(text: string) {
 }
 
 describe("Harness 上传数据隐私门", () => {
-  beforeEach(() => datasetRepository.clear());
+  beforeEach(() => {
+    datasetRepository.clear();
+    aiPlannerRateLimiter.clear();
+    vi.stubEnv("DEEPSEEK_API_KEY", "");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("拒绝客户端身份字段，并为合法公共请求注入服务端 editor 角色", async () => {
+    if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+    const fixture = demoFixtureResult.data.dataProduct;
+    const publicRequest = {
+      idempotencyKey: "request_server_identity_001",
+      instruction: "检查零售数据。",
+      pageId: "page_home",
+      appSpec: fixture.appSpec,
+      recipes: fixture.recipes,
+    };
+    const rejected = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...publicRequest,
+        role: "admin",
+        tenantId: "fake_tenant",
+        ownerId: "fake_owner",
+        userId: "fake_user",
+      }),
+    }));
+    expect(rejected.status).toBe(400);
+
+    const accepted = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(publicRequest),
+    }));
+    const body = await accepted.json() as { task: { role: string } };
+    expect(accepted.status).toBe(200);
+    expect(body.task.role).toBe("editor");
+  });
 
   it("敏感字段未确认时拒绝把上传数据摘要交给模型", async () => {
     if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
@@ -30,7 +69,6 @@ describe("Harness 上传数据隐私门", () => {
       dataSourceId: uploaded.dataset.datasetId,
       appSpec: { ...fixture.appSpec, dataSources: [...fixture.appSpec.dataSources, uploaded.dataset.source] },
       recipes: [...fixture.recipes, uploaded.dataset.recipe],
-      role: "editor",
     };
     const response = await POST(new Request("http://localhost/api/ai/harness", {
       method: "POST",
@@ -62,7 +100,6 @@ describe("Harness 上传数据隐私门", () => {
         dataSourceId: uploaded.dataset.datasetId,
         appSpec: { ...fixture.appSpec, dataSources: [...fixture.appSpec.dataSources, uploaded.dataset.source] },
         recipes: [...fixture.recipes, uploaded.dataset.recipe],
-        role: "editor",
       }),
     }));
 

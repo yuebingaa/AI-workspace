@@ -28,8 +28,8 @@ export function StudioHeader({ productName, device, canUndo, saveLabel, role, hi
       </div>
       <div className="project-name"><span className="status-dot" />{productName}<button type="button" aria-label="切换项目">⌄</button></div>
       <div className="top-actions">
-        <label className="role-switcher">演示角色
-          <select value={role} onChange={(event) => onRoleChange(event.target.value as StudioRole)}>
+        <label className="role-switcher" title="仅用于前端交互演示，不影响服务端 Harness 授权">界面演示角色
+          <select aria-label="界面演示角色，不影响服务端授权" value={role} onChange={(event) => onRoleChange(event.target.value as StudioRole)}>
             {(Object.keys(studioRoleLabels) as StudioRole[]).map((item) => <option key={item} value={item}>{studioRoleLabels[item]}</option>)}
           </select>
         </label>

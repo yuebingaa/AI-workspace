@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { MAX_AI_REQUEST_BYTES } from "@/core/ai/contracts";
+import { aiPlanPublicRequestSchema, aiPlanRequestSchema, MAX_AI_REQUEST_BYTES } from "@/core/ai/contracts";
 import { AiPlannerError, planChangeSetWithDeepSeek } from "@/core/ai/server/deepseek-planner";
 import { aiPlannerRateLimiter } from "@/core/ai/server/rate-limit";
+import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 
 export const runtime = "nodejs";
 
@@ -42,7 +43,13 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await planChangeSetWithDeepSeek(body, {
+    const publicRequest = aiPlanPublicRequestSchema.safeParse(body);
+    if (!publicRequest.success) {
+      return errorResponse(new AiPlannerError("invalid_request", "AI 请求格式不正确。", 400, false));
+    }
+    const identity = resolveDemoRequestIdentity();
+    const serverRequest = aiPlanRequestSchema.parse({ ...publicRequest.data, role: identity.role });
+    const result = await planChangeSetWithDeepSeek(serverRequest, {
       apiKey: process.env.DEEPSEEK_API_KEY,
       model: process.env.DEEPSEEK_MODEL,
       signal: request.signal,
