@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyChangeSet, createExecutionState, previewChangeSet } from "@/core/changesets";
-import type { HarnessModel, HarnessModelInput, HarnessModelResult, HarnessModelTurn, HarnessRequest } from "@/core/harness";
+import type { HarnessModel, HarnessModelInput, HarnessModelResult, HarnessModelTurn, HarnessRequest, HarnessTaskSummary } from "@/core/harness";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
 import { excelExportStore } from "@/core/exports/server/excel-export-store";
@@ -8,10 +8,14 @@ import { redactedCompleteActionFailureFixture } from "./fixtures/redacted-comple
 import {
   DeepSeekHarness,
   DeepSeekHarnessModel,
+  HARNESS_HARD_BOUNDS,
+  HarnessIdempotencyCapacityError,
   HarnessIdempotencyConflictError,
   HarnessIdempotencyStore,
+  MAX_HARNESS_COMPLETION_TOKENS_PER_CALL,
   appendHarnessEvent,
   createHarnessTask,
+  harnessTaskSummarySchema,
   harnessToolCatalog,
   recoverHarnessTasksAfterRefresh,
   settleHarnessConfirmation,
@@ -144,6 +148,31 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.contextUsage?.complexity).toBe("simpleReadOnly");
     expect(task.contextUsage?.limits).toMatchObject({ maxTotalInputChars: 12_000, maxTotalPromptTokens: 3_500 });
     expect(input.appSpec).toEqual(formal);
+  });
+
+  it("每次模型调用前同步重验授权，撤回后不会启动下一次调用", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_before_revoke"),
+      complete("不应执行到这里。"),
+    ]);
+    let authorizationChecks = 0;
+    const task = await new DeepSeekHarness().run(request(
+      "request_authorization_recheck",
+      "检查 retail_orders 数据集是否可用，返回行数和列数。不要修改页面。",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      authorizeModelCall: () => {
+        authorizationChecks += 1;
+        if (authorizationChecks === 2) throw new Error("数据集授权已撤回");
+      },
+    });
+
+    expect(task.state).toBe("failed");
+    expect(task.error).toContain("授权已撤回");
+    expect(authorizationChecks).toBe(2);
+    expect(model.calls).toBe(1);
   });
 
   it("刷新恢复时将历史零工具数据任务从 completed 修正为 blocked", () => {
@@ -313,6 +342,71 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(userPayload).not.toHaveProperty("appSpec");
     expect(userPayload).not.toHaveProperty("request");
     expect(userPayload).not.toHaveProperty("observations");
+  });
+
+  it("拒绝超出硬上限的 DeepSeek Harness 响应体", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("{}", {
+      status: 200,
+      headers: { "content-length": String(512 * 1024 + 1) },
+    }));
+    const model = new DeepSeekHarnessModel({ apiKey: "mock-credential", model: "mock-deepseek-chat", fetchImpl });
+
+    await expect(model.next({
+      tools: [],
+      context: { phase: "test" },
+      estimatedInputChars: 100,
+      iteration: 1,
+      signal: new AbortController().signal,
+    })).rejects.toThrow("DeepSeek 返回了无法识别的响应");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("模型 token 与执行 bounds 只能收紧，不能放宽硬预算", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    expect(() => new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "mock-deepseek-chat",
+      fetchImpl,
+      maxCompletionTokens: MAX_HARNESS_COMPLETION_TOKENS_PER_CALL + 1,
+    })).toThrow(/输出 token 上限/);
+    expect(() => new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "mock-deepseek-chat",
+      fetchImpl,
+      promptTokenLimit: 12_001,
+    })).toThrow(/输入 token 上限/);
+
+    const data = fixtures();
+    const model = new ScriptedModel([complete("不应执行")]);
+    await expect(new DeepSeekHarness().run(request("request_oversized_bounds"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      bounds: { totalExecutionTimeoutMs: HARNESS_HARD_BOUNDS.totalExecutionTimeoutMs + 1 },
+    })).rejects.toThrow(/执行边界不合法/);
+    expect(model.calls).toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("普通 DeepSeek Harness 同样强制可信 usage 且不能关闭校验", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "mock-deepseek-chat",
+      choices: [{ message: { content: JSON.stringify(complete("只读检查完成。")) } }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const model = new DeepSeekHarnessModel({ apiKey: "mock-credential", model: "mock-deepseek-chat", fetchImpl });
+    await expect(model.next({
+      tools: [],
+      context: { phase: "test" },
+      estimatedInputChars: 100,
+      iteration: 1,
+      signal: new AbortController().signal,
+    })).rejects.toThrow(/可信的 token 用量/);
+    expect(() => new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "mock-deepseek-chat",
+      fetchImpl,
+      requireProviderUsage: false,
+    })).toThrow(/不能关闭/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("Live 模式收紧 completion 上限并要求可信 provider usage", async () => {
@@ -693,6 +787,22 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(cancelled.state).toBe("cancelled");
   });
 
+  it("调用前已取消时不启动模型", async () => {
+    const data = fixtures();
+    const controller = new AbortController();
+    const model = new ScriptedModel([complete("不应执行")]);
+    controller.abort();
+    const cancelled = await new DeepSeekHarness().run(request("request_pre_cancelled"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      signal: controller.signal,
+    });
+
+    expect(cancelled.state).toBe("cancelled");
+    expect(cancelled.terminationCode).toBe("cancelled");
+    expect(model.calls).toBe(0);
+  });
+
   it("两次正常延迟模型调用不会误触发总超时，并记录分阶段耗时", async () => {
     const data = fixtures();
     const formal = structuredClone(data.dataProduct.appSpec);
@@ -717,6 +827,163 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.executionTiming?.remainingMs).toBeGreaterThan(0);
     expect(task.events.filter((event) => event.timing?.phase === "modelRequest")).toHaveLength(2);
     expect(data.dataProduct.appSpec).toEqual(formal);
+  });
+
+  it("模型与工具阶段各只采样一次结束时间，累计和事件耗时一致", async () => {
+    const data = fixtures();
+    const moments = [0, 10, 10, 15, 15, 25];
+    const monotonicNow = vi.fn(() => {
+      const value = moments.shift();
+      if (value === undefined) throw new Error("unexpected monotonic clock read");
+      return value;
+    });
+    const task = await new DeepSeekHarness().run(request("request_precise_timing"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: new ScriptedModel([
+        tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_precise_timing"),
+        complete("精确计时完成。"),
+      ]),
+      monotonicNow,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(monotonicNow).toHaveBeenCalledTimes(6);
+    expect(task.executionTiming).toMatchObject({ modelDurationMs: 20, toolDurationMs: 5, activeElapsedMs: 25 });
+    expect(task.events
+      .filter((event) => event.message.includes("模型请求完成"))
+      .map((event) => event.timing?.durationMs)).toEqual([10, 10]);
+  });
+
+  it("非法 Harness 时钟不会覆盖模型错误或破坏失败摘要", async () => {
+    const data = fixtures();
+    const initialModel = new ScriptedModel([complete("不应执行")]);
+    const invalidInitialClock = {
+      now: () => new Date(Number.NaN),
+      id: () => "invalid_initial_clock",
+    };
+    const invalidInitial = await new DeepSeekHarness().run(request("request_invalid_initial_clock"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: initialModel,
+      clock: invalidInitialClock,
+    });
+    expect(invalidInitial).toMatchObject({ state: "failed", terminationCode: "executionFailed" });
+    expect(invalidInitial.error).toContain("Harness 时钟必须返回有效 Date");
+    expect(initialModel.calls).toBe(0);
+    expect(() => harnessTaskSummarySchema.parse(invalidInitial)).not.toThrow();
+
+    const extremeModel = new ScriptedModel([complete("不应执行")]);
+    const extremeInitial = await new DeepSeekHarness().run(request("request_extreme_initial_clock"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: extremeModel,
+      clock: {
+        now: () => new Date(8_640_000_000_000_000),
+        id: () => "event_extreme_initial_clock",
+      },
+    });
+    expect(extremeInitial).toMatchObject({ state: "failed", terminationCode: "executionFailed" });
+    expect(extremeInitial.error).toContain("Harness 时钟必须返回有效 Date");
+    expect(extremeModel.calls).toBe(0);
+    expect(() => harnessTaskSummarySchema.parse(extremeInitial)).not.toThrow();
+
+    let laterWallClockCalls = 0;
+    const laterWallClockModel = new ScriptedModel([complete("不应执行")]);
+    const invalidLaterWallClock = await new DeepSeekHarness().run(request("request_invalid_later_wall_clock"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: laterWallClockModel,
+      clock: {
+        now: () => laterWallClockCalls++ === 0
+          ? new Date("2026-09-04T00:00:00.000Z")
+          : new Date(Number.NaN),
+        id: () => "event_invalid_later_wall_clock",
+      },
+    });
+    expect(invalidLaterWallClock).toMatchObject({ state: "failed", terminationCode: "executionFailed" });
+    expect(invalidLaterWallClock.error).toContain("Harness 时钟必须返回有效 Date");
+    expect(laterWallClockModel.calls).toBe(0);
+    expect(() => harnessTaskSummarySchema.parse(invalidLaterWallClock)).not.toThrow();
+
+    let wallClockCalls = 0;
+    const failingModel: HarnessModel = {
+      next: vi.fn(async () => { throw new Error("primary model failure"); }),
+    };
+    const failed = await new DeepSeekHarness().run(request("request_clock_preserves_error"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: failingModel,
+      clock: {
+        now: () => wallClockCalls++ < 2
+          ? new Date("2026-09-04T00:00:00.000Z")
+          : new Date(Number.NaN),
+        id: () => "event_clock_preserves_error",
+      },
+      monotonicNow: (() => {
+        let calls = 0;
+        return () => calls++ === 0 ? 0 : Number.POSITIVE_INFINITY;
+      })(),
+    });
+    expect(failed).toMatchObject({ state: "failed", terminationCode: "executionFailed" });
+    expect(failed.error).toContain("primary model failure");
+    expect(failed.executionTiming).toMatchObject({ modelDurationMs: 0, activeElapsedMs: 0 });
+    expect(() => harnessTaskSummarySchema.parse(failed)).not.toThrow();
+
+    const invalidMonotonicModel = new ScriptedModel([complete("不应执行")]);
+    const invalidMonotonic = await new DeepSeekHarness().run(request("request_invalid_monotonic_clock"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: invalidMonotonicModel,
+      monotonicNow: () => Number.NaN,
+    });
+    expect(invalidMonotonic).toMatchObject({ state: "failed", terminationCode: "executionFailed" });
+    expect(invalidMonotonic.error).toContain("Harness 单调时钟必须返回有限数值");
+    expect(invalidMonotonicModel.calls).toBe(0);
+    expect(() => harnessTaskSummarySchema.parse(invalidMonotonic)).not.toThrow();
+
+    let rollbackClockCalls = 0;
+    const rollbackModel = new ScriptedModel([complete("不应接受回拨计时")]);
+    const rollback = await new DeepSeekHarness().run(request("request_rollback_monotonic_clock"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: rollbackModel,
+      monotonicNow: () => rollbackClockCalls++ === 0 ? 10 : 9,
+    });
+    expect(rollback).toMatchObject({ state: "failed", terminationCode: "executionFailed" });
+    expect(rollback.error).toContain("非负安全整数毫秒耗时");
+    expect(rollbackModel.calls).toBe(1);
+    expect(() => harnessTaskSummarySchema.parse(rollback)).not.toThrow();
+
+    const invalidModelEnd = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_invalid_model_end"),
+    ]);
+    let modelEndClockCalls = 0;
+    const failedModelEnd = await new DeepSeekHarness().run(request("request_invalid_model_end_clock"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: invalidModelEnd,
+      monotonicNow: () => modelEndClockCalls++ === 0 ? 0 : Number.POSITIVE_INFINITY,
+    });
+    expect(failedModelEnd).toMatchObject({ state: "failed", terminationCode: "executionFailed" });
+    expect(failedModelEnd.error).toContain("非负安全整数毫秒耗时");
+    expect(invalidModelEnd.calls).toBe(1);
+    expect(failedModelEnd.counters.toolCallCount).toBe(0);
+
+    let toolWallClockCalls = 0;
+    let toolMonotonicCalls = 0;
+    const toolExecutor = vi.fn(async () => { throw new Error("primary tool failure"); });
+    const failedTool = await new DeepSeekHarness().run(request("request_tool_error_with_invalid_clocks"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: new ScriptedModel([
+        tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_tool_clock_failure"),
+      ]),
+      toolExecutor,
+      clock: {
+        now: () => toolWallClockCalls++ < 4
+          ? new Date("2026-09-04T00:00:00.000Z")
+          : new Date(Number.NaN),
+        id: () => "event_tool_clock_failure",
+      },
+      monotonicNow: () => [0, 1, 2, 1][toolMonotonicCalls++] ?? Number.NaN,
+    });
+    expect(failedTool).toMatchObject({ state: "failed", terminationCode: "toolExecutionFailed" });
+    expect(failedTool.error).toContain("primary tool failure");
+    expect(toolExecutor).toHaveBeenCalledTimes(1);
+    expect(failedTool.events.some((event) => event.toolCall?.status === "failure" && event.toolCall.durationMs === 0)).toBe(true);
+    expect(() => harnessTaskSummarySchema.parse(failedTool)).not.toThrow();
   });
 
   it("单次模型请求超时会独立终止，不误报为任务总超时", async () => {
@@ -812,13 +1079,14 @@ describe("DeepSeekHarness 服务端状态机", () => {
         complete("重试完成"),
       ], [4, 4]),
       bounds: { modelRequestTimeoutMs: 30, totalExecutionTimeoutMs: 60 },
+      monotonicNow: () => 10_000,
     });
 
     expect(retry.state).toBe("completed");
     expect(retry.retryOfTaskId).toBe(recovered.id);
     expect(retry.executionTiming?.totalBudgetMs).toBe(60);
-    expect(retry.executionTiming?.remainingMs).toBeGreaterThan(40);
-    expect(retry.executionTiming?.activeElapsedMs).toBeLessThan(60);
+    expect(retry.executionTiming?.remainingMs).toBe(60);
+    expect(retry.executionTiming?.activeElapsedMs).toBe(0);
   });
 
   it("幂等请求只执行一次，冲突请求被拒绝", async () => {
@@ -841,5 +1109,79 @@ describe("DeepSeekHarness 服务端状态机", () => {
     );
     expect(otherOwner.state).toBe("completed");
     expect(otherOwnerModel.calls).toBe(1);
+  });
+
+  it("幂等存储拒绝非法边界且容量压力不淘汰执行中任务", async () => {
+    expect(() => new HarnessIdempotencyStore(0)).toThrow(/边界不合法/);
+    expect(() => new HarnessIdempotencyStore(1, 0)).toThrow(/边界不合法/);
+
+    const store = new HarnessIdempotencyStore(1);
+    const firstRequest = request("request_pending_capacity_1");
+    const taskClock = { now: () => new Date("2026-09-04T00:00:00.000Z"), id: () => "event_capacity" };
+    let resolveFirst!: (task: HarnessTaskSummary) => void;
+    const firstTask = new Promise<HarnessTaskSummary>((resolve) => { resolveFirst = resolve; });
+    const firstFactory = vi.fn(() => firstTask);
+    const secondFactory = vi.fn(async () => createHarnessTask("request_pending_capacity_2", "检查数据", "page_home", "editor", taskClock));
+
+    expect(store.execute(firstRequest, firstFactory)).toBe(firstTask);
+    expect(store.execute(firstRequest, firstFactory)).toBe(firstTask);
+    expect(() => store.execute({ ...firstRequest, idempotencyKey: "request_pending_capacity_2" }, secondFactory))
+      .toThrow(HarnessIdempotencyCapacityError);
+    expect(firstFactory).toHaveBeenCalledTimes(1);
+    expect(secondFactory).not.toHaveBeenCalled();
+
+    resolveFirst(createHarnessTask(firstRequest.idempotencyKey, firstRequest.instruction, firstRequest.pageId, firstRequest.role, taskClock));
+    await firstTask;
+    await expect(store.execute({ ...firstRequest, idempotencyKey: "request_pending_capacity_2" }, secondFactory))
+      .resolves.toMatchObject({ idempotencyKey: "request_pending_capacity_2" });
+    expect(secondFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it("幂等 TTL 在精确边界过期且不淘汰执行中任务", async () => {
+    const taskClock = { now: () => new Date("2026-09-04T00:00:00.000Z"), id: () => "event_ttl" };
+    const input = request("request_idempotency_ttl");
+    const summary = createHarnessTask(input.idempotencyKey, input.instruction, input.pageId, input.role, taskClock);
+    let now = 1_000;
+    const store = new HarnessIdempotencyStore(3, 100, () => now);
+    const firstFactory = vi.fn(() => Promise.resolve(summary));
+    const first = store.execute(input, firstFactory);
+    await first;
+    await Promise.resolve();
+
+    now = 1_099;
+    expect(store.execute(input, firstFactory)).toBe(first);
+    now = 1_100;
+    const replacementFactory = vi.fn(() => Promise.resolve(summary));
+    const replacement = store.execute(input, replacementFactory);
+    expect(replacement).not.toBe(first);
+    expect(firstFactory).toHaveBeenCalledTimes(1);
+    expect(replacementFactory).toHaveBeenCalledTimes(1);
+
+    let resolvePending!: (task: HarnessTaskSummary) => void;
+    const pendingTask = new Promise<HarnessTaskSummary>((resolve) => { resolvePending = resolve; });
+    const pendingRequest = request("request_idempotency_pending_ttl");
+    const pendingFactory = vi.fn(() => pendingTask);
+    now = 2_000;
+    expect(store.execute(pendingRequest, pendingFactory)).toBe(pendingTask);
+    now = 2_500;
+    expect(store.execute(pendingRequest, pendingFactory)).toBe(pendingTask);
+    expect(pendingFactory).toHaveBeenCalledTimes(1);
+    resolvePending(summary);
+    await pendingTask;
+
+    const rejectedRequest = request("request_idempotency_rejected_ttl");
+    now = 3_000;
+    const rejected = store.execute(rejectedRequest, () => Promise.reject(new Error("synthetic rejection")));
+    await expect(rejected).rejects.toThrow("synthetic rejection");
+    await Promise.resolve();
+    now = 3_100;
+    const rejectedReplacementFactory = vi.fn(() => Promise.resolve(summary));
+    expect(store.execute(rejectedRequest, rejectedReplacementFactory)).not.toBe(rejected);
+    expect(rejectedReplacementFactory).toHaveBeenCalledTimes(1);
+
+    const invalidFactory = vi.fn(() => Promise.resolve(summary));
+    const invalidStore = new HarnessIdempotencyStore(1, 100, () => Number.NaN);
+    expect(() => invalidStore.execute(input, invalidFactory)).toThrow(/幂等存储时钟/);
+    expect(invalidFactory).not.toHaveBeenCalled();
   });
 });

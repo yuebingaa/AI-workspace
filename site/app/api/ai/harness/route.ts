@@ -17,7 +17,13 @@ import { datasetRepository } from "@/core/datasets/server/dataset-repository";
 import { ownershipNamespace } from "@/core/identity/ownership";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { findLiveHarnessCase } from "@/core/evaluation/live/manifest";
+import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 import { liveHarnessTrustedModelSchema, type LiveHarnessEvaluationCase } from "@/core/evaluation/live/contracts";
+import {
+  createEdsWorkspaceDataSources,
+  createEdsWorkspaceRuntime,
+  isEdsWorkspaceDataSourceId,
+} from "@/core/eds";
 import {
   LIVE_EVALUATION_CASE_HEADER,
   LIVE_EVALUATION_NONCE_ENV,
@@ -31,8 +37,13 @@ import {
 } from "@/core/evaluation/live/protocol";
 
 export const runtime = "nodejs";
+const REQUEST_BODY_TIMEOUT_MS = 15_000;
 
-const noStoreHeaders = { "cache-control": "no-store", ...DEMO_IDENTITY_RESPONSE_HEADERS };
+const noStoreHeaders = {
+  "cache-control": "private, no-store, max-age=0",
+  "x-content-type-options": "nosniff",
+  ...DEMO_IDENTITY_RESPONSE_HEADERS,
+};
 const harness = new DeepSeekHarness();
 const idempotencyStore = new HarnessIdempotencyStore();
 
@@ -85,11 +96,20 @@ function liveEvaluationCase(request: Request): LiveHarnessEvaluationCase | NextR
 export async function POST(request: Request) {
   const liveEvaluation = liveEvaluationCase(request);
   if (liveEvaluation instanceof NextResponse) return liveEvaluation;
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLocaleLowerCase("en-US");
+  if (contentType !== "application/json") return error("Harness 请求必须使用 application/json。", 415);
   if (!aiPlannerRateLimiter.consume(clientKey(request))) return error("Harness 请求过于频繁，请稍后重试。", 429);
-  const declaredLength = Number(request.headers.get("content-length") ?? 0);
-  if (declaredLength > MAX_HARNESS_REQUEST_BYTES) return error("Harness 请求上下文过大。", 413);
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_HARNESS_REQUEST_BYTES) return error("Harness 请求上下文过大。", 413);
+  let text: string;
+  try {
+    text = await readBoundedUtf8Body(request, MAX_HARNESS_REQUEST_BYTES, { signal: request.signal, timeoutMs: REQUEST_BODY_TIMEOUT_MS });
+  } catch (caught) {
+    const tooLarge = caught instanceof BoundedBodyError && caught.code === "too-large";
+    const interrupted = caught instanceof BoundedBodyError && (caught.code === "timeout" || caught.code === "aborted");
+    return error(
+      tooLarge ? "Harness 请求上下文过大。" : interrupted ? "Harness 请求体读取超时或已取消。" : "Harness 请求体长度或编码无效。",
+      tooLarge ? 413 : interrupted ? 408 : 400,
+    );
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(text) as unknown;
@@ -118,6 +138,18 @@ export async function POST(request: Request) {
         }
       : parsed.data;
     const uploadedSourceIds = publicRequest.appSpec.dataSources.filter((source) => source.sourceType === "csv").map((source) => source.id);
+    const claimedEdsSourceIds = publicRequest.appSpec.dataSources
+      .filter((source) => isEdsWorkspaceDataSourceId(source.id))
+      .map((source) => source.id);
+    const canonicalEdsSources = publicRequest.edsWorkspace
+      ? createEdsWorkspaceDataSources(publicRequest.edsWorkspace)
+      : [];
+    if (
+      (claimedEdsSourceIds.length > 0 && !publicRequest.edsWorkspace)
+      || (publicRequest.edsWorkspace && canonicalEdsSources.some((source) => !claimedEdsSourceIds.includes(source.id)))
+    ) {
+      throw new HarnessRequestError("EDS 派生汇总上下文缺失或与工作台数据源不一致，请重新生成 EDS 看板。", 400);
+    }
     const uploaded = await Promise.all(uploadedSourceIds.map(async (datasetId) => {
       const stored = await datasetRepository.get(identity, datasetId);
       if (!stored) throw new HarnessRequestError(`上传数据集 ${datasetId} 不存在或已过期，请重新上传。`, 410);
@@ -129,7 +161,7 @@ export async function POST(request: Request) {
     const canonicalSources = publicRequest.appSpec.dataSources.map((source) => (
       source.sourceType === "csv"
         ? uploaded.find((dataset) => dataset.descriptor.datasetId === source.id)?.descriptor.source ?? source
-        : source
+        : canonicalEdsSources.find((candidate) => candidate.id === source.id) ?? source
     ));
     const canonicalRecipes = [
       ...publicRequest.recipes.filter((recipe) => !uploadedSourceIds.includes(recipe.sourceDatasetId)),
@@ -145,14 +177,22 @@ export async function POST(request: Request) {
       rowsByDataSourceId: {
         ...fixtures.dataRuntime.rowsByDataSourceId,
         ...Object.fromEntries(uploaded.map((dataset) => [dataset.descriptor.datasetId, dataset.rows])),
+        ...(publicRequest.edsWorkspace ? createEdsWorkspaceRuntime(publicRequest.edsWorkspace).rowsByDataSourceId : {}),
       },
     };
+    const expectedAiAccessPolicies = uploaded.map((dataset) => ({
+      datasetId: dataset.descriptor.datasetId,
+      policy: dataset.descriptor.aiAccessPolicy,
+    }));
     const runHarness = () => harness.run(serverRequest, {
       dataRuntime,
       apiKey: process.env.DEEPSEEK_API_KEY,
       model: process.env.DEEPSEEK_MODEL,
       signal: request.signal,
       excelExporter: createHarnessExcelExporter({ ownership: identity, repository: datasetRepository }),
+      ...(expectedAiAccessPolicies.length > 0 ? {
+        authorizeModelCall: () => datasetRepository.assertAiAccessPolicies(identity, expectedAiAccessPolicies),
+      } : {}),
       bounds: {
         maxModelCalls: liveEvaluation?.limits.maxModelCalls ?? positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 5),
         maxToolCalls: liveEvaluation?.limits.maxToolCalls ?? positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),

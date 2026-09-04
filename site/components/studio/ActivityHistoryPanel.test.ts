@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendHarnessEvent, createHarnessTask } from "@/core/harness";
 import type { ChangeSetAuditRecord } from "@/core/models";
-import { ActivityHistoryPanel, focusDialogControl, keepFocusInsideDialog, restoreDialogTrigger } from "./ActivityHistoryPanel";
+import { ActivityHistoryPanel, focusDialogControl, keepFocusInsideDialog, restoreDialogTrigger, restoreDialogTriggerUnlessOpen } from "./ActivityHistoryPanel";
 
 let eventSequence = 0;
 const mountedRoots: Root[] = [];
@@ -203,6 +203,16 @@ describe("任务与变更历史面板", () => {
     focusDialogControl(closeButton);
     restoreDialogTrigger(triggerButton);
     expect(closeButton.focus).toHaveBeenCalledOnce();
+    expect(triggerButton.focus).toHaveBeenCalledOnce();
+  });
+
+  it("对话框在延迟回焦前重新打开时不把焦点移回背景", () => {
+    const triggerButton = { focus: vi.fn(), isConnected: true } as unknown as HTMLElement;
+
+    restoreDialogTriggerUnlessOpen(triggerButton, true);
+    expect(triggerButton.focus).not.toHaveBeenCalled();
+
+    restoreDialogTriggerUnlessOpen(triggerButton, false);
     expect(triggerButton.focus).toHaveBeenCalledOnce();
   });
 

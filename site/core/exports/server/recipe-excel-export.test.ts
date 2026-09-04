@@ -3,6 +3,7 @@ import { executeDataRecipe } from "@/core/data";
 import type { DataRecipe, DataSourceDefinition } from "@/core/models";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import {
+  EXCEL_EXPORT_LIMITS,
   escapeExcelFormulaText,
   generateDataRecipeExcel,
   sanitizeExcelFileName,
@@ -95,6 +96,32 @@ describe("DataRecipe Excel 导出", () => {
     expect(row[2].value).toBeInstanceOf(Date);
     expect(["=1+1", "+cmd", "-2+3", "@SUM(A1)", "  =hidden"].map(escapeExcelFormulaText))
       .toEqual(["'=1+1", "'+cmd", "'-2+3", "'@SUM(A1)", "'  =hidden"]);
+
+    await expect(generateDataRecipeExcel({
+      recipe,
+      source,
+      rows: [{ note: "safe", amount: 1, date: "2026-02-31" }],
+      writer: async () => Buffer.from("PK invalid date"),
+    })).rejects.toThrow(/日期字段无效/);
+    await expect(generateDataRecipeExcel({
+      recipe,
+      source,
+      rows: [{ note: "safe", amount: 1, date: "09/02/2026" }],
+      writer: async () => Buffer.from("PK ambiguous date"),
+    })).rejects.toThrow(/YYYY-MM-DD/);
+
+    await generateDataRecipeExcel({
+      recipe,
+      source,
+      rows: [{ note: "=12345", amount: 1, date: "2026-09-02" }],
+      limits: { maxCellTextLength: 3 },
+      writer: async (sheets) => {
+        captured = sheets;
+        return Buffer.from("PK truncated text");
+      },
+    });
+    expect((captured[0].data[1][0] as { value: unknown }).value).toBe("'=1");
+    expect(String((captured[0].data[1][0] as { value: unknown }).value)).toHaveLength(3);
   });
 
   it("拒绝路径型非法文件名，并清理普通非法字符", () => {
@@ -117,5 +144,17 @@ describe("DataRecipe Excel 导出", () => {
       limits: { timeoutMs: 5 },
       writer: async () => await new Promise((resolve) => setTimeout(() => resolve(Buffer.from("PK late")), 30)),
     })).rejects.toThrow(/导出超时/);
+  });
+
+  it("调用方只能收紧而不能放宽生产导出硬上限", async () => {
+    const input = fixtureInput();
+    await expect(generateDataRecipeExcel({
+      ...input,
+      limits: { maxRows: EXCEL_EXPORT_LIMITS.maxRows + 1 },
+    })).rejects.toThrow(/限制无效[\s\S]*maxRows/u);
+    await expect(generateDataRecipeExcel({
+      ...input,
+      limits: { timeoutMs: EXCEL_EXPORT_LIMITS.timeoutMs + 1 },
+    })).rejects.toThrow(/限制无效[\s\S]*timeoutMs/u);
   });
 });

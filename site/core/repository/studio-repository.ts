@@ -5,6 +5,7 @@ import {
   harnessTaskSummarySchema,
   type HarnessTaskSummary,
 } from "@/core/harness/contracts";
+import { edsWorkspaceSnapshotSchema, type EdsWorkspaceSnapshot } from "@/core/eds";
 import {
   recoverHarnessTasksAfterRefresh,
   type HarnessTaskClock,
@@ -16,9 +17,18 @@ import type {
   QueryExecutionRecord,
 } from "@/core/models";
 import { appSpecSchema, dataProductSchema, formatSchemaIssues, StudioValidationError } from "@/core/schemas";
+import { toProjectIsoDateTime } from "@/core/time/project-iso";
 
-export const STUDIO_STORAGE_VERSION = 2 as const;
+export const STUDIO_STORAGE_VERSION = 3 as const;
 export const STUDIO_STORAGE_KEY = "datacanvas-ai:studio:v1";
+export const STUDIO_BACKUP_FORMAT = "datacanvas-ai-studio-backup-v1" as const;
+export const STUDIO_BACKUP_MAX_BYTES = 5 * 1024 * 1024;
+
+function assertStudioSerializedSize(serialized: string, maxBytes: number, label: string): void {
+  if (serialized.length > maxBytes || new TextEncoder().encode(serialized).byteLength > maxBytes) {
+    throw new StudioValidationError(`${label}过大`, [`内容不得超过 ${maxBytes} 字节`]);
+  }
+}
 
 const auditRecordSchema: z.ZodType<ChangeSetAuditRecord> = z.object({
   id: z.string().min(1),
@@ -80,6 +90,7 @@ export interface StudioPersistedState {
   auditRecords: ChangeSetAuditRecord[];
   queryRecords: QueryExecutionRecord[];
   harnessTasks: HarnessTaskSummary[];
+  edsWorkspace: EdsWorkspaceSnapshot | null;
   savedAt: string;
 }
 
@@ -92,6 +103,7 @@ const persistedStateSchema: z.ZodType<StudioPersistedState> = z.object({
   auditRecords: z.array(auditRecordSchema).max(100),
   queryRecords: z.array(queryRecordSchema).max(100),
   harnessTasks: z.array(harnessTaskSummarySchema).max(20),
+  edsWorkspace: edsWorkspaceSnapshotSchema.nullable(),
   savedAt: z.iso.datetime(),
 }).strict();
 
@@ -99,6 +111,11 @@ export interface StudioRepository {
   load(): StudioPersistedState | null;
   save(state: StudioPersistedState): void;
   clear(): void;
+}
+
+export interface StudioSaveResult {
+  persisted: boolean;
+  notice: string | null;
 }
 
 export interface StorageLike {
@@ -125,6 +142,7 @@ const migrations: Record<number, (value: Record<string, unknown>) => Record<stri
     };
   },
   1: (value) => ({ ...value, version: 2, harnessTasks: value.harnessTasks ?? [] }),
+  2: (value) => ({ ...value, version: 3, edsWorkspace: value.edsWorkspace ?? null }),
 };
 
 export function migrateStudioState(value: unknown): unknown {
@@ -153,12 +171,78 @@ export function parseStudioPersistedState(value: unknown): StudioPersistedState 
   return result.data;
 }
 
+const studioBackupSchema = z.object({
+  format: z.literal(STUDIO_BACKUP_FORMAT),
+  exportedAt: z.iso.datetime(),
+  state: persistedStateSchema,
+}).strict();
+
+export function exportStudioBackup(state: StudioPersistedState, now = new Date()): string {
+  const exportedAt = toProjectIsoDateTime(now);
+  if (!exportedAt) {
+    throw new StudioValidationError("工作台备份时间无效", ["导出时间必须是有效 Date"]);
+  }
+  const serialized = JSON.stringify({
+    format: STUDIO_BACKUP_FORMAT,
+    exportedAt,
+    state: parseStudioPersistedState(state),
+  });
+  assertStudioSerializedSize(serialized, STUDIO_BACKUP_MAX_BYTES, "工作台备份");
+  return serialized;
+}
+
+export function importStudioBackup(serialized: string): StudioPersistedState {
+  assertStudioSerializedSize(serialized, STUDIO_BACKUP_MAX_BYTES, "工作台备份");
+  try {
+    return studioBackupSchema.parse(JSON.parse(serialized) as unknown).state;
+  } catch (error) {
+    if (error instanceof StudioValidationError) throw error;
+    throw new StudioValidationError("工作台备份校验失败", [error instanceof Error ? error.message : "备份不是有效 JSON"]);
+  }
+}
+
+export function restoreStudioBackup(repository: StudioRepository, serialized: string): StudioPersistedState {
+  const state = importStudioBackup(serialized);
+  repository.save(state);
+  return state;
+}
+
+export function saveStudioStateSafely(
+  repository: StudioRepository | null,
+  state: StudioPersistedState,
+): StudioSaveResult {
+  if (!repository) {
+    return {
+      persisted: false,
+      notice: "浏览器本地存储不可用，当前页面更改不会在刷新后保留。",
+    };
+  }
+  try {
+    repository.save(state);
+    return { persisted: true, notice: null };
+  } catch (error) {
+    return {
+      persisted: false,
+      notice: `本地保存失败，当前页面仍可继续使用，但刷新后可能丢失本次更改。${error instanceof Error ? ` ${error.message}` : ""}`,
+    };
+  }
+}
+
 export class LocalStorageStudioRepository implements StudioRepository {
-  constructor(private readonly storage: StorageLike, private readonly key = STUDIO_STORAGE_KEY) {}
+  constructor(
+    private readonly storage: StorageLike,
+    private readonly key = STUDIO_STORAGE_KEY,
+    private readonly maxBytes = STUDIO_BACKUP_MAX_BYTES,
+  ) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > STUDIO_BACKUP_MAX_BYTES) {
+      throw new Error(`本地工作台存储上限必须是 1–${STUDIO_BACKUP_MAX_BYTES} 的整数`);
+    }
+  }
 
   load(): StudioPersistedState | null {
     const serialized = this.storage.getItem(this.key);
     if (serialized === null) return null;
+    assertStudioSerializedSize(serialized, this.maxBytes, "本地工作台数据");
     try {
       return parseStudioPersistedState(JSON.parse(serialized) as unknown);
     } catch (error) {
@@ -169,7 +253,9 @@ export class LocalStorageStudioRepository implements StudioRepository {
 
   save(state: StudioPersistedState): void {
     const parsed = parseStudioPersistedState(state);
-    this.storage.setItem(this.key, JSON.stringify(parsed));
+    const serialized = JSON.stringify(parsed);
+    assertStudioSerializedSize(serialized, this.maxBytes, "本地工作台数据");
+    this.storage.setItem(this.key, serialized);
   }
 
   clear(): void {
@@ -192,6 +278,7 @@ export interface SafeStudioState {
   auditRecords: ChangeSetAuditRecord[];
   queryRecords: QueryExecutionRecord[];
   harnessTasks: HarnessTaskSummary[];
+  edsWorkspace: EdsWorkspaceSnapshot | null;
   notice: string | null;
   restored: boolean;
 }
@@ -199,6 +286,7 @@ export interface SafeStudioState {
 export function loadStudioStateSafely(
   repository: StudioRepository | null,
   fixture: DataProduct,
+  recoveryNow: () => Date = () => new Date(),
 ): SafeStudioState {
   const fallback = (): SafeStudioState => ({
     dataProduct: structuredClone(fixture),
@@ -206,6 +294,7 @@ export function loadStudioStateSafely(
     auditRecords: [],
     queryRecords: [],
     harnessTasks: [],
+    edsWorkspace: null,
     notice: null,
     restored: false,
   });
@@ -215,9 +304,23 @@ export function loadStudioStateSafely(
     if (!saved) return fallback();
     const execution = restoreExecutionState(saved.appSpec, saved.changeHistory, saved.appliedChangeSetIds);
     let recoverySequence = 0;
+    let recoveryTimestamp: number | null = null;
     const recoveryClock: HarnessTaskClock = {
-      now: () => new Date(),
-      id: () => `harness_recovery_${Date.now()}_${++recoverySequence}`,
+      now: () => {
+        const timestamp = recoveryNow();
+        const serialized = toProjectIsoDateTime(timestamp);
+        if (!serialized) {
+          throw new StudioValidationError("Harness 恢复时钟无效", ["恢复时钟必须返回有效 Date"]);
+        }
+        recoveryTimestamp = timestamp.getTime();
+        return new Date(serialized);
+      },
+      id: () => {
+        if (recoveryTimestamp === null) {
+          throw new StudioValidationError("Harness 恢复时钟无效", ["事件 ID 生成前缺少恢复时间"]);
+        }
+        return `harness_recovery_${recoveryTimestamp}_${++recoverySequence}`;
+      },
     };
     return {
       dataProduct: { ...saved.dataProduct, appSpec: execution.present },
@@ -225,6 +328,7 @@ export function loadStudioStateSafely(
       auditRecords: saved.auditRecords,
       queryRecords: saved.queryRecords,
       harnessTasks: recoverHarnessTasksAfterRefresh(saved.harnessTasks, recoveryClock),
+      edsWorkspace: saved.edsWorkspace,
       notice: "已恢复上次保存在此浏览器中的工作台状态。",
       restored: true,
     };
@@ -243,6 +347,7 @@ export function createStudioSnapshot(
   auditRecords: ChangeSetAuditRecord[],
   queryRecords: QueryExecutionRecord[],
   harnessTasks: HarnessTaskSummary[] = [],
+  edsWorkspace: EdsWorkspaceSnapshot | null = null,
 ): StudioPersistedState {
   return parseStudioPersistedState({
     version: STUDIO_STORAGE_VERSION,
@@ -253,19 +358,26 @@ export function createStudioSnapshot(
     auditRecords,
     queryRecords,
     harnessTasks,
+    edsWorkspace,
     savedAt: new Date().toISOString(),
   });
 }
 
 export function restoreDemoData(repository: StudioRepository | null, fixture: DataProduct): SafeStudioState {
-  repository?.clear();
+  let notice = "已恢复安全演示数据。";
+  try {
+    repository?.clear();
+  } catch (error) {
+    notice = `已恢复页面中的安全演示数据，但未能清除浏览器本地快照；下次打开时仍会执行安全校验。${error instanceof Error ? ` ${error.message}` : ""}`;
+  }
   return {
     dataProduct: structuredClone(fixture),
     execution: restoreExecutionState(fixture.appSpec, [], []),
     auditRecords: [],
     queryRecords: [],
     harnessTasks: [],
-    notice: "已恢复安全演示数据。",
+    edsWorkspace: null,
+    notice,
     restored: false,
   };
 }

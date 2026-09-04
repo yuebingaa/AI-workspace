@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import { getComponentDefinition } from "@/components/registry/component-registry";
 import type { AppPage, AppSpec, DataProduct } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
@@ -16,9 +17,11 @@ interface PageStructurePanelProps {
   activeDataSourceId: string;
   onOpenDataSource: (dataSourceId: string) => void;
   onUploadCsv: () => void;
+  onOpenEdsAnalysis: () => void;
+  edsAnalysisButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
-export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange, role, onRenamePage, activeDataSourceId, onOpenDataSource, onUploadCsv }: PageStructurePanelProps) {
+export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageChange, role, onRenamePage, activeDataSourceId, onOpenDataSource, onUploadCsv, onOpenEdsAnalysis, edsAnalysisButtonRef }: PageStructurePanelProps) {
   const activePage = appSpec.pages.find((page) => page.id === activePageId);
 
   return (
@@ -50,7 +53,7 @@ export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageC
         })}
       </div>
 
-      <div className="section-label data-source-section-head"><span>数据源</span><button type="button" onClick={onUploadCsv}>上传 CSV</button></div>
+      <div className="section-label data-source-section-head"><span>数据源</span><div><button ref={edsAnalysisButtonRef} type="button" onClick={onOpenEdsAnalysis}>EDS 分析</button><button type="button" onClick={onUploadCsv}>上传 CSV</button></div></div>
       <div className="data-source-card-list">
         {dataProduct.datasets.map((dataset) => (
           <div key={dataset.id} className={`data-card${activeDataSourceId === dataset.id ? " active" : ""}`} onClick={() => onOpenDataSource(dataset.id)}>

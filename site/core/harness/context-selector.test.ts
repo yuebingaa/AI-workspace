@@ -8,6 +8,7 @@ import {
   executeHarnessTool,
   harnessToolCatalog,
   harnessSystemPrompt,
+  resolveHarnessContextBudget,
   resolveHarnessPageDataSourceIds,
 } from "./index";
 import { demoFixtureResult } from "@/fixtures/demo-product";
@@ -175,6 +176,13 @@ describe("Harness 最小上下文选择器", () => {
     expect(task.error).toContain("模型输入");
     expect(task.counters.modelCallCount).toBe(0);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it("上下文预算只能收紧而不能放宽硬上限", () => {
+    expect(() => resolveHarnessContextBudget({ maxTotalPromptTokens: 8_001 }))
+      .toThrow(/上下文预算无效/);
+    expect(() => resolveHarnessContextBudget({ maxToolResultEntries: Number.MAX_SAFE_INTEGER + 1 }))
+      .toThrow(/上下文预算无效/);
   });
 
   it("简单只读任务使用较低调用和上下文预算", () => {

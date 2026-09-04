@@ -2,6 +2,7 @@ import type { AiPlanMetadata } from "@/core/ai/contracts";
 import type { HarnessExecutionPhase, HarnessTaskSummary } from "@/core/harness/contracts";
 import type { ChangeOperation, ChangeSet, ChangeSetAuditRecord } from "@/core/models";
 import { studioRoleLabels } from "@/core/permissions";
+import { ExcelDownloadButton } from "./ExcelDownloadButton";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
 export type AiRequestUiStatus = "idle" | "loading" | "success" | "blocked" | "error" | "cancelled" | "timeout";
@@ -100,7 +101,7 @@ export function AiBuilderAssistant({
   const affectedComponents = [...new Set(changeSet.operations.flatMap(operationTargets))];
   const needsAdmin = changeSet.operations.some((operation) => operation.type === "removeNode" || operation.type === "updatePage");
   const isLoading = requestStatus === "loading";
-  const showChangePlan = !harnessTask || Boolean(harnessTask.pendingChangeSet);
+  const showChangePlan = canPreview && (!harnessTask || Boolean(harnessTask.pendingChangeSet));
   const timing = harnessTask?.executionTiming;
   const displayedElapsedMs = timing?.activeElapsedMs ?? 0;
   const displayedRemainingMs = Math.max(0, (timing?.totalBudgetMs ?? 0) - displayedElapsedMs);
@@ -167,7 +168,7 @@ export function AiBuilderAssistant({
                   <b>{harnessTask.exportArtifact.fileName}</b>
                   <small>{harnessTask.exportArtifact.rowCount} 行 · {harnessTask.exportArtifact.fieldCount} 个字段 · {(harnessTask.exportArtifact.sizeBytes / 1024).toFixed(1)} KB</small>
                 </div>
-                <a href={harnessTask.exportArtifact.downloadUrl} download={harnessTask.exportArtifact.fileName}>下载 Excel</a>
+                <ExcelDownloadButton artifact={harnessTask.exportArtifact} label="下载 Excel" />
               </div>
             )}
             <ol className="harness-events">

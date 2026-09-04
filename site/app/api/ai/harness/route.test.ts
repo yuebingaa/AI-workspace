@@ -16,6 +16,14 @@ import {
 } from "@/core/evaluation/live/protocol";
 import { findLiveHarnessCase } from "@/core/evaluation/live/manifest";
 import { runLiveHarnessEvaluation } from "@/core/evaluation/live/harness-live-runner";
+import {
+  EDS_OVERVIEW_DATA_SOURCE_ID,
+  EDS_RULE_VERSION,
+  EDS_TEMPLATE_VERSION,
+  EDS_WORKSPACE_PAGE_ID,
+  installEdsWorkspaceInDataProduct,
+  type EdsWorkspaceSnapshot,
+} from "@/core/eds";
 import { POST } from "./route";
 
 function stream(text: string) {
@@ -32,6 +40,42 @@ describe("Harness 上传数据隐私门", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it("returns 408, cancels a stalled request body once, and skips the model", async () => {
+    const modelFetch = vi.fn<typeof fetch>();
+    const cancel = vi.fn();
+    const controller = new AbortController();
+    vi.stubGlobal("fetch", modelFetch);
+    const request = new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: new ReadableStream<Uint8Array>({ cancel }),
+      duplex: "half",
+      signal: controller.signal,
+    } as RequestInit & { duplex: "half" });
+
+    const responsePromise = POST(request);
+    controller.abort();
+    const response = await responsePromise;
+
+    expect(response.status).toBe(408);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(modelFetch).not.toHaveBeenCalled();
+  });
+
+  it("拒绝可绕过跨源预检的非 JSON 请求", async () => {
+    const modelFetch = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", modelFetch);
+    const response = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "{}",
+    }));
+
+    expect(response.status).toBe(415);
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(modelFetch).toHaveBeenCalledTimes(0);
   });
 
   function liveRequest(
@@ -349,5 +393,120 @@ describe("Harness 上传数据隐私门", () => {
     }));
 
     expect(response.status).toBe(410);
+  });
+
+  it("服务端仅凭受控 EDS 汇总重建 AI 运行数据，并拒绝缺少汇总的保留数据源", async () => {
+    if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+    const edsWorkspace: EdsWorkspaceSnapshot = {
+      version: 1,
+      generatedAt: "2026-09-04T03:30:00.000Z",
+      summary: {
+        date: "2026-08-25",
+        shift: "白班",
+        inputRows: 100,
+        matchedRows: 5,
+        issueCount: 14,
+        channelCount: 20,
+        totalOccurrences: 5,
+        totalMinutes: 8,
+      },
+      issueSummary: Array.from({ length: 14 }, (_, index) => ({
+        label: index === 0 ? "飞达工位飞达报警中" : `合成异常 ${index + 1}`,
+        count: index === 0 ? 5 : 0,
+        minutes: index === 0 ? 8 : 0,
+      })),
+      lineSummary: [{ label: "A5FNL01", count: 5, minutes: 8 }],
+      configuration: { templateVersion: EDS_TEMPLATE_VERSION, ruleVersion: EDS_RULE_VERSION },
+    };
+    const product = installEdsWorkspaceInDataProduct(demoFixtureResult.data.dataProduct, edsWorkspace);
+    const publicRequest = {
+      idempotencyKey: "request_eds_server_context_001",
+      instruction: "检查 EDS 分析字段和示例值，不要修改页面。",
+      pageId: EDS_WORKSPACE_PAGE_ID,
+      dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID,
+      appSpec: product.appSpec,
+      recipes: product.recipes,
+    };
+    const modelFetch = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", modelFetch);
+
+    const rejected = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(publicRequest),
+    }));
+    expect(rejected.status).toBe(400);
+    expect(modelFetch).not.toHaveBeenCalled();
+
+    const turns = [
+      { type: "callTool", message: "检查 EDS 总览。", toolCallId: "eds_dataset", name: "inspectDataset", arguments: { dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID } },
+      { type: "callTool", message: "检查最高异常。", toolCallId: "eds_fields", name: "inspectFields", arguments: { dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID, fields: ["top_line", "top_line_occurrences", "top_issue", "top_issue_minutes"] } },
+      { type: "complete", message: "EDS 派生汇总检查完成。" },
+    ];
+    let call = 0;
+    modelFetch.mockImplementation(async () => new Response(JSON.stringify({
+      model: "deepseek-chat",
+      choices: [{ message: { content: JSON.stringify(turns[call++]) } }],
+      usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubEnv("DEEPSEEK_API_KEY", "fixed-fake-key-for-eds-context-test");
+    vi.stubEnv("DEEPSEEK_MODEL", "deepseek-chat");
+
+    const accepted = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...publicRequest, idempotencyKey: "request_eds_server_context_002", edsWorkspace }),
+    }));
+    const body = await accepted.json() as { task: { state: string; counters: { toolCallCount: number } } };
+
+    expect(accepted.status).toBe(200);
+    expect(body.task, JSON.stringify(body)).toMatchObject({ state: "completed", counters: { toolCallCount: 2 } });
+    expect(modelFetch).toHaveBeenCalledTimes(3);
+    const outbound = modelFetch.mock.calls.map((invocation) => String(invocation[1]?.body)).join("\n");
+    expect(outbound).toContain("A5FNL01");
+    expect(outbound).toContain("飞达工位飞达报警中");
+    expect(outbound).toContain("top_line_occurrences");
+    expect(outbound).not.toContain("rowsByDataSourceId");
+  });
+
+  it("数据集在初次加载后被删除时，模型调用边界会再次拒绝", async () => {
+    if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+    vi.stubEnv("DEEPSEEK_API_KEY", "fixed-fake-key-for-revocation-test");
+    vi.stubEnv("DEEPSEEK_MODEL", "deepseek-chat");
+    const modelFetch = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", modelFetch);
+    let sequence = 0;
+    const uploaded = await parseCsvUpload({
+      stream: stream("region,value\n区域甲,1"),
+      originalFileName: "revoked-before-model.csv",
+      mimeType: "text/csv",
+      id: () => `c${String(++sequence).padStart(31, "0")}`,
+    });
+    const identity = resolveDemoRequestIdentity();
+    await datasetRepository.put(identity, uploaded);
+    const originalAssert = datasetRepository.assertAiAccessPolicies.bind(datasetRepository);
+    vi.spyOn(datasetRepository, "assertAiAccessPolicies").mockImplementationOnce((ownership, expected) => {
+      void datasetRepository.delete(ownership, uploaded.dataset.datasetId);
+      originalAssert(ownership, expected);
+    });
+    const fixture = demoFixtureResult.data.dataProduct;
+    const response = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        idempotencyKey: "request_revoked_before_model_001",
+        instruction: "检查上传数据集是否可用。",
+        pageId: "page_home",
+        dataSourceId: uploaded.dataset.datasetId,
+        appSpec: { ...fixture.appSpec, dataSources: [...fixture.appSpec.dataSources, uploaded.dataset.source] },
+        recipes: [...fixture.recipes, uploaded.dataset.recipe],
+      }),
+    }));
+    const payload = await response.json() as { task: { state: string; error?: string } };
+
+    expect(response.status).toBe(200);
+    expect(payload.task.state).toBe("failed");
+    expect(payload.task.error).toContain("已被删除、过期或更改");
+    expect(modelFetch).not.toHaveBeenCalled();
   });
 });

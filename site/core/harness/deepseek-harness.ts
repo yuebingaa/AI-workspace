@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { DEFAULT_DEEPSEEK_MODEL } from "@/core/ai/contracts";
-import { DEEPSEEK_CHAT_COMPLETIONS_URL } from "@/core/ai/server/deepseek-planner";
+import { DEEPSEEK_CHAT_COMPLETIONS_URL, MAX_DEEPSEEK_RESPONSE_BYTES } from "@/core/ai/server/deepseek-planner";
+import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 import type { LocalDataRuntime } from "@/core/models";
 import { StudioValidationError } from "@/core/schemas";
+import { toProjectIsoDateTime } from "@/core/time/project-iso";
 import {
   DEFAULT_HARNESS_LIMITS,
   harnessRequestSchema,
@@ -32,6 +34,7 @@ import { appendHarnessEvent, createHarnessTask, taskWithPendingChangeSet, type H
 import { executeHarnessTool, harnessToolCatalog, type HarnessExcelExporter } from "./tool-registry";
 
 export const DEFAULT_HARNESS_BOUNDS = DEFAULT_HARNESS_LIMITS;
+export const MAX_HARNESS_COMPLETION_TOKENS_PER_CALL = 2_000;
 
 export interface HarnessBounds {
   maxLoops: number;
@@ -58,6 +61,8 @@ export interface DeepSeekHarnessOptions {
   modelMaxCompletionTokens?: number;
   requireProviderUsage?: boolean;
   providerPromptTokenLimit?: number;
+  /** Synchronous authorization check run at the final boundary before every model request. */
+  authorizeModelCall?: () => void;
 }
 
 const providerResponseSchema = z.object({
@@ -86,6 +91,18 @@ export class HarnessIdempotencyConflictError extends Error {
   }
 }
 
+export const HARNESS_HARD_BOUNDS: HarnessBounds = {
+  ...DEFAULT_HARNESS_LIMITS,
+  totalExecutionTimeoutMs: 180_000,
+};
+
+export class HarnessIdempotencyCapacityError extends Error {
+  constructor() {
+    super("Harness 当前执行中的请求已达到容量上限，请稍后重试。");
+    this.name = "HarnessIdempotencyCapacityError";
+  }
+}
+
 export class DeepSeekProviderProtocolError extends Error {
   readonly code = "provider_model_mismatch" as const;
 
@@ -103,13 +120,28 @@ export class DeepSeekHarnessModel implements HarnessModel {
     maxCompletionTokens?: number;
     requireProviderUsage?: boolean;
     promptTokenLimit?: number;
-  }) {}
+  }) {
+    if (options.requireProviderUsage === false) {
+      throw new Error("DeepSeek token 用量校验不能关闭。");
+    }
+    const maxCompletionTokens = options.maxCompletionTokens ?? MAX_HARNESS_COMPLETION_TOKENS_PER_CALL;
+    if (
+      !Number.isSafeInteger(maxCompletionTokens)
+      || maxCompletionTokens < 1
+      || maxCompletionTokens > MAX_HARNESS_COMPLETION_TOKENS_PER_CALL
+    ) {
+      throw new Error(`DeepSeek 输出 token 上限必须是 1–${MAX_HARNESS_COMPLETION_TOKENS_PER_CALL} 的整数。`);
+    }
+    if (
+      options.promptTokenLimit !== undefined
+      && (!Number.isSafeInteger(options.promptTokenLimit) || options.promptTokenLimit < 1 || options.promptTokenLimit > 12_000)
+    ) {
+      throw new Error("DeepSeek 输入 token 上限必须是 1–12000 的整数。");
+    }
+  }
 
   async next(input: HarnessModelInput): Promise<HarnessModelResult> {
-    const maxCompletionTokens = this.options.maxCompletionTokens ?? 2_000;
-    if (!Number.isInteger(maxCompletionTokens) || maxCompletionTokens <= 0) {
-      throw new Error("DeepSeek 输出 token 上限配置无效。");
-    }
+    const maxCompletionTokens = this.options.maxCompletionTokens ?? MAX_HARNESS_COMPLETION_TOKENS_PER_CALL;
     const response = await (this.options.fetchImpl ?? fetch)(DEEPSEEK_CHAT_COMPLETIONS_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` },
@@ -133,12 +165,13 @@ export class DeepSeekHarnessModel implements HarnessModel {
       signal: input.signal,
     });
     if (!response.ok) throw new Error(response.status === 401 ? "DeepSeek 认证失败。" : response.status === 429 ? "DeepSeek 请求过于频繁。" : "DeepSeek 服务暂时不可用。");
-    const raw = await response.json().catch(() => null) as unknown;
+    const raw = await readBoundedUtf8Body(response, MAX_DEEPSEEK_RESPONSE_BYTES)
+      .then((text) => JSON.parse(text) as unknown)
+      .catch(() => null);
     const provider = providerResponseSchema.safeParse(raw);
     if (!provider.success) throw new Error("DeepSeek 返回了无法识别的响应。");
     if (
-      this.options.requireProviderUsage
-      && provider.data.model !== undefined
+      provider.data.model !== undefined
       && provider.data.model !== this.options.model
     ) {
       throw new DeepSeekProviderProtocolError();
@@ -158,26 +191,24 @@ export class DeepSeekHarnessModel implements HarnessModel {
       && (input.context.latestObservation !== undefined || input.context.lastObservation !== undefined);
     const turn = normalizeHarnessModelTurn(candidate, { readonlyTask, readonlyResultComplete });
     const rawUsage = provider.data.usage;
-    if (this.options.requireProviderUsage) {
-      const promptTokens = rawUsage?.prompt_tokens;
-      const completionTokens = rawUsage?.completion_tokens;
-      const totalTokens = rawUsage?.total_tokens;
-      const promptLimit = this.options.promptTokenLimit;
-      const invalidUsage = promptTokens === undefined
-        || completionTokens === undefined
-        || totalTokens === undefined
-        || totalTokens !== promptTokens + completionTokens
-        || completionTokens > maxCompletionTokens
-        || (promptLimit !== undefined && promptTokens > promptLimit);
-      if (invalidUsage) throw new Error("DeepSeek 未返回可信的 token 用量，Live 评测已安全停止。");
-    }
+    const promptTokens = rawUsage?.prompt_tokens;
+    const completionTokens = rawUsage?.completion_tokens;
+    const totalTokens = rawUsage?.total_tokens;
+    const promptLimit = this.options.promptTokenLimit ?? 12_000;
+    const invalidUsage = promptTokens === undefined
+      || completionTokens === undefined
+      || totalTokens === undefined
+      || totalTokens !== promptTokens + completionTokens
+      || completionTokens > maxCompletionTokens
+      || promptTokens > promptLimit;
+    if (invalidUsage) throw new Error("DeepSeek 未返回可信的 token 用量，已安全停止。");
     return {
       turn: turn.turn,
       model: this.options.model,
       usage: {
-        promptTokens: rawUsage?.prompt_tokens ?? 0,
-        completionTokens: rawUsage?.completion_tokens ?? 0,
-        totalTokens: rawUsage?.total_tokens ?? 0,
+        promptTokens,
+        completionTokens,
+        totalTokens,
       },
     };
   }
@@ -191,10 +222,50 @@ function defaultClock(): HarnessTaskClock {
   };
 }
 
+function resilientTaskClock(source: HarnessTaskClock): {
+  clock: HarnessTaskClock;
+  throwIfFault(): void;
+} {
+  let lastValidTime: number | null = null;
+  let fault: HarnessRequestError | null = null;
+  const clock: HarnessTaskClock = {
+    now: () => {
+      if (fault) return new Date(lastValidTime ?? 0);
+      try {
+        const candidate = source.now();
+        const serialized = toProjectIsoDateTime(candidate);
+        const timestamp = candidate instanceof Date ? candidate.getTime() : Number.NaN;
+        if (serialized && Number.isSafeInteger(timestamp)) {
+          lastValidTime = timestamp;
+          return new Date(timestamp);
+        }
+      } catch {
+        // A prior valid wall-clock value keeps error reporting available.
+      }
+      fault = new HarnessRequestError("Harness 时钟必须返回有效 Date。");
+      if (lastValidTime === null) {
+        const fallback = Date.now();
+        lastValidTime = toProjectIsoDateTime(new Date(fallback)) ? fallback : 0;
+      }
+      return new Date(lastValidTime);
+    },
+    id: () => source.id(),
+  };
+  return {
+    clock,
+    throwIfFault: () => {
+      if (fault) throw fault;
+    },
+  };
+}
+
 function resolvedBounds(input?: Partial<HarnessBounds>): HarnessBounds {
   const bounds = { ...DEFAULT_HARNESS_BOUNDS, ...input };
   for (const [name, value] of Object.entries(bounds)) {
-    if (!Number.isInteger(value) || value <= 0) throw new HarnessRequestError(`Harness 执行边界不合法：${name}`);
+    const maximum = HARNESS_HARD_BOUNDS[name as keyof HarnessBounds];
+    if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+      throw new HarnessRequestError(`Harness 执行边界不合法：${name} 必须是 1–${maximum} 的整数`);
+    }
   }
   return bounds;
 }
@@ -248,9 +319,11 @@ async function withPhaseTimeout<T>(
   const controller = new AbortController();
   let timedOut = false;
   const abortOuter = () => controller.abort(outerSignal.reason);
-  outerSignal.addEventListener("abort", abortOuter, { once: true });
+  if (outerSignal.aborted) abortOuter();
+  else outerSignal.addEventListener("abort", abortOuter, { once: true });
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
+    if (controller.signal.aborted) throw outerAbortError();
     return await Promise.race([
       factory(controller.signal),
       new Promise<T>((_, reject) => controller.signal.addEventListener("abort", () => reject(
@@ -277,8 +350,25 @@ export class DeepSeekHarness {
       maxToolCalls: Math.min(configuredBounds.maxToolCalls, taskProfile.maxToolCalls),
     };
     const contextBudget = resolveHarnessContextBudget(options.contextBudget, taskProfile.complexity);
-    const clock = options.clock ?? defaultClock();
-    const monotonicNow = options.monotonicNow ?? (() => performance.now());
+    const wallClock = resilientTaskClock(options.clock ?? defaultClock());
+    const clock = wallClock.clock;
+    const monotonicSource = options.monotonicNow ?? (() => performance.now());
+    const monotonicNow = () => {
+      let value: number;
+      try { value = monotonicSource(); } catch { throw new HarnessRequestError("Harness 单调时钟必须返回有限数值。"); }
+      if (!Number.isFinite(value)) throw new HarnessRequestError("Harness 单调时钟必须返回有限数值。");
+      return value;
+    };
+    const phaseDuration = (startedAt: number) => {
+      try {
+        const elapsed = monotonicNow() - startedAt;
+        const durationMs = Math.round(elapsed);
+        if (elapsed < 0 || !Number.isSafeInteger(durationMs) || durationMs < 0) throw new Error("invalid duration");
+        return { durationMs };
+      } catch {
+        return { durationMs: 0, error: new HarnessRequestError("Harness 单调时钟必须生成非负安全整数毫秒耗时。") };
+      }
+    };
     let modelDurationMs = 0;
     let toolDurationMs = 0;
     const observations: HarnessObservation[] = [];
@@ -335,9 +425,11 @@ export class DeepSeekHarness {
     let failureTerminationCode: HarnessTerminationCode = "executionFailed";
     const controller = new AbortController();
     const abortOuter = () => controller.abort(options.signal?.reason);
-    options.signal?.addEventListener("abort", abortOuter, { once: true });
+    if (options.signal?.aborted) abortOuter();
+    else options.signal?.addEventListener("abort", abortOuter, { once: true });
 
     try {
+      wallClock.throwIfFault();
       if (!modelClient) throw new Error("AI 服务尚未配置。");
       while (task.counters.loopCount < bounds.maxLoops) {
         if (controller.signal.aborted) throw abortError(controller.signal);
@@ -356,6 +448,7 @@ export class DeepSeekHarness {
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("blocked"),
           });
+          wallClock.throwIfFault();
           return task;
         }
         let tools = harnessToolCatalog({ names: selection.toolNames, editableNodes: selection.editableNodes, instruction: request.instruction, request });
@@ -428,17 +521,23 @@ export class DeepSeekHarness {
           },
           executionTiming: executionTiming("modelRequest"),
         });
+        wallClock.throwIfFault();
         const modelStarted = monotonicNow();
+        let modelCallDurationMs = 0;
         let modelResult: HarnessModelResult;
+        let modelError: unknown;
         try {
           modelResult = await withPhaseTimeout(
-            (signal) => modelClient.next({
-              tools,
-              context: selection.context,
-              estimatedInputChars: inputChars,
-              iteration,
-              signal,
-            }),
+            (signal) => {
+              options.authorizeModelCall?.();
+              return modelClient.next({
+                tools,
+                context: selection.context,
+                estimatedInputChars: inputChars,
+                iteration,
+                signal,
+              });
+            },
             modelBudgetMs,
             controller.signal,
             modelBudgetMs < bounds.modelRequestTimeoutMs
@@ -446,13 +545,16 @@ export class DeepSeekHarness {
               : `Harness 单次模型请求已超过 ${bounds.modelRequestTimeoutMs} ms 限制。`,
             () => abortError(controller.signal),
           );
-        } catch (modelError) {
-          if (modelError instanceof DeepSeekProviderProtocolError) failureTerminationCode = "protocolViolation";
-          throw modelError;
+        } catch (error) {
+          if (error instanceof DeepSeekProviderProtocolError) failureTerminationCode = "protocolViolation";
+          modelError = error;
+          throw error;
         } finally {
-          modelDurationMs += Math.max(0, monotonicNow() - modelStarted);
+          const measured = phaseDuration(modelStarted);
+          modelCallDurationMs = measured.durationMs;
+          modelDurationMs += modelCallDurationMs;
+          if (measured.error && modelError === undefined) throw measured.error;
         }
-        const modelCallDurationMs = Math.max(0, Math.round(monotonicNow() - modelStarted));
         const totalPromptTokens = previousPromptTokens + modelResult.usage.promptTokens;
         const requestUsage = task.contextUsage?.requests.map((entry) => entry.iteration === iteration
           ? { ...entry, promptTokens: modelResult.usage.promptTokens }
@@ -474,6 +576,7 @@ export class DeepSeekHarness {
           },
           executionTiming: executionTiming("planning"),
         });
+        wallClock.throwIfFault();
         if (totalPromptTokens > contextBudget.maxTotalPromptTokens) {
           failContextBudget("taskPromptTokens", `DeepSeek 实际累计输入 token 已超过 ${contextBudget.maxTotalPromptTokens} 限制，已停止后续工具和写操作。`);
         }
@@ -493,6 +596,7 @@ export class DeepSeekHarness {
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("completed"),
           });
+          wallClock.throwIfFault();
           return task;
         }
         if (turn.type === "blocked") {
@@ -513,6 +617,7 @@ export class DeepSeekHarness {
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("blocked"),
           });
+          wallClock.throwIfFault();
           return task;
         }
         const toolAction = turn;
@@ -538,6 +643,7 @@ export class DeepSeekHarness {
           counters: { ...task.counters, toolCallCount: task.counters.toolCallCount + 1 },
           executionTiming: executionTiming("toolExecution"),
         });
+        wallClock.throwIfFault();
         const toolStarted = monotonicNow();
         let result: Awaited<ReturnType<typeof executeHarnessTool>>;
         try {
@@ -560,7 +666,7 @@ export class DeepSeekHarness {
           );
         } catch (toolError) {
           failureTerminationCode = controller.signal.aborted ? "cancelled" : "toolExecutionFailed";
-          const failedDurationMs = Math.max(0, Math.round(monotonicNow() - toolStarted));
+          const failedDurationMs = phaseDuration(toolStarted).durationMs;
           toolDurationMs += failedDurationMs;
           task = appendHarnessEvent(task, {
             type: "toolCall",
@@ -576,7 +682,9 @@ export class DeepSeekHarness {
           }, clock, { executionTiming: executionTiming("failed") });
           throw toolError;
         }
-        const durationMs = Math.max(0, Math.round(monotonicNow() - toolStarted));
+        const measured = phaseDuration(toolStarted);
+        if (measured.error) throw measured.error;
+        const durationMs = measured.durationMs;
         toolDurationMs += durationMs;
         observations.push({ toolCallId: toolAction.toolCallId, toolName, summary: result.summary, data: result.data });
         task = appendHarnessEvent(task, {
@@ -586,6 +694,7 @@ export class DeepSeekHarness {
           toolCall: { id: toolAction.toolCallId, name: toolName, status: "success", durationMs },
           timing: eventTiming("planning", durationMs),
         }, clock, { executionTiming: executionTiming("planning") });
+        wallClock.throwIfFault();
         if (toolName === "inspectFields") {
           const blockingReason = requiredDataFieldsBlockingReason(request);
           if (blockingReason) {
@@ -600,6 +709,7 @@ export class DeepSeekHarness {
               totalDurationMs: elapsedMs(),
               executionTiming: executionTiming("blocked"),
             });
+            wallClock.throwIfFault();
             return task;
           }
         }
@@ -615,6 +725,7 @@ export class DeepSeekHarness {
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("awaitingConfirmation"),
           });
+          wallClock.throwIfFault();
           return task;
         }
         if (result.exportArtifact) {
@@ -629,6 +740,7 @@ export class DeepSeekHarness {
             totalDurationMs: elapsedMs(),
             executionTiming: executionTiming("completed"),
           });
+          wallClock.throwIfFault();
           return task;
         }
         task = appendHarnessEvent(task, {
@@ -637,6 +749,7 @@ export class DeepSeekHarness {
           message: "已接收工具观察结果，继续规划下一步。",
           timing: eventTiming("planning"),
         }, clock, { executionTiming: executionTiming("planning") });
+        wallClock.throwIfFault();
       }
       throw new Error("Harness 已达到最大循环次数。");
     } catch (error) {
@@ -671,26 +784,59 @@ interface IdempotencyEntry {
   fingerprint: string;
   task: Promise<HarnessTaskSummary>;
   createdAt: number;
+  settled: boolean;
 }
 
 export class HarnessIdempotencyStore {
   private readonly entries = new Map<string, IdempotencyEntry>();
 
-  constructor(private readonly maxEntries = 100, private readonly ttlMs = 10 * 60_000) {}
+  constructor(
+    private readonly maxEntries = 100,
+    private readonly ttlMs = 10 * 60_000,
+    private readonly clock: () => number = Date.now,
+  ) {
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || !Number.isSafeInteger(ttlMs) || ttlMs < 1) {
+      throw new HarnessRequestError("Harness 幂等存储边界不合法。");
+    }
+  }
+
+  private currentTime(): number {
+    let now: number;
+    try {
+      now = this.clock();
+    } catch {
+      throw new HarnessRequestError("Harness 幂等存储时钟必须返回非负安全整数毫秒时间戳。");
+    }
+    if (!Number.isSafeInteger(now) || now < 0) {
+      throw new HarnessRequestError("Harness 幂等存储时钟必须返回非负安全整数毫秒时间戳。");
+    }
+    return now;
+  }
 
   execute(request: HarnessRequest, factory: () => Promise<HarnessTaskSummary>, namespace = "default"): Promise<HarnessTaskSummary> {
     const fingerprint = JSON.stringify({ ...request, idempotencyKey: undefined });
-    const now = Date.now();
-    for (const [key, entry] of this.entries) if (now - entry.createdAt > this.ttlMs) this.entries.delete(key);
+    const now = this.currentTime();
+    for (const [key, entry] of this.entries) {
+      if (entry.settled && now - entry.createdAt >= this.ttlMs) this.entries.delete(key);
+    }
     const storageKey = `${namespace}:${request.idempotencyKey}`;
     const existing = this.entries.get(storageKey);
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new HarnessIdempotencyConflictError();
       return existing.task;
     }
+    if (this.entries.size >= this.maxEntries) {
+      const settledKey = [...this.entries].find(([, entry]) => entry.settled)?.[0];
+      if (!settledKey) throw new HarnessIdempotencyCapacityError();
+      this.entries.delete(settledKey);
+    }
     const task = factory();
-    this.entries.set(storageKey, { fingerprint, task, createdAt: now });
-    while (this.entries.size > this.maxEntries) this.entries.delete(this.entries.keys().next().value!);
+    const entry: IdempotencyEntry = { fingerprint, task, createdAt: now, settled: false };
+    this.entries.set(storageKey, entry);
+    void task.then(
+      () => { entry.settled = true; },
+      () => { entry.settled = true; },
+    );
     return task;
   }
 

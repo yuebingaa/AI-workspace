@@ -8,6 +8,7 @@ import type {
   RecipeFieldSchema,
 } from "@/core/models";
 import { StudioValidationError } from "@/core/schemas";
+import { EXCEL_EXPORT_MAX_FILE_BYTES } from "../contracts";
 
 export interface ExcelExportLimits {
   maxRows: number;
@@ -20,10 +21,21 @@ export interface ExcelExportLimits {
 export const EXCEL_EXPORT_LIMITS: ExcelExportLimits = {
   maxRows: 10_000,
   maxColumns: 100,
-  maxFileBytes: 10 * 1024 * 1024,
+  maxFileBytes: EXCEL_EXPORT_MAX_FILE_BYTES,
   maxCellTextLength: 32_000,
   timeoutMs: 8_000,
 } as const;
+
+function resolveExportLimits(overrides: Partial<ExcelExportLimits> | undefined): ExcelExportLimits {
+  const limits = { ...EXCEL_EXPORT_LIMITS, ...overrides };
+  for (const [name, maximum] of Object.entries(EXCEL_EXPORT_LIMITS) as Array<[keyof ExcelExportLimits, number]>) {
+    const value = limits[name];
+    if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+      throw new StudioValidationError("Excel 导出限制无效", [`${name} 必须是 1–${maximum} 的整数`]);
+    }
+  }
+  return limits;
+}
 
 export interface ExcelSheetDefinition {
   sheet: string;
@@ -70,14 +82,30 @@ export function sanitizeExcelFileName(requested: string | undefined, fallback: s
   return `${cleaned}.xlsx`;
 }
 
+function escapeExcelFormulaTextWithLimit(value: string, maxLength: number): string {
+  const safe = value.slice(0, maxLength);
+  return /^\s*[=+\-@]/u.test(safe) ? `'${safe.slice(0, maxLength - 1)}` : safe;
+}
+
 export function escapeExcelFormulaText(value: string): string {
-  const safe = value.slice(0, EXCEL_EXPORT_LIMITS.maxCellTextLength);
-  return /^\s*[=+\-@]/u.test(safe) ? `'${safe}` : safe;
+  return escapeExcelFormulaTextWithLimit(value, EXCEL_EXPORT_LIMITS.maxCellTextLength);
 }
 
 function parseDate(value: DataValue, field: string): Date {
   const text = String(value);
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(text);
+  const calendarPrefix = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/u.exec(text);
+  if (!calendarPrefix) {
+    throw new StudioValidationError("Excel 日期字段无效", [`字段“${field}”必须使用 YYYY-MM-DD 或其 ISO 时间戳格式`]);
+  }
+  const year = Number(calendarPrefix[1]);
+  const month = Number(calendarPrefix[2]);
+  const day = Number(calendarPrefix[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (month < 1 || month > 12 || day < 1 || day > (daysInMonth ?? 0)) {
+    throw new StudioValidationError("Excel 日期字段无效", [`字段“${field}”包含无法导出的日期值`]);
+  }
   const parsed = dateOnly
     ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
     : new Date(text);
@@ -87,7 +115,7 @@ function parseDate(value: DataValue, field: string): Date {
   return parsed;
 }
 
-function dataCell(value: DataValue | undefined, field: RecipeFieldSchema) {
+function dataCell(value: DataValue | undefined, field: RecipeFieldSchema, maxCellTextLength: number) {
   if (value === null || value === undefined) return null;
   if (field.type === "number") {
     if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -100,7 +128,7 @@ function dataCell(value: DataValue | undefined, field: RecipeFieldSchema) {
     return { value, type: Boolean };
   }
   if (field.type === "date") return { value: parseDate(value, field.name), type: Date, format: "yyyy-mm-dd" };
-  return { value: escapeExcelFormulaText(String(value)), type: String };
+  return { value: escapeExcelFormulaTextWithLimit(String(value), maxCellTextLength), type: String };
 }
 
 function filterSummary(recipe: DataRecipe): string {
@@ -116,16 +144,17 @@ function buildSheets(
   rows: DataRow[],
   fields: RecipeFieldSchema[],
   generatedAt: string,
+  maxCellTextLength: number,
 ): ExcelSheetDefinition[] {
   const header = fields.map((field) => ({
-    value: escapeExcelFormulaText(field.label || field.name),
+    value: escapeExcelFormulaTextWithLimit(field.label || field.name, maxCellTextLength),
     type: String,
     fontWeight: "bold" as const,
     backgroundColor: "#E8F3EF",
   }));
   const analysisData: SheetData = [
     header,
-    ...rows.map((row) => fields.map((field) => dataCell(row[field.name], field))),
+    ...rows.map((row) => fields.map((field) => dataCell(row[field.name], field, maxCellTextLength))),
   ];
   const explanationRows: Array<[string, string | number]> = [
     ["项目", "内容"],
@@ -138,10 +167,10 @@ function buildSheets(
     ["字段", fields.map((field) => `${field.label}(${field.name}:${field.type})`).join("、")],
   ];
   const explanationData: SheetData = explanationRows.map(([label, value], index) => [
-    { value: escapeExcelFormulaText(label), type: String, ...(index === 0 ? { fontWeight: "bold" as const, backgroundColor: "#E8F3EF" } : {}) },
+    { value: escapeExcelFormulaTextWithLimit(label, maxCellTextLength), type: String, ...(index === 0 ? { fontWeight: "bold" as const, backgroundColor: "#E8F3EF" } : {}) },
     typeof value === "number"
       ? { value, type: Number }
-      : { value: escapeExcelFormulaText(value), type: String, wrap: true, ...(index === 0 ? { fontWeight: "bold" as const, backgroundColor: "#E8F3EF" } : {}) },
+      : { value: escapeExcelFormulaTextWithLimit(value, maxCellTextLength), type: String, wrap: true, ...(index === 0 ? { fontWeight: "bold" as const, backgroundColor: "#E8F3EF" } : {}) },
   ]);
   return [
     { sheet: "分析结果", data: analysisData, columns: fields.map(() => ({ width: 20 })) },
@@ -164,7 +193,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 }
 
 export async function generateDataRecipeExcel(input: GenerateRecipeExcelInput): Promise<GeneratedRecipeExcel> {
-  const limits = { ...EXCEL_EXPORT_LIMITS, ...input.limits };
+  const limits = resolveExportLimits(input.limits);
   const execution = executeDataRecipe(input.recipe, input.source, input.rows);
   if (!execution.success) throw new StudioValidationError("Excel 配方执行失败", [execution.error]);
   if (execution.rows.length > limits.maxRows) {
@@ -177,7 +206,7 @@ export async function generateDataRecipeExcel(input: GenerateRecipeExcelInput): 
   const generatedAt = now.toISOString();
   const dateSuffix = generatedAt.slice(0, 10).replaceAll("-", "");
   const fileName = sanitizeExcelFileName(input.requestedFileName, `${input.recipe.name}_${dateSuffix}`);
-  const sheets = buildSheets(input.recipe, input.source, execution.rows, execution.fields, generatedAt);
+  const sheets = buildSheets(input.recipe, input.source, execution.rows, execution.fields, generatedAt, limits.maxCellTextLength);
   const writer = input.writer ?? (async (definitions) => writeXlsxFile(definitions).toBuffer());
   const buffer = await withTimeout(writer(sheets), limits.timeoutMs);
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new StudioValidationError("Excel 导出失败", ["生成器未返回有效文件"]);

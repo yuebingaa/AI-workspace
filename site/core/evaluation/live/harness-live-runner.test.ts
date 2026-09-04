@@ -17,10 +17,14 @@ import {
 } from "./contracts";
 import {
   LiveHarnessEvaluationError,
+  MAX_LIVE_HARNESS_REQUEST_TIMEOUT_MS,
+  MAX_LIVE_HARNESS_RESPONSE_BYTES,
+  createLiveServerResourceCleanup,
   findFreeLoopbackPort,
   runLiveHarnessEvaluation,
   safeRemoveSessionDirectory,
   stopOwnedChildProcess,
+  waitForLiveEvaluationServer,
   type LiveEvaluationServer,
   type LiveHarnessRunnerOptions,
 } from "./harness-live-runner";
@@ -185,6 +189,44 @@ function enabledOptions(overrides: LiveHarnessRunnerOptions = {}): LiveHarnessRu
 }
 
 describe("Live Harness HTTP Runner 安全基础设施", () => {
+  it("本地服务启动期限使用单调时钟并对回拨 fail-closed", async () => {
+    const child = { exitCode: null, signalCode: null } as ChildProcess;
+    const fetchImpl = vi.fn<typeof fetch>(async () => { throw new Error("not ready"); });
+    const sleep = vi.fn(async () => undefined);
+    let timeoutClockCalls = 0;
+    const timeoutClock = () => [100, 100, 30_100][timeoutClockCalls++] ?? 30_100;
+
+    await expect(waitForLiveEvaluationServer("http://127.0.0.1:43123", child, () => undefined, {
+      monotonicNow: timeoutClock,
+      fetchImpl,
+      sleep,
+    })).rejects.toMatchObject({ code: "server_start" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+
+    let rollbackClockCalls = 0;
+    await expect(waitForLiveEvaluationServer("http://127.0.0.1:43123", child, () => undefined, {
+      monotonicNow: () => rollbackClockCalls++ === 0 ? 100 : 99,
+      fetchImpl,
+      sleep,
+    })).rejects.toMatchObject({ code: "server_start" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("本地服务被 signal 终止后在探活和休眠前立即失败", async () => {
+    const child = { exitCode: null, signalCode: "SIGTERM" } as ChildProcess;
+    const fetchImpl = vi.fn<typeof fetch>();
+    const sleep = vi.fn(async () => undefined);
+
+    await expect(waitForLiveEvaluationServer("http://127.0.0.1:43123", child, () => undefined, {
+      monotonicNow: () => 100,
+      fetchImpl,
+      sleep,
+    })).rejects.toMatchObject({ code: "server_start" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("缺少 Runner 显式开关时不会启动服务或发送请求，即使存在虚假密钥", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const server = fakeServer();
@@ -203,10 +245,13 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
     };
     const defaultConfig = await readFile(join(process.cwd(), "vitest.config.ts"), "utf8");
     const liveConfig = await readFile(join(process.cwd(), "vitest.live.config.ts"), "utf8");
-    expect(packageJson.scripts.test).toBe("vitest run");
+    const offlineRunner = await readFile(join(process.cwd(), "scripts/run-offline-tests.mjs"), "utf8");
+    expect(packageJson.scripts.test).toBe("node scripts/run-offline-tests.mjs");
+    expect(packageJson.scripts.test).not.toContain("live");
+    expect(offlineRunner).not.toContain("vitest.live");
     expect(packageJson.scripts["test:eval"]).not.toContain("live");
     expect(packageJson.scripts["test:eval:live"]).toContain("vitest.live.config.ts");
-    expect(defaultConfig).toContain('include: ["**/*.test.ts"]');
+    expect(defaultConfig).toContain('include: ["**/*.test.ts", "**/*.test.tsx"]');
     expect(liveConfig).toContain("envDir: false");
     expect(liveConfig).toContain('include: ["core/evaluation/live/**/*.live.ts"]');
     expect(liveConfig).toContain("testTimeout: 240_000");
@@ -230,6 +275,35 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
       maxActiveElapsedMs: 180_000,
       maxRetriesPerCase: 0,
     });
+  });
+
+  it("拒绝放宽固定 Live 预算或篡改同 ID 用例内容，且不启动服务", async () => {
+    const server = fakeServer();
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(runLiveHarnessEvaluation(enabledOptions({
+      serverFactory: server.factory,
+      fetchImpl,
+      budget: { maxModelCalls: LIVE_HARNESS_GLOBAL_BUDGET.maxModelCalls + 1 },
+    }))).rejects.toMatchObject({ code: "global_budget" });
+
+    const changedCases = structuredClone(liveHarnessSmokeCases);
+    changedCases[0].limits.maxModelCalls += 1;
+    await expect(runLiveHarnessEvaluation(enabledOptions({ serverFactory: server.factory, fetchImpl, cases: changedCases })))
+      .rejects.toMatchObject({ code: "manifest" });
+    expect(server.factory).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("拒绝放宽 Live 单次 HTTP 等待且不启动服务", async () => {
+    const server = fakeServer();
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(runLiveHarnessEvaluation(enabledOptions({
+      serverFactory: server.factory,
+      fetchImpl,
+      requestTimeoutMs: MAX_LIVE_HARNESS_REQUEST_TIMEOUT_MS + 1,
+    }))).rejects.toMatchObject({ code: "time_budget" });
+    expect(server.factory).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("仅允许无凭据的 HTTP loopback 地址", () => {
@@ -266,6 +340,40 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
       fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
     }))).rejects.toMatchObject({ code: "http_500" });
     expect(failed.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("清理失败不覆盖既有失败，成功路径则映射为受控 cleanup", async () => {
+    const failingStop = vi.fn(async () => { throw new Error("private cleanup detail"); });
+    const externalFactory = vi.fn(async (): Promise<LiveEvaluationServer> => ({
+      baseUrl: "http://192.168.1.20:43123",
+      stop: failingStop,
+    }));
+    await expect(runLiveHarnessEvaluation(enabledOptions({
+      serverFactory: externalFactory,
+      fetchImpl: vi.fn<typeof fetch>(),
+    }))).rejects.toMatchObject({ code: "loopback" });
+
+    const failedFactory = vi.fn(async (): Promise<LiveEvaluationServer> => ({
+      baseUrl: "http://127.0.0.1:43123",
+      stop: failingStop,
+    }));
+    await expect(runLiveHarnessEvaluation(enabledOptions({
+      serverFactory: failedFactory,
+      fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
+    }))).rejects.toMatchObject({
+      code: "http_500",
+      report: { terminationCode: "http_500" },
+    });
+
+    const successFactory = vi.fn(async (): Promise<LiveEvaluationServer> => ({
+      baseUrl: "http://127.0.0.1:43123",
+      stop: failingStop,
+    }));
+    await expect(runLiveHarnessEvaluation(enabledOptions({
+      serverFactory: successFactory,
+      fetchImpl: successfulHttpFetch(),
+    }))).rejects.toMatchObject({ code: "cleanup" });
+    expect(failingStop).toHaveBeenCalledTimes(3);
   });
 
   it("第二个用例失败后不发送第三个请求，并保留受控的前两步失败摘要", async () => {
@@ -380,11 +488,39 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
     expect(server.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("超大 Live Harness 响应在 Schema 校验前失败且不重试", async () => {
+    const server = fakeServer();
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("{}", {
+      status: 200,
+      headers: { "content-length": String(MAX_LIVE_HARNESS_RESPONSE_BYTES + 1) },
+    }));
+    await expect(runLiveHarnessEvaluation(enabledOptions({ serverFactory: server.factory, fetchImpl })))
+      .rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(server.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("请求超时后不重试并清理服务", async () => {
     const server = fakeServer();
     const fetchImpl = vi.fn<typeof fetch>((_input, init) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
     }));
+    await expect(runLiveHarnessEvaluation(enabledOptions({
+      serverFactory: server.factory,
+      fetchImpl,
+      requestTimeoutMs: 1,
+    }))).rejects.toMatchObject({ code: "timeout" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(server.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("Live 请求超时覆盖收到响应头后的正文读取", async () => {
+    const server = fakeServer();
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")), { once: true });
+      },
+    })));
     await expect(runLiveHarnessEvaluation(enabledOptions({
       serverFactory: server.factory,
       fetchImpl,
@@ -552,6 +688,36 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
     expect(existsSync(directory)).toBe(true);
     await safeRemoveSessionDirectory(directory);
     expect(existsSync(directory)).toBe(false);
+  });
+
+  it("Live 双资源清理独立尝试、只重试失败资源且完成后幂等", async () => {
+    const child = { exitCode: null, signalCode: null } as ChildProcess;
+    const stopChild = vi.fn()
+      .mockRejectedValueOnce(new Error("private child cleanup failure"))
+      .mockResolvedValue(undefined);
+    const removeDirectory = vi.fn(async () => undefined);
+    const cleanup = createLiveServerResourceCleanup(child, "C:\\synthetic-session", { stopChild, removeDirectory });
+
+    await expect(cleanup()).rejects.toMatchObject({ code: "cleanup" });
+    expect(stopChild).toHaveBeenCalledTimes(1);
+    expect(removeDirectory).toHaveBeenCalledTimes(1);
+    await expect(cleanup()).resolves.toBeUndefined();
+    await expect(cleanup()).resolves.toBeUndefined();
+    expect(stopChild).toHaveBeenCalledTimes(2);
+    expect(removeDirectory).toHaveBeenCalledTimes(1);
+
+    const secondStopChild = vi.fn(async () => undefined);
+    const secondRemoveDirectory = vi.fn()
+      .mockRejectedValueOnce(new Error("private directory cleanup failure"))
+      .mockResolvedValue(undefined);
+    const secondCleanup = createLiveServerResourceCleanup(child, "C:\\second-session", {
+      stopChild: secondStopChild,
+      removeDirectory: secondRemoveDirectory,
+    });
+    await expect(secondCleanup()).rejects.toMatchObject({ code: "cleanup" });
+    await expect(secondCleanup()).resolves.toBeUndefined();
+    expect(secondStopChild).toHaveBeenCalledTimes(1);
+    expect(secondRemoveDirectory).toHaveBeenCalledTimes(2);
   });
 
   it("正常清理真实 ChildProcess 后端口可重新绑定", async () => {

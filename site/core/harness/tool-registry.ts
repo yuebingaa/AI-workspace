@@ -124,7 +124,7 @@ const inspectFields = defineTool({
             : [];
         return { ...analysis, samples, sensitiveCategories: sensitive };
       });
-    return { summary: `已分析 ${analyses.length} 个字段，输入 ${rows.length} 行。`, data: { fields: analyses } };
+    return { summary: `已分析 ${analyses.length} 个字段，输入 ${rows.length} 行。`, data: { dataSourceId, fields: analyses } };
   },
 });
 

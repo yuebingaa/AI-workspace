@@ -66,7 +66,11 @@ export const dataBindingSchema: z.ZodType<DataBinding> = z.object({
   limit: z.number().int().min(1).max(500),
   format: dataFormatSchema,
   columns: z.array(dataColumnBindingSchema).min(1).max(20).optional(),
-}).strict();
+}).strict().superRefine((binding, context) => {
+  if (binding.columns && new Set(binding.columns.map((column) => column.field)).size !== binding.columns.length) {
+    context.addIssue({ code: "custom", path: ["columns"], message: "表格列字段不能重复" });
+  }
+});
 
 export const dataSourceFieldSchema: z.ZodType<DataSourceField> = z.object({
   name: idSchema,

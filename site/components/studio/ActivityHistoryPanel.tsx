@@ -76,6 +76,10 @@ export function restoreDialogTrigger(element: HTMLElement | null): void {
   if (element?.isConnected) element.focus();
 }
 
+export function restoreDialogTriggerUnlessOpen(element: HTMLElement | null, dialogOpen: boolean): void {
+  if (!dialogOpen) restoreDialogTrigger(element);
+}
+
 function formatDuration(durationMs: number | undefined): string {
   if (durationMs === undefined) return "—";
   if (durationMs < 1_000) return `${durationMs}ms`;

@@ -89,7 +89,7 @@ export function CsvUploadDialog({ onUploaded, onClose }: CsvUploadDialogProps) {
         <ul className="csv-upload-limits">
           <li>最大 10 MiB、50,000 行、100 列</li>
           <li>单元格文本最多 20,000 字符</li>
-          <li>数据仅保留 30 分钟，服务重启后失效</li>
+          <li>最多保留 30 分钟；未启用本地持久化时重启失效</li>
         </ul>
       </section>
     </div>

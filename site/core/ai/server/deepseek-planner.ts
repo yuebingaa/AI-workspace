@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { validateChangeSetAgainstAppSpec } from "@/core/changesets";
 import { StudioValidationError } from "@/core/schemas";
+import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 import {
   aiPlanRequestSchema,
   DEFAULT_DEEPSEEK_MODEL,
@@ -22,6 +23,11 @@ import { buildPlannerContext, DEEPSEEK_CHANGESET_SYSTEM_PROMPT } from "../planne
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 export const DEEPSEEK_CHAT_COMPLETIONS_URL = `${DEEPSEEK_BASE_URL}/chat/completions`;
 export const DEFAULT_DEEPSEEK_TIMEOUT_MS = 20_000;
+export const MAX_DEEPSEEK_RESPONSE_BYTES = 512 * 1024;
+export const DEEPSEEK_PLANNER_TOKEN_BUDGET = {
+  maxPromptTokens: 12_000,
+  maxCompletionTokens: 3_000,
+} as const;
 
 export type AiPlannerErrorCode =
   | "not_configured"
@@ -106,12 +112,33 @@ function addUsage(left: AiTokenUsage, right: AiTokenUsage): AiTokenUsage {
   };
 }
 
-function usageFromProvider(value: z.infer<typeof deepSeekUsageSchema> | undefined): AiTokenUsage {
-  return {
-    promptTokens: value?.prompt_tokens ?? 0,
-    completionTokens: value?.completion_tokens ?? 0,
-    totalTokens: value?.total_tokens ?? 0,
-  };
+function usageFromProvider(
+  value: z.infer<typeof deepSeekUsageSchema> | undefined,
+  requestedCompletionTokens: number,
+): AiTokenUsage {
+  const promptTokens = value?.prompt_tokens;
+  const completionTokens = value?.completion_tokens;
+  const totalTokens = value?.total_tokens;
+  if (
+    promptTokens === undefined
+    || completionTokens === undefined
+    || totalTokens === undefined
+    || totalTokens !== promptTokens + completionTokens
+    || promptTokens > DEEPSEEK_PLANNER_TOKEN_BUDGET.maxPromptTokens
+    || completionTokens > requestedCompletionTokens
+  ) {
+    throw new AiPlannerError("service_unavailable", "DeepSeek 未返回可信的 token 用量，已安全停止。", 503, false);
+  }
+  return { promptTokens, completionTokens, totalTokens };
+}
+
+function assertPlannerUsageBudget(usage: AiTokenUsage): void {
+  if (
+    usage.promptTokens > DEEPSEEK_PLANNER_TOKEN_BUDGET.maxPromptTokens
+    || usage.completionTokens > DEEPSEEK_PLANNER_TOKEN_BUDGET.maxCompletionTokens
+  ) {
+    throw new AiPlannerError("service_unavailable", "DeepSeek token 用量已达到本次规划硬上限，已安全停止。", 503, false);
+  }
 }
 
 function mapUpstreamStatus(status: number): AiPlannerError {
@@ -129,7 +156,15 @@ async function requestJsonObject(
   apiKey: string,
   model: string,
   options: DeepSeekPlannerOptions,
+  maxCompletionTokens: number = DEEPSEEK_PLANNER_TOKEN_BUDGET.maxCompletionTokens,
 ): Promise<CompletionResult> {
+  if (options.signal?.aborted) {
+    throw new AiPlannerError("cancelled", "AI 请求已取消。", 408, true);
+  }
+  const timeoutMs = options.timeoutMs ?? DEFAULT_DEEPSEEK_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > DEFAULT_DEEPSEEK_TIMEOUT_MS) {
+    throw new AiPlannerError("invalid_request", `DeepSeek 单次超时必须是 1–${DEFAULT_DEEPSEEK_TIMEOUT_MS} 毫秒的整数。`, 400, false);
+  }
   const controller = new AbortController();
   let timedOut = false;
   const abortFromCaller = () => controller.abort(options.signal?.reason);
@@ -137,7 +172,7 @@ async function requestJsonObject(
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, options.timeoutMs ?? DEFAULT_DEEPSEEK_TIMEOUT_MS);
+  }, timeoutMs);
 
   try {
     const response = await (options.fetchImpl ?? fetch)(DEEPSEEK_CHAT_COMPLETIONS_URL, {
@@ -152,12 +187,14 @@ async function requestJsonObject(
         response_format: { type: "json_object" },
         stream: false,
         temperature: 0.1,
-        max_tokens: 3_000,
+        max_tokens: maxCompletionTokens,
       }),
       signal: controller.signal,
     });
     if (!response.ok) throw mapUpstreamStatus(response.status);
-    const providerBody = await response.json().catch(() => null) as unknown;
+    const providerBody = await readBoundedUtf8Body(response, MAX_DEEPSEEK_RESPONSE_BYTES)
+      .then((text) => JSON.parse(text) as unknown)
+      .catch(() => null);
     const parsed = deepSeekChatResponseSchema.safeParse(providerBody);
     if (!parsed.success) {
       throw new AiPlannerError("service_unavailable", "DeepSeek 返回了无法识别的响应。", 503, true);
@@ -167,7 +204,7 @@ async function requestJsonObject(
     return {
       content,
       model: parsed.data.model ?? model,
-      usage: usageFromProvider(parsed.data.usage),
+      usage: usageFromProvider(parsed.data.usage, maxCompletionTokens),
     };
   } catch (error) {
     if (error instanceof AiPlannerError) throw error;
@@ -249,15 +286,43 @@ function metadata(
   usage: AiTokenUsage,
   repairAttempted: boolean,
   validationIssues?: SanitizedAiValidationIssue[],
+  preservePrimaryError = false,
 ): AiPlanMetadata {
   return {
     model,
-    durationMs: Math.max(0, Math.round(clock() - startedAt)),
+    durationMs: plannerDurationMs(startedAt, clock, preservePrimaryError),
     usage,
     repairAttempted,
     transport: "chat_json_object",
     ...(validationIssues ? { validationIssues } : {}),
   };
+}
+
+function readPlannerClock(clock: () => number): number {
+  let value: number;
+  try {
+    value = clock();
+  } catch {
+    throw new AiPlannerError("service_unavailable", "AI 规划计时时钟必须返回安全整数毫秒时间戳。", 503, false);
+  }
+  if (!Number.isSafeInteger(value)) {
+    throw new AiPlannerError("service_unavailable", "AI 规划计时时钟必须返回安全整数毫秒时间戳。", 503, false);
+  }
+  return value;
+}
+
+function plannerDurationMs(startedAt: number, clock: () => number, preservePrimaryError: boolean): number {
+  try {
+    const elapsed = readPlannerClock(clock) - startedAt;
+    const durationMs = Math.round(elapsed);
+    if (elapsed < 0 || !Number.isSafeInteger(durationMs) || durationMs < 0) {
+      throw new AiPlannerError("service_unavailable", "AI 规划计时时钟无法生成非负安全整数毫秒耗时。", 503, false);
+    }
+    return durationMs;
+  } catch (error) {
+    if (preservePrimaryError) return 0;
+    throw error;
+  }
 }
 
 export async function planChangeSetWithDeepSeek(
@@ -277,7 +342,7 @@ export async function planChangeSetWithDeepSeek(
 
   const model = options.model?.trim() || DEFAULT_DEEPSEEK_MODEL;
   const clock = options.clock ?? Date.now;
-  const startedAt = clock();
+  const startedAt = readPlannerClock(clock);
   const idFactory = options.idFactory ?? (() => crypto.randomUUID().replaceAll("-", ""));
   const outputSchema = buildModelPlanJsonSchema(request);
   const context = buildPlannerContext(request);
@@ -288,6 +353,14 @@ export async function planChangeSetWithDeepSeek(
 
   const first = await requestJsonObject(initialMessages, apiKey, model, options);
   let usage = addUsage(emptyUsage(), first.usage);
+  try {
+    assertPlannerUsageBudget(usage);
+  } catch (error) {
+    if (error instanceof AiPlannerError) {
+      throw new AiPlannerError(error.code, error.message, error.status, error.retryable, metadata(first.model, startedAt, clock, usage, false, undefined, true));
+    }
+    throw error;
+  }
 
   try {
     const plan = parseAndCompileCandidate(first.content, request, startedAt, idFactory);
@@ -299,15 +372,31 @@ export async function planChangeSetWithDeepSeek(
         "AI 未返回有效 JSON，未继续重试。请调整指令后再试。",
         422,
         true,
-        metadata(first.model, startedAt, clock, usage, false, error.issues),
+        metadata(first.model, startedAt, clock, usage, false, error.issues, true),
       );
     }
     if (!(error instanceof CandidateValidationError)) throw error;
     const firstIssues = error.issues;
+    const remainingCompletionTokens = DEEPSEEK_PLANNER_TOKEN_BUDGET.maxCompletionTokens - usage.completionTokens;
+    if (remainingCompletionTokens < 1) {
+      throw new AiPlannerError(
+        "invalid_output",
+        "AI 首次输出已用尽 completion token 预算，未继续修复。",
+        422,
+        false,
+        metadata(first.model, startedAt, clock, usage, false, firstIssues, true),
+      );
+    }
 
     let repair: CompletionResult;
     try {
-      repair = await requestJsonObject(repairMessages(request, outputSchema, firstIssues), apiKey, model, options);
+      repair = await requestJsonObject(
+        repairMessages(request, outputSchema, firstIssues),
+        apiKey,
+        model,
+        options,
+        remainingCompletionTokens,
+      );
     } catch (repairRequestError) {
       if (repairRequestError instanceof AiPlannerError) {
         throw new AiPlannerError(
@@ -315,16 +404,31 @@ export async function planChangeSetWithDeepSeek(
           repairRequestError.message,
           repairRequestError.status,
           repairRequestError.retryable,
-          metadata(first.model, startedAt, clock, usage, true, firstIssues),
+          metadata(first.model, startedAt, clock, usage, true, firstIssues, true),
         );
       }
       throw repairRequestError;
     }
     usage = addUsage(usage, repair.usage);
     try {
+      assertPlannerUsageBudget(usage);
+    } catch (error) {
+      if (error instanceof AiPlannerError) {
+        throw new AiPlannerError(
+          error.code,
+          error.message,
+          error.status,
+          error.retryable,
+          metadata(repair.model, startedAt, clock, usage, true, firstIssues, true),
+        );
+      }
+      throw error;
+    }
+    try {
       const plan = parseAndCompileCandidate(repair.content, request, startedAt, idFactory);
       return { ...plan, metadata: metadata(repair.model, startedAt, clock, usage, true, firstIssues) };
     } catch (repairError) {
+      if (repairError instanceof AiPlannerError) throw repairError;
       const finalIssues = repairError instanceof CandidateValidationError || repairError instanceof UnparseableCandidateError
         ? repairError.issues
         : firstIssues;
@@ -333,7 +437,7 @@ export async function planChangeSetWithDeepSeek(
         "AI 在一次受控修复后仍未生成合法变更操作，请调整指令后重试。",
         422,
         true,
-        metadata(repair.model, startedAt, clock, usage, true, finalIssues),
+        metadata(repair.model, startedAt, clock, usage, true, finalIssues, true),
       );
     }
   }

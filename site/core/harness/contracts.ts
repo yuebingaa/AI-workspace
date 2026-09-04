@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ChangeSet, DataRecipe } from "@/core/models";
 import { excelExportArtifactSchema, type ExcelExportArtifact } from "@/core/exports/contracts";
 import { appSpecSchema, changeSetSchema, dataRecipeSchema } from "@/core/schemas";
+import { edsWorkspaceSnapshotSchema } from "@/core/eds";
 
 export const MAX_HARNESS_INSTRUCTION_LENGTH = 1_000;
 export const MAX_HARNESS_REQUEST_BYTES = 180_000;
@@ -184,6 +185,7 @@ const harnessPublicRequestShape = {
   dataSourceId: z.string().min(1).max(160).optional(),
   appSpec: appSpecSchema,
   recipes: z.array(dataRecipeSchema).max(20),
+  edsWorkspace: edsWorkspaceSnapshotSchema.optional(),
   retryOfTaskId: z.string().min(1).max(160).optional(),
 } as const;
 

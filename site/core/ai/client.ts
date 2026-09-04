@@ -4,6 +4,10 @@ import {
   type AiPlanPublicRequest,
   type AiPlanSuccess,
 } from "./contracts";
+import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+
+export const MAX_AI_PLAN_RESPONSE_BYTES = 1024 * 1024;
+export const AI_PLAN_CLIENT_TIMEOUT_MS = 30_000;
 
 export type AiPlanClientErrorCode = "cancelled" | "timeout" | "invalid_response" | "service_error";
 
@@ -29,6 +33,13 @@ export async function requestAiPlan(
   payload: AiPlanPublicRequest,
   options: AiPlanClientOptions = {},
 ): Promise<AiPlanSuccess> {
+  if (options.signal?.aborted) {
+    throw new AiPlanClientError("cancelled", "已取消本次 AI 请求。", true);
+  }
+  const timeoutMs = options.timeoutMs ?? AI_PLAN_CLIENT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > AI_PLAN_CLIENT_TIMEOUT_MS) {
+    throw new AiPlanClientError("service_error", "AI 请求超时配置无效。", false);
+  }
   const fetchImpl = options.fetchImpl ?? fetch;
   const controller = new AbortController();
   let timedOut = false;
@@ -37,7 +48,7 @@ export async function requestAiPlan(
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, options.timeoutMs ?? 30_000);
+  }, timeoutMs);
 
   try {
     const response = await fetchImpl("/api/ai/plan", {
@@ -46,7 +57,12 @@ export async function requestAiPlan(
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    const body = await response.json().catch(() => null) as unknown;
+    let body: unknown = null;
+    try {
+      body = JSON.parse(await readBoundedUtf8Body(response, MAX_AI_PLAN_RESPONSE_BYTES)) as unknown;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+    }
     if (!response.ok) {
       const parsedError = aiPlanErrorPayloadSchema.safeParse(body);
       throw new AiPlanClientError(

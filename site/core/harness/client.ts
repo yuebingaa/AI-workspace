@@ -4,6 +4,9 @@ import {
   type HarnessPublicRequest,
   type HarnessResponse,
 } from "./contracts";
+import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+
+export const MAX_HARNESS_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export class HarnessClientError extends Error {
   constructor(
@@ -26,11 +29,18 @@ export async function requestHarnessTask(
   payload: HarnessPublicRequest,
   options: HarnessClientOptions = {},
 ): Promise<HarnessResponse> {
+  if (options.signal?.aborted) {
+    throw new HarnessClientError("cancelled", "Harness 任务已取消。", true);
+  }
+  const timeoutMs = options.timeoutMs ?? HARNESS_CLIENT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > HARNESS_CLIENT_TIMEOUT_MS) {
+    throw new HarnessClientError("service_error", "Harness 请求超时配置无效。", false);
+  }
   const controller = new AbortController();
   let timedOut = false;
   const abortOuter = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", abortOuter, { once: true });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? HARNESS_CLIENT_TIMEOUT_MS);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     const response = await (options.fetchImpl ?? fetch)("/api/ai/harness", {
       method: "POST",
@@ -38,7 +48,12 @@ export async function requestHarnessTask(
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    const raw = await response.json().catch(() => null) as unknown;
+    let raw: unknown = null;
+    try {
+      raw = JSON.parse(await readBoundedUtf8Body(response, MAX_HARNESS_RESPONSE_BYTES)) as unknown;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+    }
     if (!response.ok) {
       const message = raw && typeof raw === "object" && "error" in raw && raw.error && typeof raw.error === "object" && "message" in raw.error && typeof raw.error.message === "string"
         ? raw.error.message

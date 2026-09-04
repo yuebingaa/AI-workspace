@@ -9,6 +9,7 @@ import { demoFixtureResult } from "@/fixtures/demo-product";
 import type { AiPlanRequest } from "../contracts";
 import {
   DEEPSEEK_CHAT_COMPLETIONS_URL,
+  MAX_DEEPSEEK_RESPONSE_BYTES,
   planChangeSetWithDeepSeek,
 } from "./deepseek-planner";
 
@@ -105,6 +106,79 @@ describe("DeepSeek 结构化 ChangeSet 规划器", () => {
     expect(JSON.stringify(result)).not.toContain("reasoning_content");
   });
 
+  it("Planner 时钟失效时不覆盖既有规划错误或返回非法耗时", async () => {
+    for (const clock of [
+      () => Number.NaN,
+      () => { throw new Error("synthetic clock failure"); },
+    ]) {
+      const fetchImpl = sequenceFetch(jsonObjectResult(JSON.stringify(validDraft())));
+      await expect(planChangeSetWithDeepSeek(fixtureRequest(), {
+        apiKey: "test-only-api-key",
+        fetchImpl,
+        clock,
+      })).rejects.toMatchObject({
+        code: "service_unavailable",
+        message: expect.stringContaining("规划计时时钟"),
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+
+    let successClockCalls = 0;
+    const successFetch = sequenceFetch(jsonObjectResult(JSON.stringify(validDraft())));
+    await expect(planChangeSetWithDeepSeek(fixtureRequest(), {
+      ...deterministicOptions(successFetch),
+      clock: () => successClockCalls++ === 0 ? 1_000 : Number.POSITIVE_INFINITY,
+    })).rejects.toMatchObject({
+      code: "service_unavailable",
+      message: expect.stringContaining("规划计时时钟"),
+    });
+    expect(successFetch).toHaveBeenCalledTimes(1);
+
+    let rollbackClockCalls = 0;
+    const rollbackFetch = sequenceFetch(jsonObjectResult(JSON.stringify(validDraft())));
+    await expect(planChangeSetWithDeepSeek(fixtureRequest(), {
+      ...deterministicOptions(rollbackFetch),
+      clock: () => rollbackClockCalls++ === 0 ? 1_000 : 999,
+    })).rejects.toMatchObject({
+      code: "service_unavailable",
+      message: expect.stringContaining("非负安全整数毫秒耗时"),
+    });
+    expect(rollbackFetch).toHaveBeenCalledTimes(1);
+
+    let failureClockCalls = 0;
+    const malformedFetch = sequenceFetch(jsonObjectResult("{malformed"));
+    await expect(planChangeSetWithDeepSeek(fixtureRequest(), {
+      ...deterministicOptions(malformedFetch),
+      clock: () => failureClockCalls++ === 0 ? 1_000 : 999,
+    })).rejects.toMatchObject({
+      code: "invalid_output",
+      message: expect.stringContaining("有效 JSON"),
+      metadata: {
+        durationMs: 0,
+        repairAttempted: false,
+        validationIssues: [{ code: "invalid_json" }],
+      },
+    });
+    expect(malformedFetch).toHaveBeenCalledTimes(1);
+
+    const invalidFirstDraft = validDraft();
+    if (invalidFirstDraft.operations[0].type !== "updateNodeProps") throw new Error("测试操作类型错误");
+    invalidFirstDraft.operations[0].nodeId = "missing_component";
+    let repairSuccessClockCalls = 0;
+    const repairSuccessFetch = sequenceFetch(
+      jsonObjectResult(JSON.stringify(invalidFirstDraft)),
+      jsonObjectResult(JSON.stringify(validDraft())),
+    );
+    await expect(planChangeSetWithDeepSeek(fixtureRequest(), {
+      ...deterministicOptions(repairSuccessFetch),
+      clock: () => repairSuccessClockCalls++ === 0 ? 1_000 : Number.POSITIVE_INFINITY,
+    })).rejects.toMatchObject({
+      code: "service_unavailable",
+      message: expect.stringContaining("规划计时时钟"),
+    });
+    expect(repairSuccessFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("无法解析的 JSON 不触发修复或接口切换", async () => {
     const secretRaw = "raw-output-must-not-be-replayed";
     const fetchImpl = sequenceFetch(jsonObjectResult(`{${secretRaw}`));
@@ -196,6 +270,15 @@ describe("DeepSeek 结构化 ChangeSet 规划器", () => {
     await expectPlannerCode(planChangeSetWithDeepSeek(fixtureRequest(), { apiKey: "mock", fetchImpl, timeoutMs: 1 }), "timeout");
   });
 
+  it("拒绝超出硬上限的 DeepSeek 响应体", async () => {
+    const fetchImpl = sequenceFetch(new Response("{}", {
+      status: 200,
+      headers: { "content-length": String(MAX_DEEPSEEK_RESPONSE_BYTES + 1) },
+    }));
+    await expectPlannerCode(planChangeSetWithDeepSeek(fixtureRequest(), deterministicOptions(fetchImpl)), "service_unavailable");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("调用方取消时中止请求", async () => {
     const controller = new AbortController();
     const fetchImpl = vi.fn<typeof fetch>((_input, init) => new Promise<Response>((_resolve, reject) => {
@@ -204,6 +287,43 @@ describe("DeepSeek 结构化 ChangeSet 规划器", () => {
     const promise = planChangeSetWithDeepSeek(fixtureRequest(), { apiKey: "mock", fetchImpl, signal: controller.signal });
     controller.abort();
     await expectPlannerCode(promise, "cancelled");
+  });
+
+  it("调用前已取消时不发送上游请求", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn<typeof fetch>();
+    controller.abort();
+    await expectPlannerCode(planChangeSetWithDeepSeek(fixtureRequest(), {
+      apiKey: "mock",
+      fetchImpl,
+      signal: controller.signal,
+    }), "cancelled");
+    expect(fetchImpl).toHaveBeenCalledTimes(0);
+  });
+
+  it("单次超时只能收紧且超限配置不发送上游请求", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expectPlannerCode(planChangeSetWithDeepSeek(fixtureRequest(), {
+      apiKey: "mock",
+      fetchImpl,
+      timeoutMs: 20_001,
+    }), "invalid_request");
+    expect(fetchImpl).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    ["缺失", undefined],
+    ["总量不一致", { prompt_tokens: 80, completion_tokens: 20, total_tokens: 999 }],
+    ["prompt 超限", { prompt_tokens: 12_001, completion_tokens: 20, total_tokens: 12_021 }],
+    ["completion 超限", { prompt_tokens: 80, completion_tokens: 3_001, total_tokens: 3_081 }],
+  ])("provider usage %s 时 fail-closed 且不低报为 0", async (_label, usage) => {
+    const fetchImpl = sequenceFetch(new Response(JSON.stringify({
+      model: "deepseek-v4-flash",
+      choices: [{ message: { content: JSON.stringify(validDraft()) } }],
+      ...(usage ? { usage } : {}),
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    await expectPlannerCode(planChangeSetWithDeepSeek(fixtureRequest(), deterministicOptions(fetchImpl)), "service_unavailable");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("已解析但 Schema 不合法时最多进行一次受控修复", async () => {
@@ -218,6 +338,31 @@ describe("DeepSeek 结构化 ChangeSet 规划器", () => {
     expect(repairBody).not.toContain(firstCandidate);
     expect(repairBody).toContain("validationIssueSummary");
     expect(repairBody).toContain("allowedStructure");
+  });
+
+  it("受控修复共享 12k/3k 总 token 预算而不是按调用重置", async () => {
+    const firstCandidate = JSON.stringify({ message: "暂未生成操作。", operations: [] });
+    const first = new Response(JSON.stringify({
+      model: "deepseek-v4-flash",
+      choices: [{ message: { content: firstCandidate } }],
+      usage: { prompt_tokens: 7_000, completion_tokens: 1_600, total_tokens: 8_600 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+    const repair = new Response(JSON.stringify({
+      model: "deepseek-v4-flash",
+      choices: [{ message: { content: JSON.stringify(validDraft()) } }],
+      usage: { prompt_tokens: 6_000, completion_tokens: 1_400, total_tokens: 7_400 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+    const fetchImpl = sequenceFetch(first, repair);
+
+    await expect(planChangeSetWithDeepSeek(fixtureRequest(), deterministicOptions(fetchImpl))).rejects.toMatchObject({
+      code: "service_unavailable",
+      metadata: {
+        repairAttempted: true,
+        usage: { promptTokens: 13_000, completionTokens: 3_000, totalTokens: 16_000 },
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchImpl.mock.calls[1][1]?.body))).toMatchObject({ max_tokens: 1_400 });
   });
 
   it("生成后、预览前不修改正式 AppSpec 或 localStorage，应用后仍可撤销", async () => {

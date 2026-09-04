@@ -13,7 +13,12 @@ import type {
 import { StudioValidationError } from "@/core/schemas";
 
 export interface MetricBindingResult { rawValue: DataValue; value: string }
-export interface ChartBindingResult { labels: string[]; values: number[]; yAxis: string[] }
+export interface ChartBindingResult {
+  labels: string[];
+  values: number[];
+  yAxis: string[];
+  domain: { minimum: number; maximum: number };
+}
 export interface TableBindingResult {
   columns: Array<{ key: string; label: string }>;
   rows: Array<Record<string, string>>;
@@ -41,7 +46,10 @@ export function appendQueryExecutionRecord(
   record: QueryExecutionRecord,
   limit = MAX_QUERY_EXECUTION_RECORDS,
 ): QueryExecutionRecord[] {
-  return [record, ...records].slice(0, Math.max(1, limit));
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_QUERY_EXECUTION_RECORDS) {
+    throw new StudioValidationError("查询执行记录限制无效", [`记录数量必须是 1–${MAX_QUERY_EXECUTION_RECORDS} 的整数`]);
+  }
+  return [record, ...records].slice(0, limit);
 }
 
 export function summarizeBinding(binding: DataBinding, sourceName?: string): string {
@@ -122,6 +130,9 @@ function prepareRows(binding: DataBinding, rows: DataRow[]): DataRow[] {
 export function aggregateValues(rows: DataRow[], field: string, aggregation: DataAggregation): DataValue {
   if (aggregation === "count") return rows.length;
   const values = rows.map((row) => row[field]).filter((value): value is Exclude<DataValue, null> => value !== null && value !== undefined);
+  if (values.some((value) => typeof value === "number" && !Number.isFinite(value))) {
+    throw new StudioValidationError("数据绑定运行失败", [`字段“${field}”包含非有限数值`]);
+  }
   if (aggregation === "countDistinct") return new Set(values.map((value) => `${typeof value}:${String(value)}`)).size;
   if (aggregation === "none") return values[0] ?? null;
   if (!values.length) return null;
@@ -131,8 +142,18 @@ export function aggregateValues(rows: DataRow[], field: string, aggregation: Dat
   if (numbers.length !== values.length) {
     throw new StudioValidationError("数据绑定运行失败", [`字段“${field}”包含不能用于 ${aggregation} 的非数值数据`]);
   }
+  if (aggregation === "average") {
+    const average = numbers.reduce((total, value) => total + value / numbers.length, 0);
+    if (!Number.isFinite(average)) {
+      throw new StudioValidationError("数据绑定运行失败", [`字段“${field}”的 average 聚合产生了无效数值`]);
+    }
+    return average;
+  }
   const sum = numbers.reduce((total, value) => total + value, 0);
-  return aggregation === "average" ? sum / numbers.length : sum;
+  if (!Number.isFinite(sum)) {
+    throw new StudioValidationError("数据绑定运行失败", [`字段“${field}”的 sum 聚合产生了无效数值`]);
+  }
+  return sum;
 }
 
 export function formatDataValue(value: DataValue, format: DataFormat): string {
@@ -177,12 +198,15 @@ export function executeMetricBinding(
 }
 
 function groupedRows(rows: DataRow[], groupBy: string): Array<[string, DataRow[]]> {
-  const groups = new Map<string, DataRow[]>();
+  const groups = new Map<string, { label: string; rows: DataRow[] }>();
   for (const row of rows) {
-    const key = String(row[groupBy] ?? "未分类");
-    groups.set(key, [...(groups.get(key) ?? []), row]);
+    const value = row[groupBy] ?? null;
+    const key = value === null ? "null:" : `${typeof value}:${String(value)}`;
+    const group = groups.get(key);
+    if (group) group.rows.push(row);
+    else groups.set(key, { label: value === null ? "（空值）" : String(value), rows: [row] });
   }
-  return [...groups.entries()];
+  return [...groups.values()].map(({ label, rows: group }) => [label, group]);
 }
 
 export function executeChartBinding(
@@ -192,16 +216,39 @@ export function executeChartBinding(
 ): ChartBindingResult {
   const { rows } = sourceFor(binding, dataSources, runtime);
   if (!binding.groupBy) throw new StudioValidationError("图表数据绑定失败", ["柱状图缺少分组字段"]);
-  const groups = groupedRows(prepareRows(binding, rows), binding.groupBy).slice(0, binding.limit);
-  const labels = groups.map(([label]) => label.replace(/^0(?=\d月$)/, ""));
-  const values = groups.map(([, group]) => {
+  const groups = groupedRows(prepareRows({ ...binding, sort: [] }, rows), binding.groupBy);
+  const points = groups.map(([label, group]) => {
     const value = aggregateValues(group, binding.field, binding.aggregation);
     if (typeof value !== "number") throw new StudioValidationError("图表数据绑定失败", ["聚合结果不是数值"]);
-    return value;
+    return { label, value, rows: group };
   });
-  const maximum = Math.max(...values, 0);
-  const yAxis = [1, 0.75, 0.5, 0.25, 0].map((ratio) => formatDataValue(maximum * ratio, binding.format));
-  return { labels, values, yAxis };
+  points.sort((left, right) => {
+    for (const sort of binding.sort) {
+      const leftValue = sort.field === binding.groupBy
+        ? left.label
+        : sort.field === binding.field
+          ? left.value
+          : aggregateValues(left.rows, sort.field, sort.direction === "asc" ? "min" : "max");
+      const rightValue = sort.field === binding.groupBy
+        ? right.label
+        : sort.field === binding.field
+          ? right.value
+          : aggregateValues(right.rows, sort.field, sort.direction === "asc" ? "min" : "max");
+      const result = compare(leftValue, rightValue);
+      if (result) return sort.direction === "asc" ? result : -result;
+    }
+    return 0;
+  });
+  const limited = points.slice(0, binding.limit);
+  const labels = limited.map(({ label }) => label.replace(/^0(?=\d月$)/, ""));
+  const values = limited.map(({ value }) => value);
+  const minimum = Math.min(...values, 0);
+  const rawMaximum = Math.max(...values, 0);
+  const maximum = rawMaximum === minimum ? minimum + 1 : rawMaximum;
+  const span = maximum - minimum;
+  const yAxis = [0, 0.25, 0.5, 0.75, 1]
+    .map((ratio) => formatDataValue(maximum - span * ratio, binding.format));
+  return { labels, values, yAxis, domain: { minimum, maximum } };
 }
 
 function columnValue(rows: DataRow[], column: DataColumnBinding): DataValue {
@@ -215,17 +262,30 @@ export function executeTableBinding(
 ): TableBindingResult {
   const { source, rows } = sourceFor(binding, dataSources, runtime);
   if (!binding.columns?.length) throw new StudioValidationError("表格数据绑定失败", ["至少需要选择一个表格列"]);
+  if (new Set(binding.columns.map((column) => column.field)).size !== binding.columns.length) {
+    throw new StudioValidationError("表格数据绑定失败", ["表格列字段不能重复"]);
+  }
   const prepared = prepareRows(binding, rows);
   const groups = binding.groupBy ? groupedRows(prepared, binding.groupBy) : prepared.map((row, index) => [`row_${index}`, [row]] as [string, DataRow[]]);
-  const computed = groups.map(([, group]) => Object.fromEntries(binding.columns!.map((column) => [
-    column.field,
-    column.field === binding.groupBy && column.aggregation === "none"
-      ? group[0][column.field]
-      : columnValue(group, column),
-  ])));
+  const computed = groups.map(([, group]) => {
+    const row = Object.fromEntries(binding.columns!.map((column) => [
+      column.field,
+      column.field === binding.groupBy && column.aggregation === "none"
+        ? group[0][column.field]
+        : columnValue(group, column),
+    ]));
+    const sortValues = binding.sort.map((sort): DataValue => {
+      if (Object.prototype.hasOwnProperty.call(row, sort.field)) return row[sort.field] ?? null;
+      if (sort.field === binding.groupBy) return group[0][sort.field] ?? null;
+      if (sort.field === binding.field) return aggregateValues(group, sort.field, binding.aggregation);
+      return aggregateValues(group, sort.field, sort.direction === "asc" ? "min" : "max");
+    });
+    return { row, sortValues };
+  });
   computed.sort((left, right) => {
-    for (const sort of binding.sort) {
-      const result = compare(left[sort.field] ?? null, right[sort.field] ?? null);
+    for (let index = 0; index < binding.sort.length; index += 1) {
+      const sort = binding.sort[index];
+      const result = compare(left.sortValues[index], right.sortValues[index]);
       if (result) return sort.direction === "asc" ? result : -result;
     }
     return 0;
@@ -236,7 +296,7 @@ export function executeTableBinding(
   }));
   return {
     columns,
-    rows: computed.slice(0, binding.limit).map((row) => Object.fromEntries(binding.columns!.map((column) => [
+    rows: computed.slice(0, binding.limit).map(({ row }) => Object.fromEntries(binding.columns!.map((column) => [
       column.field,
       formatDataValue(row[column.field] ?? null, column.format),
     ]))),
@@ -249,6 +309,17 @@ interface BindingResultMap {
   table: TableBindingResult;
 }
 
+function readQueryClock(clock: () => Date, fallback?: Date): Date {
+  try {
+    const value = clock();
+    if (value instanceof Date && Number.isSafeInteger(value.getTime())) return value;
+  } catch {
+    // Query results remain primary when only optional timing instrumentation fails.
+  }
+  if (fallback) return fallback;
+  throw new StudioValidationError("查询执行计时失败", ["查询时钟必须返回有效 Date"]);
+}
+
 export function executeRecordedBinding<TKind extends QueryComponentKind>(
   kind: TKind,
   binding: DataBinding,
@@ -257,7 +328,7 @@ export function executeRecordedBinding<TKind extends QueryComponentKind>(
   context: { componentId: string; pageId: string; revision?: string },
   clock: () => Date = () => new Date(),
 ): RecordedQueryResult<BindingResultMap[TKind]> {
-  const started = clock();
+  const started = readQueryClock(clock);
   const source = dataSources.find((item) => item.id === binding.dataSourceId);
   const inputRowCount = runtime.rowsByDataSourceId[binding.dataSourceId]?.length ?? 0;
   const executionKey = context.revision
@@ -274,33 +345,17 @@ export function executeRecordedBinding<TKind extends QueryComponentKind>(
     startedAt: started.toISOString(),
     inputRowCount,
   };
+  let result: BindingResultMap[TKind];
   try {
-    const result = (
+    result = (
       kind === "metric"
         ? executeMetricBinding(binding, dataSources, runtime)
         : kind === "chart"
           ? executeChartBinding(binding, dataSources, runtime)
           : executeTableBinding(binding, dataSources, runtime)
     ) as BindingResultMap[TKind];
-    const completed = clock();
-    const outputRowCount = kind === "metric"
-      ? 1
-      : kind === "chart"
-        ? (result as ChartBindingResult).labels.length
-        : (result as TableBindingResult).rows.length;
-    return {
-      success: true,
-      result,
-      record: {
-        ...common,
-        completedAt: completed.toISOString(),
-        durationMs: Math.max(0, completed.getTime() - started.getTime()),
-        outputRowCount,
-        status: "success",
-      },
-    };
   } catch (caught) {
-    const completed = clock();
+    const completed = readQueryClock(clock, started);
     const error = caught instanceof Error ? caught : new Error("未知查询错误");
     return {
       success: false,
@@ -315,6 +370,23 @@ export function executeRecordedBinding<TKind extends QueryComponentKind>(
       },
     };
   }
+  const completed = readQueryClock(clock, started);
+  const outputRowCount = kind === "metric"
+    ? 1
+    : kind === "chart"
+      ? (result as ChartBindingResult).labels.length
+      : (result as TableBindingResult).rows.length;
+  return {
+    success: true,
+    result,
+    record: {
+      ...common,
+      completedAt: completed.toISOString(),
+      durationMs: Math.max(0, completed.getTime() - started.getTime()),
+      outputRowCount,
+      status: "success",
+    },
+  };
 }
 
 export function validateRuntimeRows(source: DataSourceDefinition, rows: DataRow[]): void {
@@ -324,10 +396,24 @@ export function validateRuntimeRows(source: DataSourceDefinition, rows: DataRow[
       const value = row[field.name];
       if (value === null) continue;
       const valid = field.type === "date"
-        ? typeof value === "string" && !Number.isNaN(Date.parse(value))
-        : typeof value === field.type;
+        ? typeof value === "string" && isValidRuntimeDate(value)
+        : field.type === "number"
+          ? typeof value === "number" && Number.isFinite(value)
+          : typeof value === field.type;
       if (!valid) issues.push(`第 ${rowIndex + 1} 行字段“${field.label}”类型应为 ${field.type}`);
     }
   });
   if (issues.length) throw new StudioValidationError("本地数据 fixture 校验失败", issues.slice(0, 10));
+}
+
+function isValidRuntimeDate(value: string): boolean {
+  if (Number.isNaN(Date.parse(value))) return false;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/u.exec(value);
+  if (!parts) return true;
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0;
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth;
 }

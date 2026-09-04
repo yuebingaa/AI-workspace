@@ -11,6 +11,7 @@ import type {
 import { StudioValidationError } from "@/core/schemas";
 import {
   CSV_UPLOAD_LIMITS,
+  MAX_DATASET_RESPONSE_BYTES,
   type DatasetFieldMapping,
   type DatasetUploadResponse,
   type CsvUploadLimits,
@@ -22,6 +23,8 @@ export interface ParseCsvUploadInput {
   stream: ReadableStream<Uint8Array>;
   originalFileName: string;
   mimeType: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
   now?: () => Date;
   id?: () => string;
   limits?: Partial<CsvUploadLimits>;
@@ -45,7 +48,18 @@ const ALLOWED_MIME_TYPES = new Set([
 const BOOLEAN_TRUE = new Set(["true", "yes", "y", "是"]);
 const BOOLEAN_FALSE = new Set(["false", "no", "n", "否"]);
 const NUMBER_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
-const DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:[T\s].*)?$/u;
+const DATE_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?:[T\s].*)?$/u;
+
+function resolveUploadLimits(overrides: Partial<CsvUploadLimits> | undefined): CsvUploadLimits {
+  const limits = { ...CSV_UPLOAD_LIMITS, ...overrides };
+  for (const [name, maximum] of Object.entries(CSV_UPLOAD_LIMITS) as Array<[keyof CsvUploadLimits, number]>) {
+    const value = limits[name];
+    if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+      throw new Error(`CSV 上传限制配置不合法：${name} 必须是 1–${maximum} 的整数`);
+    }
+  }
+  return limits;
+}
 
 function safeOriginalFileName(value: string): string {
   const decoded = (() => {
@@ -84,7 +98,7 @@ function validateTextBytes(bytes: Uint8Array): void {
 }
 
 function normalizeHeaders(headers: string[]): { mappings: DatasetFieldMapping[]; names: string[]; labels: string[] } {
-  const used = new Map<string, number>();
+  const used = new Set<string>();
   const mappings = headers.map((rawHeader, index) => {
     const originalName = rawHeader.normalize("NFKC").trim();
     const ascii = originalName
@@ -96,9 +110,14 @@ function normalizeHeaders(headers: string[]): { mappings: DatasetFieldMapping[];
     let base = ascii || `field_${index + 1}`;
     if (!/^[A-Za-z]/u.test(base)) base = `field_${base}`;
     base = base.slice(0, 108);
-    const occurrence = (used.get(base) ?? 0) + 1;
-    used.set(base, occurrence);
-    const normalizedName = occurrence === 1 ? base : `${base}_${occurrence}`.slice(0, 120);
+    let occurrence = 1;
+    let normalizedName = base;
+    while (used.has(normalizedName)) {
+      occurrence += 1;
+      const suffix = `_${occurrence}`;
+      normalizedName = `${base.slice(0, 120 - suffix.length)}${suffix}`;
+    }
+    used.add(normalizedName);
     return { index, originalName, normalizedName };
   });
   return {
@@ -112,8 +131,23 @@ function primitiveCandidate(value: string): DataFieldType {
   const normalized = value.trim().toLocaleLowerCase("en-US");
   if (BOOLEAN_TRUE.has(normalized) || BOOLEAN_FALSE.has(normalized)) return "boolean";
   if (NUMBER_PATTERN.test(normalized) && Number.isFinite(Number(normalized))) return "number";
-  if (DATE_PATTERN.test(normalized) && !Number.isNaN(Date.parse(normalized))) return "date";
+  const dateParts = DATE_PATTERN.exec(normalized);
+  if (dateParts) {
+    const year = Number(dateParts[1]);
+    const month = Number(dateParts[2]);
+    const day = Number(dateParts[3]);
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+    if (day <= daysInMonth && !Number.isNaN(Date.parse(normalized))) return "date";
+  }
   return "string";
+}
+
+function minimumSerializedRowBytes(fieldNames: string[]): number {
+  const encoder = new TextEncoder();
+  return 2 + Math.max(0, fieldNames.length - 1) + fieldNames.reduce((total, name) => (
+    total + encoder.encode(JSON.stringify(name)).byteLength + 2
+  ), 0);
 }
 
 function inferField(values: Array<string | null>): { type: DataFieldType; conflictCount: number } {
@@ -187,6 +221,10 @@ function buildDataset(
 ): DatasetUploadResponse {
   const columnValues = headers.names.map((_, index) => rawRows.map((row) => row[index] ?? null));
   const inferred = columnValues.map(inferField);
+  const rows: DataRow[] = rawRows.map((rawRow) => Object.fromEntries(headers.names.map((name, index) => [
+    name,
+    convertValue(rawRow[index] ?? null, inferred[index].type),
+  ])));
   const fields: DataSourceField[] = headers.names.map((name, index) => ({
     name,
     label: headers.labels[index],
@@ -196,16 +234,12 @@ function buildDataset(
     supportedAggregations: supportedAggregations(inferred[index].type),
     nullCount: columnValues[index].filter((value) => value === null).length,
     nullRate: rawRows.length ? columnValues[index].filter((value) => value === null).length / rawRows.length : 0,
-    uniqueCount: new Set(columnValues[index].filter((value): value is string => value !== null)).size,
+    uniqueCount: new Set(rows.map((row) => row[name]).filter((value) => value !== null)).size,
     typeConflictCount: inferred[index].conflictCount,
     ...(sensitiveCategories(headers.labels[index], columnValues[index])
       ? { sensitiveCategories: sensitiveCategories(headers.labels[index], columnValues[index]) }
       : {}),
   }));
-  const rows: DataRow[] = rawRows.map((rawRow) => Object.fromEntries(headers.names.map((name, index) => [
-    name,
-    convertValue(rawRow[index] ?? null, inferred[index].type),
-  ])));
   const nullCellCount = rawRows.reduce((total, row) => total + row.filter((value) => value === null).length, 0);
   const duplicateRowCount = rows.length - new Set(rows.map((row) => JSON.stringify(headers.names.map((name) => row[name])))).size;
   const typeConflictCount = inferred.reduce((total, item) => total + item.conflictCount, 0);
@@ -278,13 +312,19 @@ function buildDataset(
 }
 
 export async function parseCsvUpload(input: ParseCsvUploadInput): Promise<DatasetUploadResponse> {
-  const limits = { ...CSV_UPLOAD_LIMITS, ...input.limits };
+  const limits = resolveUploadLimits(input.limits);
+  if (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1)) {
+    throw new Error("CSV 上传读取超时必须是正整数毫秒");
+  }
   const originalFileName = safeOriginalFileName(input.originalFileName);
   validateMimeType(input.mimeType);
   const reader = input.stream.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const rawRows: Array<Array<string | null>> = [];
   const headerState: { value: string[] | null } = { value: null };
+  let normalizedHeaders: ReturnType<typeof normalizeHeaders> | undefined;
+  let minimumRowBytes = 0;
+  let minimumRowsBytes = 2;
   let bytesRead = 0;
   let headerChecked = false;
   let initialBytes = new Uint8Array();
@@ -315,21 +355,60 @@ export async function parseCsvUpload(input: ParseCsvUploadInput): Promise<Datase
     parser.on("data", (record: string[]) => {
       if (!headerState.value) {
         headerState.value = record;
+        normalizedHeaders = normalizeHeaders(record);
+        minimumRowBytes = minimumSerializedRowBytes(normalizedHeaders.names);
         return;
       }
       if (rawRows.length >= limits.maxRows) {
         parser.destroy(new CsvDatasetError("CSV 数据行数超限", [`最多允许 ${limits.maxRows.toLocaleString("zh-CN")} 行`], 413));
         return;
       }
+      const nextRowCount = rawRows.length + 1;
+      if (nextRowCount * record.length > limits.maxCells) {
+        parser.destroy(new CsvDatasetError("CSV 单元格总量超限", [`最多允许 ${limits.maxCells.toLocaleString("zh-CN")} 个数据单元格`], 413));
+        return;
+      }
+      const nextMinimumRowsBytes = minimumRowsBytes + (rawRows.length > 0 ? 1 : 0) + minimumRowBytes;
+      if (nextMinimumRowsBytes > MAX_DATASET_RESPONSE_BYTES) {
+        parser.destroy(new CsvDatasetError("CSV 响应体积必然超限", ["字段名与行数的最小 JSON 体积已超过响应上限"], 413));
+        return;
+      }
+      minimumRowsBytes = nextMinimumRowsBytes;
       rawRows.push(record.map((value) => value.trim() === "" ? null : value));
     });
     parser.once("end", resolve);
     parser.once("error", reject);
   });
+  void completed.catch(() => undefined);
+  let readerCancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let interruptionError: CsvDatasetError | undefined;
+  let rejectInterrupted!: (error: CsvDatasetError) => void;
+  const interrupted = new Promise<never>((_resolve, reject) => { rejectInterrupted = reject; });
+  const cancelReader = () => {
+    if (readerCancelled) return;
+    readerCancelled = true;
+    void reader.cancel().catch(() => undefined);
+  };
+  const interrupt = (kind: "timeout" | "aborted") => {
+    if (interruptionError) return;
+    interruptionError = new CsvDatasetError(
+      kind === "timeout" ? "CSV 上传读取超时" : "CSV 上传已取消",
+      [kind === "timeout" ? "上传流未在服务端时限内完成" : "上传请求已由调用方取消"],
+      408,
+    );
+    rejectInterrupted(interruptionError);
+    parser.destroy(interruptionError);
+    cancelReader();
+  };
+  const abort = () => interrupt("aborted");
+  input.signal?.addEventListener("abort", abort, { once: true });
+  if (input.timeoutMs !== undefined) timer = setTimeout(() => interrupt("timeout"), input.timeoutMs);
+  if (input.signal?.aborted) interrupt("aborted");
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), interrupted]);
       if (done) break;
       bytesRead += value.byteLength;
       if (bytesRead > limits.maxFileBytes) throw new CsvDatasetError("CSV 文件大小超限", [`文件超过 ${limits.maxFileBytes} 字节`], 413);
@@ -349,10 +428,11 @@ export async function parseCsvUpload(input: ParseCsvUploadInput): Promise<Datase
       if (headerChecked) validateTextBytes(value);
       const text = decoder.decode(value, { stream: true });
       if (text && !parser.write(text)) {
-        await new Promise<void>((resolve, reject) => {
+        const drained = new Promise<void>((resolve, reject) => {
           parser.once("drain", resolve);
           parser.once("error", reject);
         });
+        await Promise.race([drained, interrupted]);
       }
     }
     if (!headerChecked) {
@@ -361,14 +441,16 @@ export async function parseCsvUpload(input: ParseCsvUploadInput): Promise<Datase
     }
     const tail = decoder.decode();
     parser.end(tail);
-    await completed;
+    await Promise.race([completed, interrupted]);
   } catch (error) {
     parserError = error;
     parser.destroy(error instanceof Error ? error : undefined);
-    await reader.cancel().catch(() => undefined);
+    cancelReader();
     await completed.catch(() => undefined);
   } finally {
-    reader.releaseLock();
+    if (timer) clearTimeout(timer);
+    input.signal?.removeEventListener("abort", abort);
+    try { reader.releaseLock(); } catch { /* cancellation can leave a read pending in non-compliant streams */ }
   }
   if (parserError) {
     if (parserError instanceof CsvDatasetError) throw parserError;
@@ -379,7 +461,7 @@ export async function parseCsvUpload(input: ParseCsvUploadInput): Promise<Datase
   }
   if (!headerState.value || headerState.value.length === 0) throw new CsvDatasetError("CSV 缺少表头", ["文件必须包含至少一个字段名"]);
   if (rawRows.length === 0) throw new CsvDatasetError("CSV 没有数据行", ["文件必须包含至少一行数据"]);
-  const headers = normalizeHeaders(headerState.value);
+  const headers = normalizedHeaders ?? normalizeHeaders(headerState.value);
   return buildDataset(
     rawRows,
     headers,

@@ -6,9 +6,24 @@ import type {
   ChangeSetAuditStatus,
 } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
+import { toProjectIsoDateTime } from "@/core/time/project-iso";
 
 export const MAX_CHANGESET_AUDIT_RECORDS = 100;
 let auditSequence = 0;
+
+function readAuditTimestamp(clock: () => Date): { milliseconds: number; serialized: string } {
+  let timestamp: Date;
+  try {
+    timestamp = clock();
+  } catch {
+    throw new Error("ChangeSet 审计时钟必须返回有效 Date。");
+  }
+  const serialized = toProjectIsoDateTime(timestamp);
+  if (!serialized) {
+    throw new Error("ChangeSet 审计时钟必须返回有效 Date。");
+  }
+  return { milliseconds: timestamp.getTime(), serialized };
+}
 
 export function summarizeChangeSet(changeSet: ChangeSet): string {
   return changeSet.operations.map((operation) => operation.label).join("、");
@@ -45,15 +60,15 @@ export function createChangeSetAuditRecordFromSummary(
   clock: () => Date = () => new Date(),
   ai?: AiChangeSetAuditMetadata,
 ): ChangeSetAuditRecord {
-  const timestamp = clock();
+  const timestamp = readAuditTimestamp(clock);
   return {
-    id: `audit_${timestamp.getTime()}_${++auditSequence}`,
+    id: `audit_${timestamp.milliseconds}_${++auditSequence}`,
     changeSetId,
     role,
     source,
     operationSummary,
     status,
-    timestamp: timestamp.toISOString(),
+    timestamp: timestamp.serialized,
     ...(error ? { error } : {}),
     ...(ai ? { ai } : {}),
   };

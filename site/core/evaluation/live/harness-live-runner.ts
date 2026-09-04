@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 import { harnessPublicRequestSchema, harnessResponseSchema, type HarnessTaskSummary, type HarnessToolName } from "@/core/harness";
 import { changeSetSchema } from "@/core/schemas";
+import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { operationsMatchExactly } from "../harness-evaluator";
 import {
@@ -28,6 +29,9 @@ import {
   type LiveHarnessFailureCode,
 } from "./contracts";
 import { liveHarnessGlobalBudget, liveHarnessSmokeCases } from "./manifest";
+
+export const MAX_LIVE_HARNESS_RESPONSE_BYTES = 4 * 1024 * 1024;
+export const MAX_LIVE_HARNESS_REQUEST_TIMEOUT_MS = 120_000;
 import {
   LIVE_EVALUATION_CASE_HEADER,
   LIVE_EVALUATION_NONCE_ENV,
@@ -369,7 +373,12 @@ async function fetchHarnessTask(
     }
     if (response.url && !isLoopbackHttpUrl(response.url)) throw new LiveHarnessEvaluationError("redirect", "Live 评测响应来自非 loopback 地址。");
     if (!response.ok) throw new LiveHarnessEvaluationError(httpFailureCode(response.status));
-    const raw = await response.json().catch(() => null) as unknown;
+    let raw: unknown = null;
+    try {
+      raw = JSON.parse(await readBoundedUtf8Body(response, MAX_LIVE_HARNESS_RESPONSE_BYTES)) as unknown;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+    }
     const parsed = harnessResponseSchema.safeParse(raw);
     if (!parsed.success) throw new LiveHarnessEvaluationError("invalid_response", "Live Harness 响应未通过 Schema 校验。");
     return { task: parsed.data.task, request };
@@ -419,22 +428,88 @@ export async function stopOwnedChildProcess(child: ChildProcess): Promise<void> 
   }
 }
 
-async function waitForServer(
+export interface LiveServerResourceCleanupOperations {
+  stopChild?: (child: ChildProcess) => Promise<void>;
+  removeDirectory?: (path: string) => Promise<void>;
+}
+
+export function createLiveServerResourceCleanup(
+  child: ChildProcess,
+  temporaryDirectory: string,
+  operations: LiveServerResourceCleanupOperations = {},
+): () => Promise<void> {
+  const stopChild = operations.stopChild ?? stopOwnedChildProcess;
+  const removeDirectory = operations.removeDirectory ?? safeRemoveSessionDirectory;
+  let childStopped = false;
+  let directoryRemoved = false;
+  let cleaning: Promise<void> | undefined;
+  return async () => {
+    if (cleaning) return cleaning;
+    if (childStopped && directoryRemoved) return;
+    const operation = (async () => {
+      let failed = false;
+      if (!childStopped) {
+        try {
+          await stopChild(child);
+          childStopped = true;
+        } catch {
+          failed = true;
+        }
+      }
+      if (!directoryRemoved) {
+        try {
+          await removeDirectory(temporaryDirectory);
+          directoryRemoved = true;
+        } catch {
+          failed = true;
+        }
+      }
+      if (failed) throw new LiveHarnessEvaluationError("cleanup");
+    })();
+    cleaning = operation;
+    try {
+      await operation;
+    } finally {
+      if (cleaning === operation) cleaning = undefined;
+    }
+  };
+}
+
+export interface LiveServerWaitOptions {
+  monotonicNow?: () => number;
+  fetchImpl?: typeof fetch;
+  sleep?: (delayMs: number) => Promise<void>;
+}
+
+export async function waitForLiveEvaluationServer(
   baseUrl: string,
   child: ChildProcess,
   startupError: () => Error | undefined,
+  options: LiveServerWaitOptions = {},
 ): Promise<void> {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
+  const monotonicNow = options.monotonicNow ?? (() => performance.now());
+  const readMonotonic = () => {
+    let value: number;
+    try { value = monotonicNow(); } catch { throw new LiveHarnessEvaluationError("server_start"); }
+    if (!Number.isFinite(value)) throw new LiveHarnessEvaluationError("server_start");
+    return value;
+  };
+  const startedAt = readMonotonic();
+  while (true) {
+    const elapsedMs = readMonotonic() - startedAt;
+    if (elapsedMs < 0) throw new LiveHarnessEvaluationError("server_start");
+    if (elapsedMs >= 30_000) break;
     if (startupError()) throw new LiveHarnessEvaluationError("server_start", "Live 评测本地服务启动失败。");
-    if (child.exitCode !== null) throw new LiveHarnessEvaluationError("server_start", "Live 评测本地服务启动失败。");
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new LiveHarnessEvaluationError("server_start", "Live 评测本地服务启动失败。");
+    }
     try {
-      const response = await fetch(baseUrl, { redirect: "manual", signal: AbortSignal.timeout(1_000) });
+      const response = await (options.fetchImpl ?? fetch)(baseUrl, { redirect: "manual", signal: AbortSignal.timeout(1_000) });
       if (response.status === 200 && (!response.url || isLoopbackHttpUrl(response.url))) return;
     } catch {
       // 本地服务仍在启动；不触发任何 Harness 或模型请求。
     }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    await (options.sleep ?? ((delayMs) => new Promise((resolveWait) => setTimeout(resolveWait, delayMs))))(150);
   }
   throw new LiveHarnessEvaluationError("server_start", "Live 评测本地服务启动超时。");
 }
@@ -464,7 +539,7 @@ export async function startLocalLiveEvaluationServer(
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
-    await safeRemoveSessionDirectory(temporaryDirectory);
+    try { await safeRemoveSessionDirectory(temporaryDirectory); } catch { /* 启动失败是主结果。 */ }
     throw new LiveHarnessEvaluationError("server_start", "Live 评测本地服务启动失败。");
   }
   let startupError: Error | undefined;
@@ -472,21 +547,17 @@ export async function startLocalLiveEvaluationServer(
   child.stdout?.resume();
   child.stderr?.resume();
   const baseUrl = `http://127.0.0.1:${port}`;
+  const cleanupResources = createLiveServerResourceCleanup(child, temporaryDirectory);
   try {
-    await waitForServer(baseUrl, child, () => startupError);
+    await waitForLiveEvaluationServer(baseUrl, child, () => startupError);
   } catch (error) {
-    await stopOwnedChildProcess(child);
-    await safeRemoveSessionDirectory(temporaryDirectory);
+    try { await cleanupResources(); } catch { /* 保留启动失败主错误；两项资源均已尝试。 */ }
     throw error;
   }
-  let stopped = false;
   return {
     baseUrl,
     async stop() {
-      if (stopped) return;
-      stopped = true;
-      await stopOwnedChildProcess(child);
-      await safeRemoveSessionDirectory(temporaryDirectory);
+      await cleanupResources();
     },
   };
 }
@@ -505,13 +576,25 @@ export async function runLiveHarnessEvaluation(
   if (environment[LIVE_EVALUATION_RUNNER_FLAG] !== "1") {
     throw new LiveHarnessEvaluationError("runner_gate", "未显式启用 Live Harness 评测；没有发送任何请求。");
   }
+  if (
+    options.requestTimeoutMs !== undefined
+    && (!Number.isSafeInteger(options.requestTimeoutMs) || options.requestTimeoutMs < 1 || options.requestTimeoutMs > MAX_LIVE_HARNESS_REQUEST_TIMEOUT_MS)
+  ) {
+    throw new LiveHarnessEvaluationError("time_budget", "Live Harness 单次 HTTP 等待不能超过固定上限。");
+  }
   const projectRoot = options.projectRoot ?? process.cwd();
   const cases = options.cases ?? liveHarnessSmokeCases;
-  if (cases.length !== 3 || !isDeepStrictEqual(cases.map((item) => item.id), liveHarnessSmokeCases.map((item) => item.id))) {
+  if (!isDeepStrictEqual(cases, liveHarnessSmokeCases)) {
     throw new LiveHarnessEvaluationError("manifest", "Live Harness 评测用例清单不符合固定三用例范围。");
   }
   const budget = { ...liveHarnessGlobalBudget, ...options.budget };
   if (budget.maxRetriesPerCase !== 0) throw new LiveHarnessEvaluationError("retry", "Live Harness 自动重试必须保持为 0。");
+  for (const [name, maximum] of Object.entries(liveHarnessGlobalBudget) as Array<[keyof LiveHarnessBudget, number]>) {
+    const value = budget[name];
+    if (!Number.isSafeInteger(value) || value < (name === "maxRetriesPerCase" ? 0 : 1) || value > maximum) {
+      throw new LiveHarnessEvaluationError("global_budget", "Live Harness 预算不能超过固定全局上限。");
+    }
+  }
   const nonce = options.nonceFactory?.() ?? randomBytes(32).toString("hex");
   const runId = options.runIdFactory?.() ?? randomBytes(16).toString("hex");
   if (!/^[a-f0-9]{64}$/.test(nonce) || !/^[a-f0-9]{32}$/.test(runId)) {
@@ -520,7 +603,11 @@ export async function runLiveHarnessEvaluation(
   const gitCommit = options.gitCommit ?? await currentGitCommit(projectRoot);
   const server = await (options.serverFactory ?? startLocalLiveEvaluationServer)({ nonce, environment, projectRoot });
   if (!isLoopbackHttpUrl(server.baseUrl)) {
-    await server.stop();
+    try {
+      await server.stop();
+    } catch {
+      // 地址安全拒绝是主结果；清理失败不得把它改写成未知异常。
+    }
     throw new LiveHarnessEvaluationError("loopback", "Live Harness 服务地址不是允许的 loopback 地址。");
   }
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -528,6 +615,7 @@ export async function runLiveHarnessEvaluation(
   let used = emptyUsage();
   let model = "";
   let currentCase: LiveHarnessEvaluationCase | undefined;
+  let primaryFailure = false;
   try {
     for (const evaluationCase of cases) {
       currentCase = evaluationCase;
@@ -572,6 +660,7 @@ export async function runLiveHarnessEvaluation(
       nonce,
     });
   } catch (caught) {
+    primaryFailure = true;
     const error = caught instanceof LiveHarnessEvaluationError
       ? caught
       : new LiveHarnessEvaluationError("internal");
@@ -608,6 +697,10 @@ export async function runLiveHarnessEvaluation(
     }
     throw new LiveHarnessEvaluationError(failureCode, report);
   } finally {
-    await server.stop();
+    try {
+      await server.stop();
+    } catch {
+      if (!primaryFailure) throw new LiveHarnessEvaluationError("cleanup");
+    }
   }
 }

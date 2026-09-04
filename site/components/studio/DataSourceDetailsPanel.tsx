@@ -141,11 +141,23 @@ export function DataSourceDetailsPanel({
   }
 
   return (
-    <div className="data-source-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="data-source-panel" role="dialog" aria-modal="true" aria-label={`${source.name} 数据源详情`}>
+    <div className="data-source-overlay" role="presentation" onMouseDown={(event) => { if (!datasetActionBusy && event.target === event.currentTarget) onClose(); }}>
+      <section
+        className="data-source-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-busy={datasetActionBusy}
+        aria-label={`${source.name} 数据源详情`}
+        onClickCapture={(event) => {
+          if (datasetActionBusy) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+      >
         <header className="data-source-panel-head">
           <div><span className="db">◉</span><div><small>数据源工作区</small><h2>{source.name}</h2></div></div>
-          <div className="data-source-head-actions">{source.ephemeral && onDelete && <button type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>删除数据集</button>}<button type="button" aria-label="关闭数据源详情" onClick={onClose}>×</button></div>
+          <div className="data-source-head-actions">{source.ephemeral && onDelete && <button type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>删除数据集</button>}<button type="button" aria-label="关闭数据源详情" disabled={datasetActionBusy} onClick={onClose}>×</button></div>
         </header>
         <nav className="data-source-tabs" aria-label="数据源详情标签">
           {tabs.map((item) => (
@@ -164,11 +176,11 @@ export function DataSourceDetailsPanel({
               <article><span>数据规模</span><b>{source.rowCount.toLocaleString("zh-CN")} 行</b><small>{source.columnCount} 个字段</small></article>
               <article><span>更新时间</span><b>{new Date(source.updatedAt).toLocaleString("zh-CN")}</b><small>{source.ephemeral ? "上传解析时间" : "Fixture 固定时间"}</small></article>
               <article><span>数据质量</span><b>{source.qualityScore}%</b><small>{source.quality ? `空值率 ${(source.quality.nullRate * 100).toFixed(1)}% · 重复行 ${source.quality.duplicateRowCount}` : "通过本地结构校验"}</small></article>
-              <article><span>数据类型</span><b>{sourceTypeLabels[source.sourceType]}</b><small>{source.ephemeral ? "服务端临时内存" : "阶段 A 本地数据"}</small></article>
-              {source.expiresAt && <article><span>保留时间</span><b>{new Date(source.expiresAt).toLocaleString("zh-CN")}</b><small>服务重启后也会立即失效</small></article>}
+              <article><span>数据类型</span><b>{sourceTypeLabels[source.sourceType]}</b><small>{source.ephemeral ? "服务端临时存储" : "阶段 A 本地数据"}</small></article>
+              {source.expiresAt && <article><span>保留时间</span><b>{new Date(source.expiresAt).toLocaleString("zh-CN")}</b><small>到期必定失效；重启恢复取决于本地持久化配置</small></article>}
             </div>
             {source.quality && <div className="dataset-quality-summary"><span>类型冲突 <b>{source.quality.typeConflictCount}</b></span><span>异常提示 <b>{source.quality.anomalies.length}</b></span><span>重复行 <b>{source.quality.duplicateRowCount}</b></span></div>}
-            {source.ephemeral && <div className="dataset-ephemeral-notice">上传数据仅保存在当前服务进程内，不会写入 localStorage；服务重启或保留时间到期后失效。</div>}
+            {source.ephemeral && <div className="dataset-ephemeral-notice">上传数据不会写入浏览器 localStorage；服务端最多保留 30 分钟，未启用本地持久化时重启失效。</div>}
             {source.fields.some((field) => field.sensitiveCategories?.length) && (
               <div className={`dataset-sensitive-card ${source.aiAccessPolicy === "pending" ? "pending" : "confirmed"}`}>
                 <b>敏感字段风险标记</b>

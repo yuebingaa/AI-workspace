@@ -17,7 +17,6 @@ import {
   createExecutionState,
   previewChangeSet,
   undoLastChange,
-  type ChangeSetExecutionState,
 } from "@/core/changesets";
 import { createChangeSetAuditRecord, createChangeSetAuditRecordFromSummary, appendChangeSetAuditRecord } from "@/core/audit";
 import { appendQueryExecutionRecord } from "@/core/data";
@@ -39,26 +38,46 @@ import {
 } from "@/core/harness/task-state";
 import {
   confirmDatasetAiAccess,
+  DatasetAiAccessConflictError,
   deleteUploadedDataset,
   loadUploadedDataset,
 } from "@/core/datasets/client";
 import type { DatasetUploadResponse, UploadedDatasetDescriptor } from "@/core/datasets";
-import type { AiChangeSetAuditMetadata, AppNode, AppSpec, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, DataSourceDefinition, QueryExecutionRecord } from "@/core/models";
+import {
+  removeUploadedDatasetFromWorkspace,
+  synchronizeUploadedDatasetExecution,
+  synchronizeUploadedDatasetProduct,
+  synchronizeUploadedDatasetWorkspace,
+} from "@/core/datasets/workspace-state";
+import {
+  createEdsAuditSummary,
+  createEdsWorkspaceSnapshot,
+  EDS_OVERVIEW_DATA_SOURCE_ID,
+  EDS_WORKSPACE_PAGE_ID,
+  installEdsWorkspaceInDataProduct,
+  installEdsWorkspaceInExecution,
+  mergeEdsWorkspaceRuntime,
+  type EdsAnalysisResponse,
+  type EdsWorkspaceSnapshot,
+} from "@/core/eds";
+import type { AiChangeSetAuditMetadata, AppNode, AppSpec, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
 import {
   createBrowserStudioRepository,
   createStudioSnapshot,
   loadStudioStateSafely,
   restoreDemoData,
+  saveStudioStateSafely,
   type StudioRepository,
 } from "@/core/repository";
 import { readableValidationError } from "@/core/schemas";
 import { demoFixtureResult, type DemoFixtures } from "@/fixtures/demo-product";
 import { AiBuilderAssistant, type AiRequestUiStatus, type ChangeSetUiStatus } from "./AiBuilderAssistant";
-import { ActivityHistoryPanel, restoreDialogTrigger } from "./ActivityHistoryPanel";
+import { ActivityHistoryPanel, restoreDialogTrigger, restoreDialogTriggerUnlessOpen } from "./ActivityHistoryPanel";
 import { CsvUploadDialog } from "./CsvUploadDialog";
 import { DataProductCanvas, type CanvasMode } from "./DataProductCanvas";
 import { DataSourceDetailsPanel } from "./DataSourceDetailsPanel";
+import { EdsAnalysisDialog } from "./EdsAnalysisDialog";
 import { PageStructurePanel } from "./PageStructurePanel";
 import { StudioHeader, type PreviewDevice } from "./StudioHeader";
 
@@ -79,27 +98,6 @@ function initialHarnessTiming(): HarnessExecutionTiming {
     toolDurationMs: 0,
     otherDurationMs: 0,
     retainedObservationCount: 0,
-  };
-}
-
-function withDataSource(appSpec: AppSpec, source: DataSourceDefinition): AppSpec {
-  const exists = appSpec.dataSources.some((candidate) => candidate.id === source.id);
-  return { ...appSpec, dataSources: exists ? appSpec.dataSources.map((candidate) => candidate.id === source.id ? source : candidate) : [...appSpec.dataSources, source] };
-}
-
-function withoutDataSource(appSpec: AppSpec, dataSourceId: string): AppSpec {
-  return { ...appSpec, dataSources: appSpec.dataSources.filter((source) => source.id !== dataSourceId) };
-}
-
-function mapExecutionDataSource(
-  state: ChangeSetExecutionState,
-  mapper: (appSpec: AppSpec) => AppSpec,
-): ChangeSetExecutionState {
-  return {
-    ...state,
-    present: mapper(state.present),
-    preview: state.preview ? { ...state.preview, appSpec: mapper(state.preview.appSpec) } : null,
-    history: state.history.map((entry) => ({ ...entry, appSpec: mapper(entry.appSpec) })),
   };
 }
 
@@ -134,6 +132,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [dataProduct, setDataProduct] = useState(() => structuredClone(fixtures.dataProduct));
   const [execution, setExecution] = useState(() => createExecutionState(fixtures.dataProduct.appSpec));
   const [dataRuntime, setDataRuntime] = useState(() => structuredClone(fixtures.dataRuntime));
+  const [edsWorkspace, setEdsWorkspace] = useState<EdsWorkspaceSnapshot | null>(null);
   const [activePageId, setActivePageId] = useState(fixtures.dataProduct.appSpec.navigation[0].pageId);
   const [activeDataSourceId, setActiveDataSourceId] = useState(fixtures.dataProduct.datasets[0]?.id ?? "");
   const [device, setDevice] = useState<PreviewDevice>("desktop");
@@ -149,6 +148,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [pendingChangeSource, setPendingChangeSource] = useState<ChangeSetAuditSource | null>(null);
   const [isDataSourceOpen, setIsDataSourceOpen] = useState(false);
   const [isCsvUploadOpen, setIsCsvUploadOpen] = useState(false);
+  const [isEdsAnalysisOpen, setIsEdsAnalysisOpen] = useState(false);
   const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
   const [aiChangeSet, setAiChangeSet] = useState<ChangeSet>(() => structuredClone(repurchaseChangeSet));
   const [aiMessage, setAiMessage] = useState("我已检查数据结构和当前画布，建议先预览以下结构化变更。");
@@ -163,10 +163,23 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
+  const edsAnalysisButtonRef = useRef<HTMLButtonElement>(null);
+  const edsAnalysisOpenRef = useRef(false);
   const repositoryRef = useRef<StudioRepository | null>(null);
+  const persistedQueryRecordsRef = useRef<QueryExecutionRecord[] | null>(null);
   const puckDraftOriginRef = useRef<PuckDraftOrigin | null>(null);
   const aiRequestAbortRef = useRef<AbortController | null>(null);
   const harnessRequestActiveRef = useRef(false);
+  const latestDatasetWorkspaceRef = useRef({
+    execution,
+    dataProduct,
+    dataRuntime,
+    activeDataSourceId,
+    auditRecords,
+    queryRecords,
+    harnessTasks,
+    edsWorkspace,
+  });
 
   const isApplied = execution.appliedChangeSetIds.includes(aiChangeSet.id);
   const isAiPreview = execution.preview?.changeSetId === aiChangeSet.id;
@@ -193,21 +206,25 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setDataProduct(restored.dataProduct);
       setExecution(restored.execution);
       setAuditRecords(restored.auditRecords);
-      setQueryRecords(restored.queryRecords);
+      if (restored.restored) setQueryRecords(restored.queryRecords);
       setHarnessTasks(restored.harnessTasks);
-      setDataRuntime(structuredClone(fixtures.dataRuntime));
-      setActiveDataSourceId(restored.dataProduct.datasets[0]?.id ?? "");
+      setEdsWorkspace(restored.edsWorkspace);
+      setDataRuntime(mergeEdsWorkspaceRuntime(fixtures.dataRuntime, restored.edsWorkspace));
+      setActivePageId(restored.edsWorkspace ? EDS_WORKSPACE_PAGE_ID : restored.dataProduct.appSpec.navigation[0].pageId);
+      setActiveDataSourceId(restored.edsWorkspace ? EDS_OVERVIEW_DATA_SOURCE_ID : restored.dataProduct.datasets[0]?.id ?? "");
       const uploadedSourceIds = restored.execution.present.dataSources
         .filter((source) => source.sourceType === "csv" && source.ephemeral)
         .map((source) => source.id);
       uploadedSourceIds.forEach((datasetId) => {
         void loadUploadedDataset(datasetId).then((loaded) => {
           if (cancelled) return;
+          setExecution((current) => synchronizeUploadedDatasetExecution(current, loaded.dataset));
+          setDataProduct((current) => synchronizeUploadedDatasetProduct(current, loaded.dataset));
           setDataRuntime((current) => ({
             rowsByDataSourceId: { ...current.rowsByDataSourceId, [datasetId]: loaded.rows },
           }));
         }).catch(() => {
-          if (!cancelled) setPersistenceNotice(`临时数据集 ${datasetId} 已过期或因服务重启失效，请重新上传。`);
+          if (!cancelled) setPersistenceNotice(`临时数据集 ${datasetId} 已过期、未启用服务端持久化或恢复失败，请重新上传。`);
         });
       });
       const pendingHarnessTask = restored.harnessTasks.find((task) => task.state === "awaitingConfirmation" && task.pendingChangeSet);
@@ -217,6 +234,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setAiMetadata(null);
         setHasValidAiPlan(true);
         setAiRequestStatus("success");
+      } else if (restored.edsWorkspace) {
+        setAiInstruction("检查 EDS 分析数据，说明异常次数最多的线体和累计时间最长的异常类型。不要修改页面。");
+        setAiMessage("EDS 派生汇总已从本地工作区恢复，并进入当前页面与 AI 数据上下文；原始工作簿和逐行明细未保存。");
+        setAiMetadata(null);
+        setHasValidAiPlan(false);
+        setAiRequestStatus("idle");
       }
       setSaveLabel(restored.restored ? "已恢复 · 本地草稿" : "已保存 · 演示草稿");
       setPersistenceNotice(restored.notice?.includes("回退") ? restored.notice : null);
@@ -227,20 +250,43 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
 
   useEffect(() => () => aiRequestAbortRef.current?.abort(), []);
 
+  useEffect(() => {
+    latestDatasetWorkspaceRef.current = {
+      execution,
+      dataProduct,
+      dataRuntime,
+      activeDataSourceId,
+      auditRecords,
+      queryRecords,
+      harnessTasks,
+      edsWorkspace,
+    };
+  }, [activeDataSourceId, auditRecords, dataProduct, dataRuntime, edsWorkspace, execution, harnessTasks, queryRecords]);
+
+  useEffect(() => {
+    if (isHistoryLoading || persistedQueryRecordsRef.current === queryRecords) return;
+    persistedQueryRecordsRef.current = queryRecords;
+    const result = saveStudioStateSafely(
+      repositoryRef.current,
+      createStudioSnapshot(dataProduct, execution, auditRecords, queryRecords, harnessTasks, edsWorkspace),
+    );
+    if (!result.persisted) setPersistenceNotice(result.notice);
+  }, [auditRecords, dataProduct, edsWorkspace, execution, harnessTasks, isHistoryLoading, queryRecords]);
+
   function persistExplicitly(
     nextExecution = execution,
     nextAuditRecords = auditRecords,
     nextQueryRecords = queryRecords,
     nextDataProduct = dataProduct,
     nextHarnessTasks = harnessTasks,
+    nextEdsWorkspace = edsWorkspace,
   ) {
-    const repository = repositoryRef.current;
-    if (!repository) return;
-    try {
-      repository.save(createStudioSnapshot(nextDataProduct, nextExecution, nextAuditRecords, nextQueryRecords, nextHarnessTasks));
-    } catch (error) {
-      setPersistenceNotice(`本地保存失败，当前页面仍可继续使用。${error instanceof Error ? ` ${error.message}` : ""}`);
-    }
+    const result = saveStudioStateSafely(
+      repositoryRef.current,
+      createStudioSnapshot(nextDataProduct, nextExecution, nextAuditRecords, nextQueryRecords, nextHarnessTasks, nextEdsWorkspace),
+    );
+    if (!result.persisted) setPersistenceNotice(result.notice);
+    return result;
   }
 
   function clearPuckDraft() {
@@ -264,6 +310,90 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const handleOpenHistory = useCallback(() => setIsHistoryOpen(true), []);
   const handleCloseHistory = useCallback(() => setIsHistoryOpen(false), []);
   const handleRestoreHistoryFocus = useCallback(() => restoreDialogTrigger(historyButtonRef.current), []);
+  const handleOpenEdsAnalysis = useCallback(() => {
+    edsAnalysisOpenRef.current = true;
+    setIsEdsAnalysisOpen(true);
+  }, []);
+  const handleCloseEdsAnalysis = useCallback(() => {
+    edsAnalysisOpenRef.current = false;
+    setIsEdsAnalysisOpen(false);
+    requestAnimationFrame(() => restoreDialogTriggerUnlessOpen(
+      edsAnalysisButtonRef.current,
+      edsAnalysisOpenRef.current,
+    ));
+  }, []);
+
+  function handleCreateEdsWorkspace(result: EdsAnalysisResponse) {
+    if (role === "viewer") throw new Error("查看者无权生成 EDS 工作区看板，请切换为编辑者或管理员。");
+    aiRequestAbortRef.current?.abort();
+    const current = latestDatasetWorkspaceRef.current;
+    const snapshot = createEdsWorkspaceSnapshot(result);
+    let nextAuditRecords = current.auditRecords;
+    if (current.execution.preview) {
+      const previewId = current.execution.preview.changeSetId;
+      const previous = current.auditRecords.find((record) => record.changeSetId === previewId && record.status === "previewed");
+      const cancelled = createChangeSetAuditRecordFromSummary(
+        previewId,
+        previous?.operationSummary ?? "取消当前变更预览",
+        role,
+        previewId === aiChangeSet.id ? "ai" : pendingChangeSource ?? "manual",
+        "cancelled",
+      );
+      nextAuditRecords = appendChangeSetAuditRecord(nextAuditRecords, cancelled);
+    }
+    const nextExecution = installEdsWorkspaceInExecution(cancelPreview(current.execution), snapshot);
+    const nextDataProduct = {
+      ...installEdsWorkspaceInDataProduct(current.dataProduct, snapshot),
+      appSpec: nextExecution.present,
+    };
+    const nextDataRuntime = mergeEdsWorkspaceRuntime(current.dataRuntime, snapshot);
+    const nextHarnessTasks = current.harnessTasks.map((task) => (
+      task.state === "awaitingConfirmation" && task.pendingChangeSet
+        ? settleHarnessConfirmation(task, false, harnessUiClock)
+        : task
+    ));
+    const audit = createChangeSetAuditRecordFromSummary(
+      `eds_workspace_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`,
+      createEdsAuditSummary(snapshot),
+      role,
+      "manual",
+      "applied",
+    );
+    nextAuditRecords = appendChangeSetAuditRecord(nextAuditRecords, audit);
+
+    setExecution(nextExecution);
+    setDataProduct(nextDataProduct);
+    setDataRuntime(nextDataRuntime);
+    setEdsWorkspace(snapshot);
+    setAuditRecords(nextAuditRecords);
+    setHarnessTasks(nextHarnessTasks);
+    setActivePageId(EDS_WORKSPACE_PAGE_ID);
+    setActiveDataSourceId(EDS_OVERVIEW_DATA_SOURCE_ID);
+    setCanvasMode("preview");
+    setPendingPuckChangeSet(null);
+    setPendingChangeSource(null);
+    clearPuckDraft();
+    setPuckSessionKey((value) => value + 1);
+    setIsDataSourceOpen(false);
+    setAiInstruction("检查 EDS 分析数据，说明异常次数最多的线体和累计时间最长的异常类型。不要修改页面。");
+    setAiMessage("EDS 派生汇总已进入当前页面与 AI 数据上下文；原始工作簿和逐行明细未保存。可让 AI 检查总览或分类字段。");
+    setAiMetadata(null);
+    setAiRequestStatus("idle");
+    setAiRequestError(null);
+    setHasValidAiPlan(false);
+    setSaveLabel("已保存 · EDS 演示看板");
+    setValidationError(null);
+    const persistence = persistExplicitly(
+      nextExecution,
+      nextAuditRecords,
+      current.queryRecords,
+      nextDataProduct,
+      nextHarnessTasks,
+      snapshot,
+    );
+    if (!persistence.persisted) setSaveLabel("已生成 · 当前页面未持久化");
+    handleCloseEdsAnalysis();
+  }
 
   function toAuditMetadata(metadata: AiPlanMetadata | AiChangeSetAuditMetadata | null): AiChangeSetAuditMetadata | undefined {
     return metadata ? {
@@ -422,6 +552,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         ...(activeDataSource ? { dataSourceId: activeDataSource.id } : {}),
         appSpec: baseExecution.present,
         recipes: dataProduct.recipes,
+        ...(edsWorkspace ? { edsWorkspace } : {}),
         ...(retryOfTaskId ? { retryOfTaskId } : {}),
       }, { signal: controller.signal });
       const nextTasks = appendHarnessTask(initialTasks, task);
@@ -665,92 +796,89 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     }
   }
 
-  function datasetReference(descriptor: UploadedDatasetDescriptor) {
-    return {
-      id: descriptor.datasetId,
-      name: descriptor.source.name,
-      rowCount: descriptor.source.rowCount,
-      columnCount: descriptor.source.columnCount,
-      qualityScore: descriptor.source.qualityScore,
-      expiresAt: descriptor.expiresAt,
-      ephemeral: true,
-      sensitiveFieldCount: descriptor.sensitiveFields.length,
-      aiAccessPolicy: descriptor.aiAccessPolicy,
-    };
-  }
-
   function applyUploadedDescriptor(descriptor: UploadedDatasetDescriptor) {
-    const nextExecution = mapExecutionDataSource(execution, (appSpec) => withDataSource(appSpec, descriptor.source));
-    const reference = datasetReference(descriptor);
-    const nextDataProduct = {
-      ...dataProduct,
-      datasets: dataProduct.datasets.some((item) => item.id === descriptor.datasetId)
-        ? dataProduct.datasets.map((item) => item.id === descriptor.datasetId ? reference : item)
-        : [...dataProduct.datasets, reference],
-      recipes: [
-        ...dataProduct.recipes.filter((recipe) => recipe.id !== descriptor.recipe.id && recipe.sourceDatasetId !== descriptor.datasetId),
-        descriptor.recipe,
-      ],
-      appSpec: nextExecution.present,
-    };
-    setExecution(nextExecution);
-    setDataProduct(nextDataProduct);
-    persistExplicitly(nextExecution, auditRecords, queryRecords, nextDataProduct, harnessTasks);
-    return { nextExecution, nextDataProduct };
+    const current = latestDatasetWorkspaceRef.current;
+    const next = synchronizeUploadedDatasetWorkspace(current, descriptor);
+    setExecution(next.execution);
+    setDataProduct(next.dataProduct);
+    const persistence = persistExplicitly(
+      next.execution,
+      current.auditRecords,
+      current.queryRecords,
+      next.dataProduct,
+      current.harnessTasks,
+    );
+    return { nextExecution: next.execution, nextDataProduct: next.dataProduct, persistence };
   }
 
   function handleCsvUploaded(result: DatasetUploadResponse) {
-    applyUploadedDescriptor(result.dataset);
+    const { persistence } = applyUploadedDescriptor(result.dataset);
     setDataRuntime((current) => ({
       rowsByDataSourceId: { ...current.rowsByDataSourceId, [result.dataset.datasetId]: result.rows },
     }));
     setActiveDataSourceId(result.dataset.datasetId);
     setIsCsvUploadOpen(false);
     setIsDataSourceOpen(true);
-    setPersistenceNotice(result.dataset.persistenceNotice);
-    setSaveLabel("已注册 · 临时 CSV 数据源");
+    setPersistenceNotice(persistence.persisted
+      ? result.dataset.persistenceNotice
+      : `${persistence.notice} ${result.dataset.persistenceNotice}`);
+    setSaveLabel(persistence.persisted ? "已注册 · 临时 CSV 数据源" : "已注册 · 当前页面未持久化");
   }
 
   async function handleConfirmDatasetAiAccess(policy: "masked" | "exclude-sensitive-samples") {
     if (!activeDataSource?.ephemeral) return;
-    const descriptor = await confirmDatasetAiAccess(activeDataSource.id, policy);
-    applyUploadedDescriptor(descriptor);
-    setSaveLabel("已保存 · 敏感字段策略已确认");
+    try {
+      const descriptor = await confirmDatasetAiAccess(activeDataSource.id, policy);
+      const { persistence } = applyUploadedDescriptor(descriptor);
+      setSaveLabel(persistence.persisted ? "已保存 · 敏感字段策略已确认" : "已更新 · 当前页面未持久化");
+    } catch (error) {
+      if (error instanceof DatasetAiAccessConflictError) {
+        const { persistence } = applyUploadedDescriptor(error.currentDataset);
+        setSaveLabel(persistence.persisted ? "已保存 · 已同步服务端敏感字段策略" : "已同步 · 当前页面未持久化");
+      }
+      throw error;
+    }
   }
 
   async function handleDeleteDataset() {
     if (!activeDataSource?.ephemeral) return;
     const dataSourceId = activeDataSource.id;
-    if (appSpecUsesDataSource(execution.present, dataSourceId) || execution.history.some((entry) => appSpecUsesDataSource(entry.appSpec, dataSourceId))) {
+    const beforeDelete = latestDatasetWorkspaceRef.current;
+    if (appSpecUsesDataSource(beforeDelete.execution.present, dataSourceId) || beforeDelete.execution.history.some((entry) => appSpecUsesDataSource(entry.appSpec, dataSourceId))) {
       throw new Error("该数据源仍被页面组件或变更历史引用，无法删除。请先撤销相关绑定。");
     }
     await deleteUploadedDataset(dataSourceId);
-    const nextExecution = mapExecutionDataSource(execution, (appSpec) => withoutDataSource(appSpec, dataSourceId));
-    const nextDataProduct = {
-      ...dataProduct,
-      datasets: dataProduct.datasets.filter((item) => item.id !== dataSourceId),
-      recipes: dataProduct.recipes.filter((recipe) => recipe.sourceDatasetId !== dataSourceId),
-      appSpec: nextExecution.present,
-    };
-    const nextRuntime = { rowsByDataSourceId: Object.fromEntries(Object.entries(dataRuntime.rowsByDataSourceId).filter(([id]) => id !== dataSourceId)) };
-    setExecution(nextExecution);
-    setDataProduct(nextDataProduct);
-    setDataRuntime(nextRuntime);
-    setActiveDataSourceId(nextDataProduct.datasets[0]?.id ?? "");
-    setIsDataSourceOpen(false);
-    setSaveLabel("已保存 · 临时数据源已删除");
-    persistExplicitly(nextExecution, auditRecords, queryRecords, nextDataProduct, harnessTasks);
+    const current = latestDatasetWorkspaceRef.current;
+    const next = removeUploadedDatasetFromWorkspace(current, dataSourceId);
+    setExecution(next.execution);
+    setDataProduct(next.dataProduct);
+    setDataRuntime(next.dataRuntime);
+    if (current.activeDataSourceId === dataSourceId) {
+      setActiveDataSourceId(next.dataProduct.datasets[0]?.id ?? "");
+      setIsDataSourceOpen(false);
+    }
+    const persistence = persistExplicitly(
+      next.execution,
+      current.auditRecords,
+      current.queryRecords,
+      next.dataProduct,
+      current.harnessTasks,
+    );
+    setSaveLabel(persistence.persisted ? "已保存 · 临时数据源已删除" : "已删除 · 当前页面未持久化");
   }
 
   function handleResetDemo() {
     if (!window.confirm("确定恢复演示数据吗？当前已应用编辑、查询记录和审计记录都会被清除。")) return;
     aiRequestAbortRef.current?.abort();
     const restored = restoreDemoData(repositoryRef.current, fixtures.dataProduct);
-    void Promise.all(dataProduct.datasets.filter((dataset) => dataset.ephemeral).map((dataset) => deleteUploadedDataset(dataset.id))).catch(() => undefined);
+    void Promise.all(dataProduct.datasets.filter((dataset) => dataset.ephemeral).map((dataset) => deleteUploadedDataset(dataset.id)))
+      .catch(() => setPersistenceNotice("页面已恢复演示数据，但部分服务端临时数据未能立即删除；它们仍会在 TTL 到期后自动清理。"));
     setDataProduct(restored.dataProduct);
     setExecution(restored.execution);
     setDataRuntime(structuredClone(fixtures.dataRuntime));
+    setEdsWorkspace(null);
     setAuditRecords(restored.auditRecords);
+    persistedQueryRecordsRef.current = restored.queryRecords;
     setQueryRecords(restored.queryRecords);
     setPendingPuckChangeSet(null);
     setPendingChangeSource(null);
@@ -763,7 +891,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setIsDataSourceOpen(false);
     setSaveLabel("已保存 · 已恢复演示数据");
     setValidationError(null);
-    setPersistenceNotice(null);
+    setPersistenceNotice(restored.notice?.includes("未能清除") ? restored.notice : null);
     setAiChangeSet(structuredClone(repurchaseChangeSet));
     setAiMessage("我已检查数据结构和当前画布，建议先预览以下结构化变更。");
     setAiMetadata(null);
@@ -803,6 +931,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           activeDataSourceId={activeDataSource?.id ?? ""}
           onOpenDataSource={(dataSourceId) => { setActiveDataSourceId(dataSourceId); setIsDataSourceOpen(true); }}
           onUploadCsv={() => setIsCsvUploadOpen(true)}
+          onOpenEdsAnalysis={handleOpenEdsAnalysis}
+          edsAnalysisButtonRef={edsAnalysisButtonRef}
         />
         <DataProductCanvas
           appSpec={renderedSpec}
@@ -865,6 +995,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         />
       )}
       {isCsvUploadOpen && <CsvUploadDialog onUploaded={handleCsvUploaded} onClose={() => setIsCsvUploadOpen(false)} />}
+      {isEdsAnalysisOpen && <EdsAnalysisDialog onCreateWorkspace={handleCreateEdsWorkspace} onClose={handleCloseEdsAnalysis} />}
       <ActivityHistoryPanel
         open={isHistoryOpen}
         harnessTasks={harnessTasks}

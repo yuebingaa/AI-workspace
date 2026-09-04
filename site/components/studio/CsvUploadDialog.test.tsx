@@ -9,6 +9,6 @@ describe("CsvUploadDialog", () => {
     expect(html).toContain("拖拽 CSV 文件");
     expect(html).toContain("accept=\".csv,text/csv\"");
     expect(html).toContain("50,000 行");
-    expect(html).toContain("服务重启后失效");
+    expect(html).toContain("未启用本地持久化时重启失效");
   });
 });

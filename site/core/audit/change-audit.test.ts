@@ -40,4 +40,22 @@ describe("ChangeSet 审计记录", () => {
     expect(records).toHaveLength(2);
     expect(records[0].status).toBe("undone");
   });
+
+  it("拒绝非法或抛错的审计时钟并返回领域错误", () => {
+    const { repurchaseChangeSet } = fixtures();
+    for (const clock of [
+      () => new Date(Number.NaN),
+      () => new Date(8_640_000_000_000_000),
+      () => { throw new Error("synthetic clock failure"); },
+    ]) {
+      expect(() => createChangeSetAuditRecord(
+        repurchaseChangeSet,
+        "editor",
+        "ai",
+        "previewed",
+        undefined,
+        clock,
+      )).toThrow(/ChangeSet 审计时钟必须返回有效 Date/);
+    }
+  });
 });

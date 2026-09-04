@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isEdsWorkspaceDataSourceId } from "@/core/eds";
 import type { AppNode } from "@/core/models";
 import { studioCapabilities } from "@/core/permissions";
 import { componentPropsSchemas, StudioValidationError } from "@/core/schemas";
@@ -29,6 +30,7 @@ export const HARNESS_CONTEXT_BUDGETS = {
 } as const;
 
 export const DEFAULT_HARNESS_CONTEXT_BUDGET = HARNESS_CONTEXT_BUDGETS.multiStep;
+export const HARNESS_CONTEXT_HARD_LIMITS = HARNESS_CONTEXT_BUDGETS.multiStep;
 
 export interface HarnessContextBudget {
   maxRequestInputChars: number;
@@ -261,9 +263,18 @@ function compactObservation(observation: HarnessObservation | undefined, compact
       return {
         ...base,
         result: {
+          ...pick(data, ["dataSourceId"]),
           fields: Array.isArray(data.fields) ? data.fields.slice(0, compacted ? 8 : 16).map((field) => {
             const item = field && typeof field === "object" ? field as Record<string, unknown> : {};
-            return pick(item, ["field", "label", "type", "nullCount", "uniqueCount", "minimum", "maximum", "average"]);
+            const selected = pick(item, ["field", "label", "type", "nullCount", "uniqueCount", "minimum", "maximum", "average"]);
+            const samples = typeof data.dataSourceId === "string"
+              && isEdsWorkspaceDataSourceId(data.dataSourceId)
+              && Array.isArray(item.samples)
+              ? item.samples.slice(0, compacted ? 2 : 3).map((sample) => (
+                  typeof sample === "string" ? sanitizeHarnessText(sample).slice(0, 120) : sample
+                ))
+              : [];
+            return samples.length > 0 ? { ...selected, samples } : selected;
           }) : [],
           fieldCount: Array.isArray(data.fields) ? data.fields.length : 0,
           truncated: data.truncated === true,
@@ -470,8 +481,9 @@ export function resolveHarnessContextBudget(
 ): HarnessContextBudget {
   const budget = { ...HARNESS_CONTEXT_BUDGETS[complexity], ...input };
   for (const [name, value] of Object.entries(budget)) {
-    if (!Number.isInteger(value) || value <= 0) {
-      throw new StudioValidationError("Harness 上下文预算无效", [`预算 ${name} 必须为正整数`]);
+    const maximum = HARNESS_CONTEXT_HARD_LIMITS[name as keyof HarnessContextBudget];
+    if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+      throw new StudioValidationError("Harness 上下文预算无效", [`预算 ${name} 必须是 1–${maximum} 的整数`]);
     }
   }
   return budget;

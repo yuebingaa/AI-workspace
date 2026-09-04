@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DataRow, DataSourceDefinition } from "@/core/models";
-import { analyzeDataSourceFields, createDataPreview } from "./field-analysis";
+import {
+  analyzeDataSourceFields,
+  createDataPreview,
+  MAX_DATA_PREVIEW_CELL_CHARS,
+  MAX_FIELD_SAMPLE_CHARS,
+} from "./field-analysis";
 
 const source: DataSourceDefinition = {
   id: "source_test",
@@ -28,6 +33,29 @@ describe("字段分析与数据预览", () => {
     const analyses = analyzeDataSourceFields(source, rows);
     expect(analyses.find((field) => field.field === "region")).toMatchObject({ uniqueCount: 2, nullCount: 1, nullRatio: 0.25, samples: ["华东", "华南"] });
     expect(analyses.find((field) => field.field === "amount")).toMatchObject({ nullCount: 2, nullRatio: 0.5, average: 20 });
+  });
+
+  it("有限大数平均不溢出，异常数字字段不会被静默排除", () => {
+    expect(analyzeDataSourceFields(source, [
+      { amount: Number.MAX_VALUE, region: "A" },
+      { amount: Number.MAX_VALUE, region: "B" },
+    ])[0].average).toBe(Number.MAX_VALUE);
+    expect(() => analyzeDataSourceFields(source, [{ amount: Number.NaN, region: "A" }])).toThrow(/字段分析失败/);
+    expect(() => analyzeDataSourceFields(source, [{ amount: Number.POSITIVE_INFINITY, region: "A" }])).toThrow(/字段分析失败/);
+    expect(() => analyzeDataSourceFields(source, [{ amount: "10", region: "A" }])).toThrow(/字段分析失败/);
+  });
+
+  it("样本与数据预览截断展示副本但不修改原始长文本", () => {
+    const longText = "长".repeat(MAX_DATA_PREVIEW_CELL_CHARS + 25);
+    const rows: DataRow[] = [{ amount: 1, region: longText }];
+    const sample = analyzeDataSourceFields(source, rows).find((field) => field.field === "region")!.samples[0];
+    const preview = createDataPreview(source, rows, ["region"], 1);
+
+    expect(typeof sample === "string" && sample.length).toBe(MAX_FIELD_SAMPLE_CHARS);
+    expect(typeof preview.rows[0].region === "string" && preview.rows[0].region.length).toBe(MAX_DATA_PREVIEW_CELL_CHARS);
+    expect(String(sample).endsWith("…")).toBe(true);
+    expect(String(preview.rows[0].region).endsWith("…")).toBe(true);
+    expect(rows[0].region).toBe(longText);
   });
 
   it("数据预览最多返回 20 行并支持字段隐藏", () => {

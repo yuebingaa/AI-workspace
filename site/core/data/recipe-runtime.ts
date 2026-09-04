@@ -23,6 +23,8 @@ export interface RecipeRuntimeOptions {
   clock?: () => number;
 }
 
+export const MAX_RECIPE_PREVIEW_ROWS = 20;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -99,6 +101,16 @@ function matchesFilter(value: Exclude<DataValue, null>, step: Extract<DataRecipe
   }
 }
 
+function hasValidCalendarDate(value: string): boolean {
+  const parts = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?:[T\s].*)?$/u.exec(value);
+  if (!parts) return false;
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  return day <= [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+}
+
 function convertValue(value: DataValue | undefined, to: DataFieldType, field: string, stepId: string): Exclude<DataValue, null> {
   const present = assertNotNull(value, field, stepId);
   if (to === "string") return String(present);
@@ -113,7 +125,10 @@ function convertValue(value: DataValue | undefined, to: DataFieldType, field: st
     if ([0, "0", "false", "否"].includes(present)) return false;
     throw new StudioValidationError("数据配方类型转换失败", [`字段“${field}”的值不能转换为布尔值`]);
   }
-  const parsed = typeof present === "number" ? new Date(present) : new Date(String(present));
+  if (typeof present === "string" && !hasValidCalendarDate(present.trim())) {
+    throw new StudioValidationError("数据配方类型转换失败", [`字段“${field}”的值不是有效日期`]);
+  }
+  const parsed = typeof present === "number" ? new Date(present) : new Date(String(present).trim());
   if (Number.isNaN(parsed.getTime())) throw new StudioValidationError("数据配方类型转换失败", [`字段“${field}”的值不是有效日期`]);
   return parsed.toISOString().slice(0, 10);
 }
@@ -151,6 +166,9 @@ function withTransformation(
 
 function aggregate(rows: DataRow[], field: RecipeFieldSchema, aggregation: Extract<DataRecipeStep, { type: "groupAggregate" }>["aggregations"][number], stepId: string): DataValue {
   const values = rows.map((row) => assertNotNull(row[field.name], field.name, stepId));
+  if (values.some((value) => typeof value === "number" && !Number.isFinite(value))) {
+    throw new StudioValidationError("数据配方聚合失败", [`字段“${field.name}”包含非有限数值`]);
+  }
   if (aggregation.aggregation === "count") return rows.length;
   if (aggregation.aggregation === "countDistinct") return new Set(values.map((value) => `${typeof value}:${String(value)}`)).size;
   if (aggregation.aggregation === "min") return values.reduce((result, value) => compare(value, result) < 0 ? value : result);
@@ -159,8 +177,21 @@ function aggregate(rows: DataRow[], field: RecipeFieldSchema, aggregation: Extra
     throw new StudioValidationError("数据配方聚合失败", [`字段“${field.name}”不能执行 ${aggregation.aggregation} 聚合`]);
   }
   const numbers = values.filter((value): value is number => typeof value === "number");
+  if (aggregation.aggregation === "average") {
+    let average = 0;
+    let compensation = 0;
+    for (const value of numbers) {
+      const scaled = value / numbers.length - compensation;
+      const next = average + scaled;
+      compensation = (next - average) - scaled;
+      average = next;
+    }
+    if (!Number.isFinite(average)) throw new StudioValidationError("数据配方聚合失败", [`字段“${field.name}”的 average 聚合产生了无效数值`]);
+    return average;
+  }
   const sum = numbers.reduce((total, value) => total + value, 0);
-  return aggregation.aggregation === "average" ? sum / numbers.length : sum;
+  if (!Number.isFinite(sum)) throw new StudioValidationError("数据配方聚合失败", [`字段“${field.name}”的 sum 聚合产生了无效数值`]);
+  return sum;
 }
 
 function executeStep(state: RecipeState, step: DataRecipeStep): RecipeState {
@@ -243,7 +274,9 @@ function executeStep(state: RecipeState, step: DataRecipeStep): RecipeState {
     for (const row of state.rows) {
       const keyValues = step.groupBy.map((field) => assertNotNull(row[field], field, step.id));
       const key = JSON.stringify(keyValues);
-      groups.set(key, [...(groups.get(key) ?? []), row]);
+      const group = groups.get(key);
+      if (group) group.push(row);
+      else groups.set(key, [row]);
     }
     const rows = [...groups.values()].map((group) => Object.fromEntries([
       ...step.groupBy.map((field) => [field, group[0][field] ?? null] as const),
@@ -302,7 +335,24 @@ export function executeDataRecipe(
   options: RecipeRuntimeOptions = {},
 ): DataRecipeExecutionResult {
   const clock = options.clock ?? (() => performance.now());
-  const totalStarted = clock();
+  const sampleClock = (): number | null => {
+    try {
+      const value = clock();
+      return Number.isFinite(value) ? value : null;
+    } catch {
+      return null;
+    }
+  };
+  const totalStarted = sampleClock();
+  if (totalStarted === null) {
+    throw new StudioValidationError("数据配方计时时钟无效", ["起始时钟必须返回有限数值"]);
+  }
+  const durationSince = (startedAt: number | null): number => {
+    const endedAt = sampleClock();
+    if (startedAt === null || endedAt === null) return 0;
+    const durationMs = Math.round(endedAt - startedAt);
+    return Number.isSafeInteger(durationMs) && durationMs >= 0 ? durationMs : 0;
+  };
   let state = initialState(source, rows);
   const parsed = dataRecipeSchema.safeParse(rawRecipe);
   if (!parsed.success) {
@@ -312,6 +362,7 @@ export function executeDataRecipe(
     const rawStep = isRecord(rawSteps[stepIndex]) ? rawSteps[stepIndex] : {};
     const failedStepId = typeof rawStep.id === "string" ? rawStep.id : "recipe_schema";
     const message = `数据配方 Schema 校验失败：${formatSchemaIssues(parsed.error, "DataRecipe").slice(0, 4).join("；")}`;
+    const durationMs = durationSince(totalStarted);
     return failureResult(state, [{
       stepId: failedStepId,
       stepIndex,
@@ -319,36 +370,28 @@ export function executeDataRecipe(
       status: "failure",
       inputRowCount: rows.length,
       outputRowCount: rows.length,
-      durationMs: Math.max(0, clock() - totalStarted),
+      durationMs,
       fields: state.fields,
       error: message,
-    }], failedStepId, message, Math.max(0, clock() - totalStarted));
+    }], failedStepId, message, durationMs);
   }
   const recipe = parsed.data;
   if (recipe.sourceDatasetId !== source.id) {
     const message = `数据配方数据源不匹配：配方引用 ${recipe.sourceDatasetId}，当前数据源为 ${source.id}`;
-    return failureResult(state, [], "recipe_source", message, Math.max(0, clock() - totalStarted));
+    return failureResult(state, [], "recipe_source", message, durationSince(totalStarted));
   }
 
   const summaries: RecipeStepExecutionSummary[] = [];
   for (let index = 0; index < recipe.steps.length; index += 1) {
     const step = recipe.steps[index];
-    const started = clock();
+    const started = sampleClock();
     const inputRows = state.rows.length;
+    let nextState: RecipeState;
     try {
-      state = executeStep(state, step);
-      summaries.push({
-        stepId: step.id,
-        stepIndex: index,
-        stepType: step.type,
-        status: "success",
-        inputRowCount: inputRows,
-        outputRowCount: state.rows.length,
-        durationMs: Math.max(0, clock() - started),
-        fields: structuredClone(state.fields),
-      });
+      nextState = executeStep(state, step);
     } catch (caught) {
       const error = caught instanceof Error ? caught.message : "数据配方执行失败：未知错误";
+      const durationMs = durationSince(started);
       summaries.push({
         stepId: step.id,
         stepIndex: index,
@@ -356,23 +399,37 @@ export function executeDataRecipe(
         status: "failure",
         inputRowCount: inputRows,
         outputRowCount: state.rows.length,
-        durationMs: Math.max(0, clock() - started),
+        durationMs,
         fields: structuredClone(state.fields),
         error,
       });
-      return failureResult(state, summaries, step.id, error, Math.max(0, clock() - totalStarted));
+      return failureResult(state, summaries, step.id, error, durationSince(totalStarted));
     }
+    state = nextState;
+    summaries.push({
+      stepId: step.id,
+      stepIndex: index,
+      stepType: step.type,
+      status: "success",
+      inputRowCount: inputRows,
+      outputRowCount: state.rows.length,
+      durationMs: durationSince(started),
+      fields: structuredClone(state.fields),
+    });
   }
-  return { success: true, ...state, steps: summaries, totalDurationMs: Math.max(0, clock() - totalStarted) };
+  return { success: true, ...state, steps: summaries, totalDurationMs: durationSince(totalStarted) };
 }
 
 export function recipeWithStepCount(recipe: DataRecipe, count: number): DataRecipe {
   return { ...structuredClone(recipe), steps: structuredClone(recipe.steps.slice(0, Math.max(1, Math.min(count, recipe.steps.length)))) };
 }
 
-export function createRecipePreview(result: DataRecipeExecutionResult, limit = 20) {
+export function createRecipePreview(result: DataRecipeExecutionResult, limit = MAX_RECIPE_PREVIEW_ROWS) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RECIPE_PREVIEW_ROWS) {
+    throw new StudioValidationError("数据配方预览限制无效", [`预览行数必须是 1–${MAX_RECIPE_PREVIEW_ROWS} 的整数`]);
+  }
   return {
     fields: result.fields.map((field) => field.name),
-    rows: result.rows.slice(0, Math.max(1, limit)),
+    rows: result.rows.slice(0, limit),
   };
 }
