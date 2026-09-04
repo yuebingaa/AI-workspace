@@ -147,6 +147,7 @@ export class DeepSeekHarnessModel implements HarnessModel {
       headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` },
       body: JSON.stringify({
         model: this.options.model,
+        thinking: { type: "disabled" },
         response_format: { type: "json_object" },
         stream: false,
         temperature: 0.1,
@@ -189,7 +190,12 @@ export class DeepSeekHarnessModel implements HarnessModel {
       && input.context.phase === "followUp"
       && input.tools.length === 0
       && (input.context.latestObservation !== undefined || input.context.lastObservation !== undefined);
-    const turn = normalizeHarnessModelTurn(candidate, { readonlyTask, readonlyResultComplete });
+    const targetPageId = typeof input.context.targetPageId === "string" ? input.context.targetPageId : undefined;
+    const turn = normalizeHarnessModelTurn(candidate, {
+      readonlyTask,
+      readonlyResultComplete,
+      ...(targetPageId ? { expectedPageId: targetPageId } : {}),
+    });
     const rawUsage = provider.data.usage;
     const promptTokens = rawUsage?.prompt_tokens;
     const completionTokens = rawUsage?.completion_tokens;
@@ -276,6 +282,13 @@ function estimatedPromptTokens(inputChars: number): number {
 
 function abortError(signal: AbortSignal): Error {
   return new Error(signal.reason instanceof Error ? signal.reason.message : "Harness 任务已取消。");
+}
+
+function userFacingMissingRequirement(value: string): string {
+  const sanitized = sanitizeHarnessText(value);
+  return /^(?:goal_?summary|tools?|datasets?|data_?sources?|context)$/iu.test(sanitized)
+    ? "请具体说明想了解的数据、现象或业务问题"
+    : sanitized;
 }
 
 function addUsage(
@@ -604,7 +617,7 @@ export class DeepSeekHarness {
             failureTerminationCode = "protocolViolation";
             throw new StudioValidationError("Harness 模型协议失败", ["仍有可用工具时模型不得跳过检查并宣告缺少条件。"]);
           }
-          const missing = turn.missingRequirements.map((item) => sanitizeHarnessText(item)).join("、");
+          const missing = turn.missingRequirements.map(userFacingMissingRequirement).join("、");
           const blockedMessage = `${sanitizeHarnessText(turn.message)} 缺少：${missing}。正式 AppSpec 未修改。`;
           task = appendHarnessEvent(task, {
             type: "state",

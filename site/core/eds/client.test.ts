@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { analyzeEdsFiles, EdsClientError } from "./client";
+import { analyzeEdsFiles, EdsClientError, EdsSelectionRequiredClientError } from "./client";
 import { EDS_MAX_RESPONSE_BYTES } from "./contracts";
 
 function files() {
@@ -27,6 +27,31 @@ describe("EDS 客户端边界", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(analyzeEdsFiles(source)).rejects.toEqual(new EdsClientError(400, "synthetic stop"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("提交用户选择的日期和班次，并把结构化 409 转为可选择错误", async () => {
+    const [source] = files();
+    const selections = [
+      { date: "2026-09-03", shift: "白班" },
+      { date: "2026-09-03", shift: "夜班" },
+    ];
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = init?.body as FormData;
+      expect(body.get("selectionDate")).toBe("2026-09-03");
+      expect(body.get("selectionShift")).toBe("夜班");
+      return new Response(JSON.stringify({
+        error: {
+          code: "EDS_SELECTION_REQUIRED",
+          message: "请选择分析范围。",
+          selections,
+        },
+      }), { status: 409, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(analyzeEdsFiles(source, null, undefined, selections[1]))
+      .rejects.toEqual(new EdsSelectionRequiredClientError(selections, "请选择分析范围。"));
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

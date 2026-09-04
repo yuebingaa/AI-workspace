@@ -445,8 +445,8 @@ async function main() {
     let reopenFocusInside = false;
     let workspaceState = null;
     if (createWorkspace) {
-      const created = await evaluate(client, `(() => { const button = [...document.querySelectorAll("button")].find((item) => item.textContent.trim() === "生成 EDS 演示看板"); button?.click(); return Boolean(button); })()`);
-      assert(created, "结果页缺少生成 EDS 演示看板动作");
+      const created = await evaluate(client, `(() => { const button = [...document.querySelectorAll("button")].find((item) => item.textContent.trim() === "生成 EDS 分析看板"); button?.click(); return Boolean(button); })()`);
+      assert(created, "结果页缺少生成 EDS 分析看板动作");
       await waitFor(client, `!document.querySelector(".eds-dialog") && document.body.innerText.includes("飞达异常分析看板")`, "EDS 看板进入主界面");
       workspaceState = await evaluate(client, `(() => {
         const serialized = localStorage.getItem("datacanvas-ai:studio:v1") || "";

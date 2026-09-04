@@ -10,11 +10,14 @@ import {
   createEdsAuditSummary,
   createEdsWorkspaceRuntime,
   createEdsWorkspaceSnapshot,
+  createEdsWorkspaceSnapshotForResults,
   EDS_BREAKDOWN_DATA_SOURCE_ID,
   EDS_OVERVIEW_DATA_SOURCE_ID,
   EDS_WORKSPACE_PAGE_ID,
+  getEdsWorkspaceReports,
   installEdsWorkspaceInDataProduct,
   installEdsWorkspaceInExecution,
+  selectEdsWorkspaceReport,
 } from "./workspace";
 
 function result(): EdsAnalysisResponse {
@@ -44,6 +47,18 @@ function result(): EdsAnalysisResponse {
 function fixtures() {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
   return structuredClone(demoFixtureResult.data);
+}
+
+function shiftResults(): [EdsAnalysisResponse, EdsAnalysisResponse] {
+  const white = result();
+  white.summary.date = "2026-09-03";
+  white.summary.shift = "白班";
+  const night = structuredClone(white);
+  night.summary.shift = "夜班";
+  night.summary.inputRows += 100;
+  night.exportArtifact.fileName = "private-night.xlsx";
+  night.exportArtifact.downloadUrl = "/api/exports/private-night";
+  return [white, night];
 }
 
 function child(page: ReturnType<typeof installEdsWorkspaceInDataProduct>["appSpec"]["pages"][number], id: string) {
@@ -98,6 +113,31 @@ describe("EDS 派生汇总工作区", () => {
     expect(executeTableBinding(table.props.binding, second.appSpec.dataSources, runtime).rows).toHaveLength(24);
   });
 
+  it("同时保存多个班次并按当前班次过滤看板数据", () => {
+    const data = fixtures();
+    const results = shiftResults();
+    const white = createEdsWorkspaceSnapshotForResults(results, 0, () => new Date("2026-09-04T03:30:00.000Z"));
+    const night = selectEdsWorkspaceReport(white, 1);
+    const reports = getEdsWorkspaceReports(night);
+    const product = installEdsWorkspaceInDataProduct(data.dataProduct, night);
+    const runtime = createEdsWorkspaceRuntime(night);
+    const page = product.appSpec.pages.find((candidate) => candidate.id === EDS_WORKSPACE_PAGE_ID)!;
+    const metric = child(page, "eds_metric_input");
+    const table = child(page, "eds_summary_table");
+
+    expect(reports.map((report) => report.summary.shift)).toEqual(["白班", "夜班"]);
+    expect(night.summary).toEqual(reports[1].summary);
+    expect(runtime.rowsByDataSourceId[EDS_OVERVIEW_DATA_SOURCE_ID]).toHaveLength(2);
+    expect(runtime.rowsByDataSourceId[EDS_BREAKDOWN_DATA_SOURCE_ID]).toHaveLength(48);
+    expect(product.appSpec.dataSources.find((source) => source.id === EDS_OVERVIEW_DATA_SOURCE_ID)?.rowCount).toBe(2);
+    expect(product.appSpec.dataSources.find((source) => source.id === EDS_BREAKDOWN_DATA_SOURCE_ID)?.rowCount).toBe(48);
+    if (!metric || metric.type !== "MetricCard" || !table || table.type !== "DataTable") throw new Error("EDS 页面组件缺失");
+    expect(executeMetricBinding(metric.props.binding, product.appSpec.dataSources, runtime).rawValue).toBe(results[1].summary.inputRows);
+    expect(executeTableBinding(table.props.binding, product.appSpec.dataSources, runtime).rows).toHaveLength(24);
+    expect(JSON.stringify(night)).not.toContain("private-night.xlsx");
+    expect(JSON.stringify(night)).not.toContain("/api/exports/private-night");
+  });
+
   it("把派生数据源同步进正式态、预览和历史，避免后续撤销丢失 EDS 上下文", () => {
     const data = fixtures();
     const snapshot = createEdsWorkspaceSnapshot(result());
@@ -136,6 +176,7 @@ describe("EDS 派生汇总工作区", () => {
     const serialized = JSON.stringify(fieldResult.data);
 
     expect(resolveHarnessPageDataSourceIds(request)).toEqual([EDS_OVERVIEW_DATA_SOURCE_ID, EDS_BREAKDOWN_DATA_SOURCE_ID]);
+    expect(selection.toolNames).toEqual(["analyzeEdsReports"]);
     expect(JSON.stringify(selection.context)).toContain(EDS_OVERVIEW_DATA_SOURCE_ID);
     expect(JSON.stringify(selection.context)).toContain(EDS_BREAKDOWN_DATA_SOURCE_ID);
     expect(serialized).toContain(String(snapshot.summary.totalOccurrences));
@@ -153,5 +194,16 @@ describe("EDS 派生汇总工作区", () => {
     expect(snapshot.lineSummary.every((item) => summary.includes(item.label))).toBe(true);
     expect(snapshot.issueSummary.every((item) => summary.includes(item.label))).toBe(true);
     expect(summary).not.toContain(".xlsx");
+  });
+
+  it("多班次审计正文同时记录各班次派生汇总且不包含下载信息", () => {
+    const snapshot = createEdsWorkspaceSnapshotForResults(shiftResults(), 1);
+    const summary = createEdsAuditSummary(snapshot);
+
+    expect(summary).toContain("2份派生汇总（不含原始行）");
+    expect(summary).toContain("2026-09-03 白班");
+    expect(summary).toContain("2026-09-03 夜班");
+    expect(summary).not.toContain("private-night.xlsx");
+    expect(summary).not.toContain("/api/exports/");
   });
 });

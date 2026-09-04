@@ -1,6 +1,6 @@
 import writeXlsxFile, { type Cell, type SheetData } from "write-excel-file/node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EDS_MAX_RESPONSE_BYTES, EDS_UPLOAD_LIMITS, edsAnalysisResponseSchema, type EdsCellValue, type EdsWorkbookSheet } from "@/core/eds";
+import { EDS_MAX_RESPONSE_BYTES, EDS_UPLOAD_LIMITS, edsAnalysisResponseSchema, edsSelectionRequiredResponseSchema, type EdsCellValue, type EdsWorkbookSheet } from "@/core/eds";
 import { excelExportStore } from "@/core/exports/server/excel-export-store";
 import { createSyntheticEdsFixture } from "@/fixtures/eds-synthetic";
 import { GET as downloadExport } from "../../exports/[token]/route";
@@ -101,6 +101,44 @@ describe("EDS 分析 API", () => {
     expect(sourceOnlyResult.configuration.comparisonMode).toBe("not_requested");
     expect(sourceOnlyResult.comparison).toBeNull();
     expect(sourceOnlyResult.summary).toMatchObject({ date: "2026-08-25", shift: "白班" });
+  });
+
+  it("多班次返回结构化选择项，并按用户选择生成独立报告", async () => {
+    const fixture = createSyntheticEdsFixture();
+    for (const sheet of fixture.sourceSheets) {
+      const night = structuredClone(sheet.data[1]);
+      night[5] = "夜班";
+      sheet.data.push(night);
+    }
+    const source = await fileFromSheets("multi-shift.xlsx", fixture.sourceSheets);
+    const discovery = new FormData();
+    discovery.set("source", source);
+
+    const discoveryResponse = await POST(new Request("http://localhost/api/eds/analyze", { method: "POST", body: discovery }));
+    expect(discoveryResponse.status).toBe(409);
+    expect(discoveryResponse.headers.get("cache-control")).toContain("no-store");
+    const required = edsSelectionRequiredResponseSchema.parse(await discoveryResponse.json());
+    expect(required.error.selections).toEqual([
+      { date: "2026-08-25", shift: "夜班" },
+      { date: "2026-08-25", shift: "白班" },
+    ].sort((left, right) => left.shift.localeCompare(right.shift, "zh-CN")));
+    expect(excelExportStore.health().count).toBe(0);
+
+    const selected = new FormData();
+    selected.set("source", source);
+    selected.set("selectionDate", "2026-08-25");
+    selected.set("selectionShift", "夜班");
+    const selectedResponse = await POST(new Request("http://localhost/api/eds/analyze", { method: "POST", body: selected }));
+    expect(selectedResponse.status).toBe(201);
+    const result = edsAnalysisResponseSchema.parse(await selectedResponse.json());
+    expect(result.summary).toMatchObject({ date: "2026-08-25", shift: "夜班" });
+    expect(result.summary.matchedRows).toBeGreaterThan(0);
+    expect(excelExportStore.health().count).toBe(1);
+
+    const incompleteSelection = new FormData();
+    incompleteSelection.set("source", source);
+    incompleteSelection.set("selectionDate", "2026-08-25");
+    expect((await POST(new Request("http://localhost/api/eds/analyze", { method: "POST", body: incompleteSelection }))).status).toBe(400);
   });
 
   it("目标候选记录日期非法时在写出和存储前返回 400", async () => {

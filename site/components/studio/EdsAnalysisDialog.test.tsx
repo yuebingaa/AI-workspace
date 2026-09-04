@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EDS_RULE_VERSION, EDS_TEMPLATE_VERSION, type EdsAnalysisResponse } from "@/core/eds";
-import { analyzeEdsFiles } from "@/core/eds/client";
+import { analyzeEdsFiles, EdsSelectionRequiredClientError } from "@/core/eds/client";
 import {
   canApplyEdsRequestResult,
   canChooseEdsFile,
@@ -21,6 +21,11 @@ import {
 vi.mock("@/core/eds/client", () => ({
   analyzeEdsFiles: vi.fn(),
   EdsClientError: class EdsClientError extends Error {},
+  EdsSelectionRequiredClientError: class EdsSelectionRequiredClientError extends Error {
+    constructor(readonly selections: Array<{ date: string; shift: string }>, message: string) {
+      super(message);
+    }
+  },
 }));
 
 const mountedRoots: Root[] = [];
@@ -187,13 +192,13 @@ describe("EdsAnalysisDialog", () => {
       Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "导入并自动分析")!.click();
       await Promise.resolve();
     });
-    const createButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "生成 EDS 演示看板")!;
+    const createButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "生成 EDS 分析看板")!;
     expect(createButton).toBeDefined();
     expect(container.textContent).toContain("仅派生汇总会进入 AI 上下文、localStorage 和审计正文");
 
     act(() => createButton.click());
     expect(onCreateWorkspace).toHaveBeenCalledTimes(1);
-    expect(onCreateWorkspace).toHaveBeenCalledWith(standardResult);
+    expect(onCreateWorkspace).toHaveBeenCalledWith([standardResult], 0);
   });
 
   it("零值柱不伪造可见宽度并提供机器可读数值语义", () => {
@@ -229,7 +234,7 @@ describe("EdsAnalysisDialog", () => {
     });
     const resetButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "重新选择工作簿")!;
     expect(resetButton).toBeDefined();
-    expect(analyzeEdsFiles).toHaveBeenCalledWith(expect.any(File), null, expect.any(AbortSignal));
+    expect(analyzeEdsFiles).toHaveBeenCalledWith(expect.any(File), null, expect.any(AbortSignal), undefined);
 
     act(() => resetButton.click());
     const nextRunButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "导入并自动分析")!;
@@ -262,8 +267,70 @@ describe("EdsAnalysisDialog", () => {
       runButton.click();
       await Promise.resolve();
     });
-    expect(analyzeEdsFiles).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ name: "output.xlsx" }), expect.any(AbortSignal));
+    expect(analyzeEdsFiles).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ name: "output.xlsx" }), expect.any(AbortSignal), undefined);
     expect(container.textContent).toContain("验收基准比对全部一致");
+  });
+
+  it("检测到多班次后允许选择分别生成，并在两份报告间切换", async () => {
+    const selections = [
+      { date: "2026-09-03", shift: "白班" },
+      { date: "2026-09-03", shift: "夜班" },
+    ];
+    const whiteResult = structuredClone(standardResult);
+    whiteResult.summary.date = selections[0].date;
+    whiteResult.summary.shift = selections[0].shift;
+    const nightResult = structuredClone(standardResult);
+    nightResult.summary.date = selections[1].date;
+    nightResult.summary.shift = selections[1].shift;
+    nightResult.summary.matchedRows = 173;
+    nightResult.summary.totalOccurrences = 173;
+    vi.mocked(analyzeEdsFiles)
+      .mockRejectedValueOnce(new EdsSelectionRequiredClientError(selections, "请选择分析范围。"))
+      .mockResolvedValueOnce(whiteResult)
+      .mockResolvedValueOnce(nightResult);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    mountedRoots.push(root);
+    const onCreateWorkspace = vi.fn();
+    act(() => root.render(<EdsAnalysisDialog onClose={() => undefined} onCreateWorkspace={onCreateWorkspace} />));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    act(() => {
+      Object.defineProperty(input, "files", { configurable: true, value: [new File(["source"], "multi-shift.xlsx")] });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "导入并自动分析")!.click();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("检测到多个日期或班次");
+    const choices = container.querySelectorAll<HTMLInputElement>('input[name="eds-analysis-scope"]');
+    expect(choices).toHaveLength(3);
+    expect(Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "请选择分析范围")!.disabled).toBe(true);
+
+    act(() => choices[2].click());
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "分别生成 2 份报告")!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(analyzeEdsFiles).toHaveBeenCalledTimes(3);
+    expect(analyzeEdsFiles).toHaveBeenNthCalledWith(2, expect.any(File), null, expect.any(AbortSignal), selections[0]);
+    expect(analyzeEdsFiles).toHaveBeenNthCalledWith(3, expect.any(File), null, expect.any(AbortSignal), selections[1]);
+    expect(container.textContent).toContain("已分别生成 2 份报告");
+    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    act(() => tabs[1].click());
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(container.textContent).toContain("2026-09-03 · 夜班");
+    expect(container.textContent).toContain("把 2 份报告一起生成到主看板");
+    const createButton = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent === "生成可切换的 EDS 看板（2 份）")!;
+    act(() => createButton.click());
+    expect(onCreateWorkspace).toHaveBeenCalledWith([whiteResult, nightResult], 1);
   });
 
   it("真实文件 change 事件中的无效替换会移除旧文件并禁用分析", () => {

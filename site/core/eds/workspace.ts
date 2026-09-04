@@ -23,32 +23,66 @@ const summarySchema = z.object({
   totalMinutes: z.number().finite().nonnegative(),
 }).strict();
 
+const workspaceReportSchema = z.object({
+  summary: summarySchema,
+  issueSummary: z.array(edsChartItemSchema).length(14),
+  lineSummary: z.array(edsChartItemSchema).min(1).max(20),
+}).strict();
+
+type EdsWorkspaceReport = z.infer<typeof workspaceReportSchema>;
+
+function validateReport(
+  report: EdsWorkspaceReport,
+  context: z.RefinementCtx,
+  pathPrefix: Array<string | number> = [],
+): void {
+  const count = (items: Array<{ count: number }>) => items.reduce((total, item) => total + item.count, 0);
+  const minutes = (items: Array<{ minutes: number }>) => items.reduce((total, item) => total + item.minutes, 0);
+  const closeEnough = (left: number, right: number) => Math.abs(left - right) <= Math.max(1e-8, Math.abs(right) * 1e-10);
+  if (report.summary.matchedRows !== report.summary.totalOccurrences) {
+    context.addIssue({ code: "custom", path: [...pathPrefix, "summary", "totalOccurrences"], message: "异常次数必须等于命中记录数" });
+  }
+  for (const [key, items] of [["issueSummary", report.issueSummary], ["lineSummary", report.lineSummary]] as const) {
+    if (count(items) !== report.summary.totalOccurrences) {
+      context.addIssue({ code: "custom", path: [...pathPrefix, key], message: "分类次数合计必须等于总异常次数" });
+    }
+    if (!closeEnough(minutes(items), report.summary.totalMinutes)) {
+      context.addIssue({ code: "custom", path: [...pathPrefix, key], message: "分类时长合计必须等于总异常时长" });
+    }
+    if (new Set(items.map((item) => item.label)).size !== items.length) {
+      context.addIssue({ code: "custom", path: [...pathPrefix, key], message: "分类标签不能重复" });
+    }
+  }
+}
+
 export const edsWorkspaceSnapshotSchema = z.object({
   version: z.literal(EDS_WORKSPACE_VERSION),
   generatedAt: z.iso.datetime(),
   summary: summarySchema,
   issueSummary: z.array(edsChartItemSchema).length(14),
   lineSummary: z.array(edsChartItemSchema).min(1).max(20),
+  reports: z.array(workspaceReportSchema).min(2).max(20).optional(),
   configuration: z.object({
     templateVersion: z.literal(EDS_TEMPLATE_VERSION),
     ruleVersion: z.literal(EDS_RULE_VERSION),
   }).strict(),
 }).strict().superRefine((snapshot, context) => {
-  const count = (items: Array<{ count: number }>) => items.reduce((total, item) => total + item.count, 0);
-  const minutes = (items: Array<{ minutes: number }>) => items.reduce((total, item) => total + item.minutes, 0);
-  const closeEnough = (left: number, right: number) => Math.abs(left - right) <= Math.max(1e-8, Math.abs(right) * 1e-10);
-  if (snapshot.summary.matchedRows !== snapshot.summary.totalOccurrences) {
-    context.addIssue({ code: "custom", path: ["summary", "totalOccurrences"], message: "异常次数必须等于命中记录数" });
-  }
-  for (const [key, items] of [["issueSummary", snapshot.issueSummary], ["lineSummary", snapshot.lineSummary]] as const) {
-    if (count(items) !== snapshot.summary.totalOccurrences) {
-      context.addIssue({ code: "custom", path: [key], message: "分类次数合计必须等于总异常次数" });
+  validateReport(snapshot, context);
+  if (snapshot.reports) {
+    snapshot.reports.forEach((report, index) => validateReport(report, context, ["reports", index]));
+    const keys = snapshot.reports.map((report) => `${report.summary.date}\u0000${report.summary.shift}`);
+    if (new Set(keys).size !== keys.length) {
+      context.addIssue({ code: "custom", path: ["reports"], message: "日期和班次组合不能重复" });
     }
-    if (!closeEnough(minutes(items), snapshot.summary.totalMinutes)) {
-      context.addIssue({ code: "custom", path: [key], message: "分类时长合计必须等于总异常时长" });
-    }
-    if (new Set(items.map((item) => item.label)).size !== items.length) {
-      context.addIssue({ code: "custom", path: [key], message: "分类标签不能重复" });
+    const active = snapshot.reports.find((report) => (
+      report.summary.date === snapshot.summary.date && report.summary.shift === snapshot.summary.shift
+    ));
+    if (!active || JSON.stringify(active) !== JSON.stringify({
+      summary: snapshot.summary,
+      issueSummary: snapshot.issueSummary,
+      lineSummary: snapshot.lineSummary,
+    })) {
+      context.addIssue({ code: "custom", path: ["reports"], message: "当前报告必须与报告集合中的对应日期和班次完全一致" });
     }
   }
 });
@@ -93,6 +127,68 @@ export function createEdsWorkspaceSnapshot(
   });
 }
 
+function reportFromResult(result: EdsAnalysisResponse): EdsWorkspaceReport {
+  return workspaceReportSchema.parse({
+    summary: {
+      date: result.summary.date,
+      shift: result.summary.shift,
+      inputRows: result.summary.inputRows,
+      matchedRows: result.summary.matchedRows,
+      issueCount: result.summary.issueCount,
+      channelCount: result.summary.channelCount,
+      totalOccurrences: result.summary.totalOccurrences,
+      totalMinutes: result.summary.totalMinutes,
+    },
+    issueSummary: result.issueSummary,
+    lineSummary: result.lineSummary,
+  });
+}
+
+function reportsFromSnapshot(snapshot: EdsWorkspaceSnapshot): EdsWorkspaceReport[] {
+  return snapshot.reports ?? [{
+    summary: snapshot.summary,
+    issueSummary: snapshot.issueSummary,
+    lineSummary: snapshot.lineSummary,
+  }];
+}
+
+export function createEdsWorkspaceSnapshotForResults(
+  results: EdsAnalysisResponse[],
+  activeResultIndex = 0,
+  clock: () => Date = () => new Date(),
+): EdsWorkspaceSnapshot {
+  if (results.length < 1 || results.length > 20) throw new Error("EDS 工作区报告数量必须为 1–20 份。");
+  if (!Number.isInteger(activeResultIndex) || activeResultIndex < 0 || activeResultIndex >= results.length) {
+    throw new Error("EDS 工作区当前报告索引无效。");
+  }
+  const reports = results.map(reportFromResult);
+  const active = reports[activeResultIndex];
+  return edsWorkspaceSnapshotSchema.parse({
+    version: EDS_WORKSPACE_VERSION,
+    generatedAt: generatedAt(clock),
+    ...active,
+    ...(reports.length > 1 ? { reports } : {}),
+    configuration: {
+      templateVersion: results[activeResultIndex].configuration.templateVersion,
+      ruleVersion: results[activeResultIndex].configuration.ruleVersion,
+    },
+  });
+}
+
+export function getEdsWorkspaceReports(snapshot: EdsWorkspaceSnapshot): EdsWorkspaceReport[] {
+  const parsed = edsWorkspaceSnapshotSchema.parse(snapshot);
+  return structuredClone(reportsFromSnapshot(parsed));
+}
+
+export function selectEdsWorkspaceReport(snapshot: EdsWorkspaceSnapshot, reportIndex: number): EdsWorkspaceSnapshot {
+  const parsed = edsWorkspaceSnapshotSchema.parse(snapshot);
+  const reports = reportsFromSnapshot(parsed);
+  if (!Number.isInteger(reportIndex) || reportIndex < 0 || reportIndex >= reports.length) {
+    throw new Error("EDS 工作区报告索引无效。");
+  }
+  return edsWorkspaceSnapshotSchema.parse({ ...parsed, ...reports[reportIndex] });
+}
+
 const stringField = (name: string, label: string, type: "string" | "date" = "string"): DataSourceField => ({
   name,
   label,
@@ -115,11 +211,12 @@ const numberField = (name: string, label: string): DataSourceField => ({
 
 export function createEdsWorkspaceDataSources(snapshot: EdsWorkspaceSnapshot): DataSourceDefinition[] {
   const parsed = edsWorkspaceSnapshotSchema.parse(snapshot);
+  const reports = reportsFromSnapshot(parsed);
   return [
     {
       id: EDS_OVERVIEW_DATA_SOURCE_ID,
       name: "EDS 分析总览",
-      rowCount: 1,
+      rowCount: reports.length,
       columnCount: 14,
       qualityScore: 100,
       updatedAt: parsed.generatedAt,
@@ -145,13 +242,15 @@ export function createEdsWorkspaceDataSources(snapshot: EdsWorkspaceSnapshot): D
     {
       id: EDS_BREAKDOWN_DATA_SOURCE_ID,
       name: "EDS 线体与异常分类汇总",
-      rowCount: parsed.lineSummary.length + parsed.issueSummary.length,
-      columnCount: 4,
+      rowCount: reports.reduce((total, report) => total + report.lineSummary.length + report.issueSummary.length, 0),
+      columnCount: 6,
       qualityScore: 100,
       updatedAt: parsed.generatedAt,
       sourceType: "json",
       aiAccessPolicy: "not-required",
       fields: [
+        stringField("work_date", "工作日期", "date"),
+        stringField("shift", "班次"),
         stringField("view", "汇总视图"),
         stringField("category", "分类名称"),
         numberField("occurrences", "异常次数"),
@@ -163,28 +262,31 @@ export function createEdsWorkspaceDataSources(snapshot: EdsWorkspaceSnapshot): D
 
 export function createEdsWorkspaceRuntime(snapshot: EdsWorkspaceSnapshot): LocalDataRuntime {
   const parsed = edsWorkspaceSnapshotSchema.parse(snapshot);
-  const topLine = [...parsed.lineSummary].sort((a, b) => b.count - a.count)[0];
-  const topIssue = [...parsed.issueSummary].sort((a, b) => b.minutes - a.minutes)[0];
-  const overviewRows: DataRow[] = [{
-    work_date: parsed.summary.date,
-    shift: parsed.summary.shift,
-    input_rows: parsed.summary.inputRows,
-    matched_rows: parsed.summary.matchedRows,
-    total_occurrences: parsed.summary.totalOccurrences,
-    total_minutes: parsed.summary.totalMinutes,
-    issue_count: parsed.summary.issueCount,
-    channel_count: parsed.summary.channelCount,
-    template_version: parsed.configuration.templateVersion,
-    rule_version: parsed.configuration.ruleVersion,
-    top_line: topLine.label,
-    top_line_occurrences: topLine.count,
-    top_issue: topIssue.label,
-    top_issue_minutes: topIssue.minutes,
-  }];
-  const breakdownRows: DataRow[] = [
-    ...parsed.lineSummary.map((item) => ({ view: "线体", category: item.label, occurrences: item.count, minutes: item.minutes })),
-    ...parsed.issueSummary.map((item) => ({ view: "异常分类", category: item.label, occurrences: item.count, minutes: item.minutes })),
-  ];
+  const reports = reportsFromSnapshot(parsed);
+  const overviewRows: DataRow[] = reports.map((report) => {
+    const topLine = [...report.lineSummary].sort((a, b) => b.count - a.count)[0];
+    const topIssue = [...report.issueSummary].sort((a, b) => b.minutes - a.minutes)[0];
+    return {
+      work_date: report.summary.date,
+      shift: report.summary.shift,
+      input_rows: report.summary.inputRows,
+      matched_rows: report.summary.matchedRows,
+      total_occurrences: report.summary.totalOccurrences,
+      total_minutes: report.summary.totalMinutes,
+      issue_count: report.summary.issueCount,
+      channel_count: report.summary.channelCount,
+      template_version: parsed.configuration.templateVersion,
+      rule_version: parsed.configuration.ruleVersion,
+      top_line: topLine.label,
+      top_line_occurrences: topLine.count,
+      top_issue: topIssue.label,
+      top_issue_minutes: topIssue.minutes,
+    };
+  });
+  const breakdownRows: DataRow[] = reports.flatMap((report) => [
+    ...report.lineSummary.map((item) => ({ work_date: report.summary.date, shift: report.summary.shift, view: "线体", category: item.label, occurrences: item.count, minutes: item.minutes })),
+    ...report.issueSummary.map((item) => ({ work_date: report.summary.date, shift: report.summary.shift, view: "异常分类", category: item.label, occurrences: item.count, minutes: item.minutes })),
+  ]);
   const sources = createEdsWorkspaceDataSources(parsed);
   validateRuntimeRows(sources[0], overviewRows);
   validateRuntimeRows(sources[1], breakdownRows);
@@ -230,6 +332,10 @@ function insight(snapshot: EdsWorkspaceSnapshot): string {
 export function createEdsWorkspacePage(snapshot: EdsWorkspaceSnapshot): AppPage {
   const parsed = edsWorkspaceSnapshotSchema.parse(snapshot);
   const hitRate = parsed.summary.inputRows === 0 ? 0 : parsed.summary.matchedRows / parsed.summary.inputRows * 100;
+  const scopeFilters: DataBinding["filters"] = [
+    { field: "work_date", operator: "equals", value: parsed.summary.date },
+    { field: "shift", operator: "equals", value: parsed.summary.shift },
+  ];
   return {
     id: EDS_WORKSPACE_PAGE_ID,
     title: "EDS 异常分析",
@@ -259,10 +365,10 @@ export function createEdsWorkspacePage(snapshot: EdsWorkspaceSnapshot): AppPage 
           type: "MetricGrid",
           props: { columns: 4 },
           children: [
-            { id: "eds_metric_input", type: "MetricCard", props: { label: "输入明细", trend: "完整输入行数", binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "input_rows") } },
-            { id: "eds_metric_matched", type: "MetricCard", props: { label: "命中记录", trend: `命中率 ${hitRate.toFixed(1)}%`, binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "matched_rows") } },
-            { id: "eds_metric_occurrences", type: "MetricCard", props: { label: "异常次数", trend: "与命中记录一致", binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "total_occurrences") } },
-            { id: "eds_metric_minutes", type: "MetricCard", props: { label: "异常时间", trend: `约 ${(parsed.summary.totalMinutes / 60).toFixed(2)} 小时`, binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "total_minutes", { format: { style: "number", decimals: 2, suffix: " 分钟" } }) } },
+            { id: "eds_metric_input", type: "MetricCard", props: { label: "输入明细", trend: "完整输入行数", binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "input_rows", { filters: scopeFilters }) } },
+            { id: "eds_metric_matched", type: "MetricCard", props: { label: "命中记录", trend: `命中率 ${hitRate.toFixed(1)}%`, binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "matched_rows", { filters: scopeFilters }) } },
+            { id: "eds_metric_occurrences", type: "MetricCard", props: { label: "异常次数", trend: "与命中记录一致", binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "total_occurrences", { filters: scopeFilters }) } },
+            { id: "eds_metric_minutes", type: "MetricCard", props: { label: "异常时间", trend: `约 ${(parsed.summary.totalMinutes / 60).toFixed(2)} 小时`, binding: binding(EDS_OVERVIEW_DATA_SOURCE_ID, "total_minutes", { filters: scopeFilters, format: { style: "number", decimals: 2, suffix: " 分钟" } }) } },
           ],
         },
         {
@@ -278,7 +384,7 @@ export function createEdsWorkspacePage(snapshot: EdsWorkspaceSnapshot): AppPage 
                 subtitle: `${parsed.lineSummary.length} 条线体 · 按次数降序`,
                 binding: binding(EDS_BREAKDOWN_DATA_SOURCE_ID, "occurrences", {
                   groupBy: "category",
-                  filters: [{ field: "view", operator: "equals", value: "线体" }],
+                  filters: [...scopeFilters, { field: "view", operator: "equals", value: "线体" }],
                   sort: [{ field: "occurrences", direction: "desc" }],
                   limit: 10,
                 }),
@@ -308,7 +414,7 @@ export function createEdsWorkspacePage(snapshot: EdsWorkspaceSnapshot): AppPage 
             subtitle: "14 类异常完整数据见下方表格 · 单位分钟",
             binding: binding(EDS_BREAKDOWN_DATA_SOURCE_ID, "minutes", {
               groupBy: "category",
-              filters: [{ field: "view", operator: "equals", value: "异常分类" }],
+              filters: [...scopeFilters, { field: "view", operator: "equals", value: "异常分类" }],
               sort: [{ field: "minutes", direction: "desc" }],
               limit: 8,
               format: { style: "number", decimals: 1 },
@@ -323,6 +429,7 @@ export function createEdsWorkspacePage(snapshot: EdsWorkspaceSnapshot): AppPage 
             subtitle: "共 24 条派生汇总，不含原始工作簿行",
             actionLabel: "派生汇总",
             binding: binding(EDS_BREAKDOWN_DATA_SOURCE_ID, "occurrences", {
+              filters: scopeFilters,
               sort: [{ field: "occurrences", direction: "desc" }],
               limit: 40,
               columns: [
@@ -399,7 +506,10 @@ export function isEdsWorkspaceDataSourceId(id: string): boolean {
 
 export function createEdsAuditSummary(snapshot: EdsWorkspaceSnapshot): string {
   const parsed = edsWorkspaceSnapshotSchema.parse(snapshot);
-  const lineText = parsed.lineSummary.map((item) => `${item.label}:${item.count}次/${item.minutes.toFixed(2)}分钟`).join("，");
-  const issueText = parsed.issueSummary.map((item) => `${item.label}:${item.count}次/${item.minutes.toFixed(2)}分钟`).join("，");
-  return `生成 EDS 演示看板｜派生汇总（不含原始行）｜${parsed.summary.date} ${parsed.summary.shift}｜输入${parsed.summary.inputRows}行｜命中${parsed.summary.matchedRows}行｜异常${parsed.summary.totalOccurrences}次/${parsed.summary.totalMinutes.toFixed(2)}分钟｜模板${parsed.configuration.templateVersion}｜规则${parsed.configuration.ruleVersion}｜线体[${lineText}]｜异常分类[${issueText}]`;
+  const reports = reportsFromSnapshot(parsed).map((report) => {
+    const lineText = report.lineSummary.map((item) => `${item.label}:${item.count}次/${item.minutes.toFixed(2)}分钟`).join("，");
+    const issueText = report.issueSummary.map((item) => `${item.label}:${item.count}次/${item.minutes.toFixed(2)}分钟`).join("，");
+    return `${report.summary.date} ${report.summary.shift}｜输入${report.summary.inputRows}行｜命中${report.summary.matchedRows}行｜异常${report.summary.totalOccurrences}次/${report.summary.totalMinutes.toFixed(2)}分钟｜线体[${lineText}]｜异常分类[${issueText}]`;
+  }).join("｜报告分隔｜");
+  return `生成 EDS 分析看板｜${reportsFromSnapshot(parsed).length}份派生汇总（不含原始行）｜${reports}｜模板${parsed.configuration.templateVersion}｜规则${parsed.configuration.ruleVersion}`;
 }

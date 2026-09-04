@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { compileModelPlanDraft, modelPlanDraftSchema } from "@/core/ai/operation-output";
 import { createExecutionState, previewChangeSet } from "@/core/changesets";
+import { getEdsWorkspaceReports } from "@/core/eds";
 import {
   analyzeDataSourceFields,
   executeDataRecipe,
@@ -74,6 +75,56 @@ function compactNodes(node: AppNode): Array<{ id: string; type: AppNode["type"];
     ...(node.children?.flatMap(compactNodes) ?? []),
   ];
 }
+
+const analyzeEdsReports = defineTool({
+  name: "analyzeEdsReports",
+  description: "读取 EDS 工作区中全部日期/班次的派生汇总，返回 KPI、主要线体、主要异常类别和跨班次差异。只读；不接触原始工作簿或逐行明细。",
+  mode: "readOnly",
+  schema: z.object({}).strict(),
+  execute: (_args, context) => {
+    if (!context.request.edsWorkspace) {
+      throw new StudioValidationError("EDS AI 分析失败", ["当前工作区没有已校验的 EDS 派生报告"]);
+    }
+    const reports = getEdsWorkspaceReports(context.request.edsWorkspace);
+    const baseline = reports[0];
+    const includeExpandedRankings = reports.length <= 4;
+    const summaries = reports.map((report, index) => {
+      const topLines = [...report.lineSummary].sort((left, right) => right.count - left.count).slice(0, includeExpandedRankings ? 3 : 1);
+      const topIssues = [...report.issueSummary].sort((left, right) => right.minutes - left.minutes).slice(0, includeExpandedRankings ? 5 : 1);
+      return {
+        date: report.summary.date,
+        shift: report.summary.shift,
+        current: report.summary.date === context.request.edsWorkspace?.summary.date
+          && report.summary.shift === context.request.edsWorkspace?.summary.shift,
+        inputRows: report.summary.inputRows,
+        matchedRows: report.summary.matchedRows,
+        hitRatePercent: report.summary.inputRows === 0 ? 0 : report.summary.matchedRows / report.summary.inputRows * 100,
+        totalOccurrences: report.summary.totalOccurrences,
+        totalMinutes: report.summary.totalMinutes,
+        deltaFromFirst: index === 0 ? null : {
+          occurrences: report.summary.totalOccurrences - baseline.summary.totalOccurrences,
+          minutes: report.summary.totalMinutes - baseline.summary.totalMinutes,
+          hitRatePercentagePoints: (
+            report.summary.inputRows === 0 ? 0 : report.summary.matchedRows / report.summary.inputRows * 100
+          ) - (baseline.summary.inputRows === 0 ? 0 : baseline.summary.matchedRows / baseline.summary.inputRows * 100),
+        },
+        topLines: topLines.map((item) => ({ label: item.label, occurrences: item.count, minutes: item.minutes })),
+        topIssues: topIssues.map((item) => ({ label: item.label, occurrences: item.count, minutes: item.minutes })),
+      };
+    });
+    return {
+      summary: `已读取 ${reports.length} 份 EDS 派生报告，包含各班次 KPI、主要线体、主要异常类别及相对首份报告的差异；未读取原始行。`,
+      data: {
+        reportCount: reports.length,
+        baseline: { date: baseline.summary.date, shift: baseline.summary.shift },
+        reports: summaries,
+        templateVersion: context.request.edsWorkspace.configuration.templateVersion,
+        ruleVersion: context.request.edsWorkspace.configuration.ruleVersion,
+        rawRowsIncluded: false,
+      },
+    };
+  },
+});
 
 const inspectDataset = defineTool({
   name: "inspectDataset",
@@ -234,6 +285,7 @@ const createChangeSetPreview = defineTool({
 });
 
 export const harnessToolRegistry = {
+  analyzeEdsReports,
   inspectDataset,
   inspectFields,
   previewDataRecipe,
@@ -506,6 +558,7 @@ export async function executeHarnessTool(
   };
   const result = await (() => {
     switch (name) {
+      case "analyzeEdsReports": return run(analyzeEdsReports);
       case "inspectDataset": return run(inspectDataset);
       case "inspectFields": return run(inspectFields);
       case "previewDataRecipe": return run(previewDataRecipe);

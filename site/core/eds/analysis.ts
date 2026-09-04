@@ -1,4 +1,4 @@
-import type { EdsChartItem, EdsComparison } from "./contracts";
+import { EDS_UPLOAD_LIMITS, type EdsChartItem, type EdsComparison, type EdsWorkbookSelection } from "./contracts";
 import {
   EDS_BUILT_IN_DEFINITION,
   EDS_RULE_VERSION,
@@ -75,6 +75,13 @@ export class EdsAnalysisError extends Error {
   constructor(message: string, readonly status = 400) {
     super(message);
     this.name = "EdsAnalysisError";
+  }
+}
+
+export class EdsSelectionRequiredError extends EdsAnalysisError {
+  constructor(readonly selections: EdsWorkbookSelection[]) {
+    super("检测到多个可分析的日期或班次，请选择一个范围或分别生成全部报告。", 409);
+    this.name = "EdsSelectionRequiredError";
   }
 }
 
@@ -283,6 +290,7 @@ function validateDefinition(definition: EdsReportDefinition): void {
 function selectionFromSources(
   sources: SourceSheetIndex[],
   definition: EdsReportDefinition,
+  requestedSelection?: EdsWorkbookSelection,
 ): { date: string; shift: string; channelSources: SourceSheetIndex[] } {
   const channelSources = definition.channels.map((channel) => {
     const line = normalizedText(channel.line);
@@ -302,6 +310,7 @@ function selectionFromSources(
       if (!issueNames.has(issue) || !channelKeys.has(`${line}\u0000${instance}`)) continue;
       const shift = normalizedText(row[source.headers.shift]);
       if (!shift) throw new EdsAnalysisError(`工作表“${source.name}”存在空班次的目标候选记录`);
+      if (shift.length > 50) throw new EdsAnalysisError(`工作表“${source.name}”的班次名称不能超过 50 个字符`);
       values.add(`${dateKey(row[source.headers.date])}\u0000${shift}`);
     }
     if (values.size === 0) throw new EdsAnalysisError(`工作表“${source.name}”没有匹配内置 EDS 规则的候选记录`);
@@ -309,8 +318,23 @@ function selectionFromSources(
   });
   const common = [...selections[0]].filter((value) => selections.every((values) => values.has(value)));
   if (common.length === 0) throw new EdsAnalysisError("输入工作簿没有两张原始明细表共有的工作日与班次");
-  if (common.length > 1) throw new EdsAnalysisError("输入工作簿包含多个共同工作日或班次，请拆分为单一日期和班次后重试");
-  const [date, shift] = common[0].split("\u0000");
+  if (common.length > EDS_UPLOAD_LIMITS.maxSelections) {
+    throw new EdsAnalysisError(`输入工作簿包含超过 ${EDS_UPLOAD_LIMITS.maxSelections} 个可分析的日期/班次，请先缩小数据范围`, 413);
+  }
+  const availableSelections = common
+    .map((value) => {
+      const separator = value.indexOf("\u0000");
+      return { date: value.slice(0, separator), shift: value.slice(separator + 1) };
+    })
+    .sort((left, right) => left.date.localeCompare(right.date) || left.shift.localeCompare(right.shift, "zh-CN"));
+  if (!requestedSelection && availableSelections.length > 1) throw new EdsSelectionRequiredError(availableSelections);
+  const selected = requestedSelection
+    ? availableSelections.find((candidate) => candidate.date === requestedSelection.date && candidate.shift === normalizedText(requestedSelection.shift))
+    : availableSelections[0];
+  if (!selected || parseStrictEdsDateKey(requestedSelection?.date ?? selected.date) !== (requestedSelection?.date ?? selected.date)) {
+    throw new EdsAnalysisError("所选日期/班次不在当前工作簿的可分析范围内");
+  }
+  const { date, shift } = selected;
   return { date, shift, channelSources };
 }
 
@@ -358,9 +382,29 @@ export function analyzeEdsWorkbook(
   comparisonSheets?: EdsWorkbookSheet[],
   definition: EdsReportDefinition = EDS_BUILT_IN_DEFINITION,
 ): EdsAnalysisResult {
+  return analyzeEdsWorkbookInternal(sourceSheets, comparisonSheets, undefined, definition);
+}
+
+export function analyzeEdsWorkbookForSelection(sourceSheets: EdsWorkbookSheet[], selection: EdsWorkbookSelection, comparisonSheets: EdsWorkbookSheet[]): EdsAnalysisResult<EdsComparison>;
+export function analyzeEdsWorkbookForSelection(sourceSheets: EdsWorkbookSheet[], selection: EdsWorkbookSelection, comparisonSheets?: undefined): EdsAnalysisResult<null>;
+export function analyzeEdsWorkbookForSelection(sourceSheets: EdsWorkbookSheet[], selection: EdsWorkbookSelection, comparisonSheets?: EdsWorkbookSheet[]): EdsAnalysisResult;
+export function analyzeEdsWorkbookForSelection(
+  sourceSheets: EdsWorkbookSheet[],
+  selection: EdsWorkbookSelection,
+  comparisonSheets?: EdsWorkbookSheet[],
+): EdsAnalysisResult {
+  return analyzeEdsWorkbookInternal(sourceSheets, comparisonSheets, selection);
+}
+
+function analyzeEdsWorkbookInternal(
+  sourceSheets: EdsWorkbookSheet[],
+  comparisonSheets?: EdsWorkbookSheet[],
+  selection?: EdsWorkbookSelection,
+  definition: EdsReportDefinition = EDS_BUILT_IN_DEFINITION,
+): EdsAnalysisResult {
   validateDefinition(definition);
   const sources = sourceIndexes(sourceSheets);
-  const { date, shift, channelSources } = selectionFromSources(sources, definition);
+  const { date, shift, channelSources } = selectionFromSources(sources, definition, selection);
   const template = templateFromDefinition(definition, date, shift);
   const comparisonTemplate = comparisonSheets ? parseEdsTemplate(comparisonSheets) : null;
   if (comparisonTemplate) validateComparisonTemplate(comparisonTemplate, template);

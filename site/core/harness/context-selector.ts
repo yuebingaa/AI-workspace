@@ -66,10 +66,10 @@ export interface HarnessContextSelection {
   blockingReason?: string;
 }
 
-const HARNESS_ACTION_PROTOCOL = `仅返回一个JSON对象，禁止Markdown和推理，一次一种动作。精确示例：{"type":"callTool","message":"检查","toolCallId":"c1","name":"inspectDataset","arguments":{}}；{"type":"complete","message":"完成"}；{"type":"blocked","message":"受阻","missingRequirements":["字段"]}。`;
+const HARNESS_ACTION_PROTOCOL = `仅返回一个JSON对象，禁止Markdown和推理，一次一种动作。精确示例：{"type":"callTool","message":"检查","toolCallId":"c1","name":"inspectDataset","arguments":{}}；{"type":"complete","message":"根据工具结果，数据共48行；建议优先检查退款异常。"}；{"type":"blocked","message":"受阻","missingRequirements":["字段"]}。当context.interactionMode为conversation时必须complete，用自然语言回应、承接recentConversation并友好引导，不得blocked或暴露内部字段名。`;
 
 export const HARNESS_INITIAL_SYSTEM_PROMPT = `${HARNESS_ACTION_PROTOCOL}只用允许工具；有工具必须调用。写操作只能显式调用createChangeSetPreview生成待确认变更，不得complete或自动应用。`;
-export const HARNESS_FOLLOWUP_SYSTEM_PROMPT = `${HARNESS_ACTION_PROTOCOL}有工具必须调用；无工具且只读目标满足才complete，缺条件才blocked。写操作只能createChangeSetPreview。`;
+export const HARNESS_FOLLOWUP_SYSTEM_PROMPT = `${HARNESS_ACTION_PROTOCOL}有工具必须调用；无工具且只读目标满足才complete，缺条件才blocked。complete.message必须直接回答用户目标、引用观察中的具体数值并给出结论或建议，禁止仅写“完成”或“已完成”。写操作只能createChangeSetPreview。`;
 
 export function harnessSystemPrompt(iteration: number) {
   return iteration > 1 ? HARNESS_FOLLOWUP_SYSTEM_PROMPT : HARNESS_INITIAL_SYSTEM_PROMPT;
@@ -90,10 +90,14 @@ const detailedFieldPattern = /字段分析|空值|唯一值|示例值|最小值|
 const recipePattern = /配方|血缘|转换|派生|聚合|异常订单|复购|recipe/iu;
 const appInspectionPattern = /检查页面|页面结构|组件结构|画布结构|appspec/iu;
 const excelPattern = /Excel|xlsx|电子表格|下载文件/iu;
+const edsAnalysisPattern = /EDS|飞达|白班|夜班|班次|异常/iu;
+const genericAnalysisRequestPattern = /^\s*(?:请\s*)?(?:帮我\s*)?(?:(?:继续|再)\s*)?(?:分析|看看|看一下|检查|总结|解读|诊断)/u;
+const analysisFollowUpPattern = /^\s*(?:为什么|怎么|哪些|哪个|详细|具体|深入|展开|还有|那|这个)/u;
 
 interface HarnessIntent {
   wantsChange: boolean;
   wantsData: boolean;
+  wantsEdsAnalysis: boolean;
   wantsFields: boolean;
   wantsRecipe: boolean;
   wantsAppInspection: boolean;
@@ -129,8 +133,16 @@ export function resolveHarnessPageDataSourceIds(request: HarnessRequest): string
 
 function harnessIntent(request: HarnessRequest): HarnessIntent {
   const relevantDataSourceIds = resolveHarnessPageDataSourceIds(request);
-  const wantsRecipe = recipePattern.test(request.instruction);
-  const wantsData = datasetPattern.test(request.instruction) || fieldPattern.test(request.instruction) || wantsRecipe;
+  const usesEdsDataSource = relevantDataSourceIds.some((id) => id.startsWith("dataset_eds_"));
+  const wantsEdsAnalysis = Boolean(request.edsWorkspace) && (
+    edsAnalysisPattern.test(request.instruction)
+    || (usesEdsDataSource && (
+      genericAnalysisRequestPattern.test(request.instruction)
+      || analysisFollowUpPattern.test(request.instruction)
+    ))
+  );
+  const wantsRecipe = !wantsEdsAnalysis && recipePattern.test(request.instruction);
+  const wantsData = wantsEdsAnalysis || datasetPattern.test(request.instruction) || fieldPattern.test(request.instruction) || wantsRecipe;
   const affirmativeInstruction = request.instruction
     .replace(/不要修改页面/giu, "")
     .replace(/不要创建\s*ChangeSet/giu, "")
@@ -138,6 +150,7 @@ function harnessIntent(request: HarnessRequest): HarnessIntent {
   return {
     wantsChange: modificationPattern.test(affirmativeInstruction),
     wantsData,
+    wantsEdsAnalysis,
     wantsFields: detailedFieldPattern.test(request.instruction) || wantsRecipe,
     wantsRecipe,
     wantsAppInspection: appInspectionPattern.test(affirmativeInstruction),
@@ -257,6 +270,8 @@ function compactObservation(observation: HarnessObservation | undefined, compact
     summary: sanitizeHarnessText(observation.summary).slice(0, compacted ? 240 : 420),
   };
   switch (observation.toolName) {
+    case "analyzeEdsReports":
+      return { ...base, result: pick(data, ["reportCount", "baseline", "reports", "templateVersion", "ruleVersion", "rawRowsIncluded"]) };
     case "inspectDataset":
       return { ...base, result: pick(data, ["id", "name", "rowCount", "columnCount", "qualityScore", "fieldCount", "truncated"]) };
     case "inspectFields":
@@ -331,6 +346,10 @@ function buildWorkingMemory(request: HarnessRequest, observations: HarnessObserv
 
   for (const observation of observations) {
     const data = record(observation.data);
+    if (observation.toolName === "analyzeEdsReports") {
+      const reports = Array.isArray(data.reports) ? data.reports : [];
+      keyStatistics.push(`EDS 派生报告：${reports.length} 份`);
+    }
     if (observation.toolName === "inspectDataset") {
       const id = typeof data.id === "string" ? data.id : intent.relevantDataSourceIds[0];
       if (id) confirmedDataSources.push({
@@ -360,7 +379,8 @@ function buildWorkingMemory(request: HarnessRequest, observations: HarnessObserv
   }
 
   const pendingGoals: string[] = [];
-  if (intent.wantsData && !completedTools.includes("inspectDataset")) pendingGoals.push("确认数据集概览");
+  if (intent.wantsEdsAnalysis && !completedTools.includes("analyzeEdsReports")) pendingGoals.push("读取并对比 EDS 派生报告");
+  if (intent.wantsData && !intent.wantsEdsAnalysis && !completedTools.includes("inspectDataset")) pendingGoals.push("确认数据集概览");
   if (intent.wantsFields && !completedTools.includes("inspectFields")) pendingGoals.push("确认分析字段");
   if (intent.wantsRecipe && !completedTools.some((tool) => tool === "previewDataRecipe" || tool === "validateDataRecipe")) pendingGoals.push("预览数据配方");
   if (intent.wantsChange && !completedTools.includes("createChangeSetPreview")) pendingGoals.push("生成待确认页面变更");
@@ -381,7 +401,8 @@ function selectedToolNames(request: HarnessRequest, observations: HarnessObserva
   const intent = harnessIntent(request);
   const canChange = studioCapabilities[request.role].updateNodeProps;
 
-  if (intent.wantsData && !called.has("inspectDataset")) return ["inspectDataset"];
+  if (intent.wantsEdsAnalysis && !called.has("analyzeEdsReports")) return ["analyzeEdsReports"];
+  if (intent.wantsData && !intent.wantsEdsAnalysis && !called.has("inspectDataset")) return ["inspectDataset"];
   if (intent.wantsFields && !called.has("inspectFields")) return ["inspectFields"];
   if (intent.wantsRecipe && !called.has("previewDataRecipe") && !called.has("validateDataRecipe")) {
     return ["previewDataRecipe"];
@@ -416,6 +437,24 @@ export function buildHarnessContextSelection(
     : intent.wantsRecipe && intent.relevantRecipeIds.length === 0
       ? "当前数据源没有可执行的数据配方，无法生成计算预览。"
       : undefined;
+  const interactionMode = !intent.wantsChange
+    && !intent.wantsData
+    && !intent.wantsFields
+    && !intent.wantsRecipe
+    && !intent.wantsAppInspection
+    && !intent.wantsExcel
+    ? "conversation"
+    : "task";
+  const recentConversation = request.conversationContext
+    ? {
+        ...(request.conversationContext.previousInstruction ? {
+          previousInstruction: request.conversationContext.previousInstruction.slice(0, compacted ? 240 : 1_000),
+        } : {}),
+        ...(request.conversationContext.previousAssistantMessage ? {
+          previousAssistantMessage: request.conversationContext.previousAssistantMessage.slice(0, compacted ? 480 : 2_000),
+        } : {}),
+      }
+    : undefined;
 
   if (observations.length > 0) {
     return {
@@ -429,8 +468,10 @@ export function buildHarnessContextSelection(
       context: {
         phase: "followUp",
         taskMode: intent.wantsChange ? "write" : "readOnly",
+        interactionMode,
         iteration,
         goalSummary: goal,
+        ...(recentConversation ? { recentConversation } : {}),
         workingMemory,
         latestObservation,
         targetPageId: page.id,
@@ -456,8 +497,10 @@ export function buildHarnessContextSelection(
     context: {
       phase: "initial",
       taskMode: intent.wantsChange ? "write" : "readOnly",
+      interactionMode,
       iteration,
       goalSummary: goal,
+      ...(recentConversation ? { recentConversation } : {}),
       workingMemory,
       currentPage: { id: page.id, title: page.title, route: page.route },
       allowedTargets: editableNodes,

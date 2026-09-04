@@ -4,6 +4,8 @@ import type { HarnessModel, HarnessModelInput, HarnessModelResult, HarnessModelT
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
 import { excelExportStore } from "@/core/exports/server/excel-export-store";
+import { analyzeEdsWorkbook, createEdsWorkspaceRuntime, createEdsWorkspaceSnapshotForResults, installEdsWorkspaceInDataProduct, type EdsAnalysisResponse } from "@/core/eds";
+import { createSyntheticEdsFixture } from "@/fixtures/eds-synthetic";
 import { redactedCompleteActionFailureFixture } from "./fixtures/redacted-complete-action";
 import {
   DeepSeekHarness,
@@ -90,6 +92,47 @@ function customerAnalysisRequest(idempotencyKey = "request_customer_analysis"): 
   };
 }
 
+function edsAnalysisRequest(instruction = "请读取全部 EDS 日期和班次的派生汇总，对比异常次数、异常时长、命中率、主要异常线体和异常类别，指出跨班次差异、优先排查项与可执行改善建议。引用具体数值，不要修改页面，不要创建 ChangeSet。"): {
+  request: HarnessRequest;
+  dataRuntime: ReturnType<typeof createEdsWorkspaceRuntime>;
+} {
+  const data = fixtures();
+  const analysis = analyzeEdsWorkbook(createSyntheticEdsFixture().sourceSheets);
+  const white: EdsAnalysisResponse = {
+    ...analysis,
+    summary: { ...analysis.summary, date: "2026-09-03", shift: "白班" },
+    exportArtifact: {
+      id: "eds-ai-private-artifact",
+      status: "ready",
+      fileName: "private-input.xlsx",
+      downloadUrl: "/api/exports/private-token",
+      rowCount: 1,
+      fieldCount: 1,
+      sizeBytes: 1,
+      createdAt: "2026-09-04T06:00:00.000Z",
+      expiresAt: "2026-09-04T06:10:00.000Z",
+    },
+    warnings: [],
+  };
+  const night = structuredClone(white);
+  night.summary.shift = "夜班";
+  const edsWorkspace = createEdsWorkspaceSnapshotForResults([white, night], 0);
+  const product = installEdsWorkspaceInDataProduct(data.dataProduct, edsWorkspace);
+  return {
+    request: {
+      idempotencyKey: "request_eds_ai_analysis",
+      instruction,
+      pageId: "page_eds_analysis",
+      dataSourceId: "dataset_eds_overview",
+      appSpec: product.appSpec,
+      recipes: product.recipes,
+      edsWorkspace,
+      role: "editor",
+    } satisfies HarnessRequest,
+    dataRuntime: createEdsWorkspaceRuntime(edsWorkspace),
+  };
+}
+
 function repurchaseMetricDraft() {
   return {
     message: "已检查异常订单并预览复购率配方，建议新增复购率指标。",
@@ -148,6 +191,103 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.contextUsage?.complexity).toBe("simpleReadOnly");
     expect(task.contextUsage?.limits).toMatchObject({ maxTotalInputChars: 12_000, maxTotalPromptTokens: 3_500 });
     expect(input.appSpec).toEqual(formal);
+  });
+
+  it("EDS AI 分析先读取全部班次派生汇总，再生成只读诊断结论", async () => {
+    const input = edsAnalysisRequest();
+    const formal = structuredClone(input.request.appSpec);
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_reports"),
+      complete("夜班异常次数更高，应优先排查主要线体和累计时长最高的异常类别。"),
+    ]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+    const followUp = JSON.stringify(model.inputs[1]);
+
+    expect(task.state).toBe("completed");
+    expect(task.resultMessage).toContain("优先排查");
+    expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["analyzeEdsReports"]);
+    expect(model.inputs[1].tools).toEqual([]);
+    expect(followUp).toContain("白班");
+    expect(followUp).toContain("夜班");
+    expect(followUp).toContain("deltaFromFirst");
+    expect(followUp).not.toContain("private-input.xlsx");
+    expect(followUp).not.toContain("/api/exports/private-token");
+    expect(task.pendingChangeSet).toBeUndefined();
+    expect(input.request.appSpec).toEqual(formal);
+  });
+
+  it("EDS 页面中的自然语言‘分析一下数据’自动使用专用派生汇总工具", async () => {
+    const input = edsAnalysisRequest("分析一下数据");
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_natural_language"),
+      complete("夜班异常 173 次，高于白班 162 次，建议优先检查主要异常线体。"),
+    ]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["analyzeEdsReports"]);
+    expect(task).toMatchObject({
+      state: "completed",
+      counters: { loopCount: 2, modelCallCount: 2, toolCallCount: 1 },
+    });
+    expect(task.resultMessage).toContain("夜班异常 173 次");
+  });
+
+  it("EDS 页面中的自然追问继续读取派生汇总，而闲聊短句正常完成对话", async () => {
+    const followUp = edsAnalysisRequest("详细一点");
+    const followUpModel = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_follow_up"),
+      complete("夜班异常时长较白班增加 20.22 分钟，建议先检查 A5FSL05。"),
+    ]);
+    const followUpTask = await new DeepSeekHarness().run(followUp.request, {
+      dataRuntime: followUp.dataRuntime,
+      modelClient: followUpModel,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    const chat = edsAnalysisRequest("额");
+    chat.request.conversationContext = {
+      previousInstruction: "分析一下数据",
+      previousAssistantMessage: "夜班异常 173 次，高于白班 162 次。",
+    };
+    const chatModel = new ScriptedModel([complete("我在。你可以继续问夜班为什么更高，或让我展开具体线体。")]);
+    const chatTask = await new DeepSeekHarness().run(chat.request, {
+      dataRuntime: chat.dataRuntime,
+      modelClient: chatModel,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    expect(followUpModel.inputs[0].tools.map((item) => item.name)).toEqual(["analyzeEdsReports"]);
+    expect(followUpTask.state).toBe("completed");
+    expect(chatModel.inputs[0].tools).toEqual([]);
+    expect(chatModel.inputs[0].context).toMatchObject({
+      interactionMode: "conversation",
+      recentConversation: chat.request.conversationContext,
+    });
+    expect(chatTask).toMatchObject({ state: "completed", resultMessage: expect.stringContaining("我在") });
+  });
+
+  it("模型仍返回内部缺失字段时转换为用户可理解的提示", async () => {
+    const chat = edsAnalysisRequest("额");
+    const model = new ScriptedModel([blocked("受阻", ["goalSummary"])]);
+    const task = await new DeepSeekHarness().run(chat.request, {
+      dataRuntime: chat.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 1, maxToolCalls: 1 },
+    });
+
+    expect(task.state).toBe("blocked");
+    expect(task.resultMessage).toContain("请具体说明想了解的数据、现象或业务问题");
+    expect(task.resultMessage).not.toContain("goalSummary");
   });
 
   it("每次模型调用前同步重验授权，撤回后不会启动下一次调用", async () => {
@@ -336,7 +476,11 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(result.usage.totalTokens).toBe(14);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const body = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body)) as Record<string, unknown>;
-    expect(body).toMatchObject({ response_format: { type: "json_object" }, stream: false });
+    expect(body).toMatchObject({
+      thinking: { type: "disabled" },
+      response_format: { type: "json_object" },
+      stream: false,
+    });
     const messages = body.messages as Array<{ role: string; content: string }>;
     const userPayload = JSON.parse(messages.find((message) => message.role === "user")?.content ?? "{}") as Record<string, unknown>;
     expect(userPayload).not.toHaveProperty("appSpec");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSyntheticEdsFixture } from "@/fixtures/eds-synthetic";
-import { analyzeEdsWorkbook, EdsAnalysisError, parseEdsTemplate } from "./analysis";
+import { analyzeEdsWorkbook, analyzeEdsWorkbookForSelection, EdsAnalysisError, EdsSelectionRequiredError, parseEdsTemplate } from "./analysis";
 
 describe("EDS 确定性统计", () => {
   it("不提供外部目标表时从输入自动识别范围并使用内置版本化规则", () => {
@@ -44,14 +44,33 @@ describe("EDS 确定性统计", () => {
     expect(result.configuration.comparisonMode).toBe("custom_template");
   });
 
-  it("多个共同日期或班次不做静默猜测", () => {
+  it("多个共同日期或班次返回可选范围，并可按用户选择独立分析", () => {
     const fixture = createSyntheticEdsFixture();
     for (const sheet of fixture.sourceSheets) {
       const extra = structuredClone(sheet.data[1]);
       extra[4] = new Date("2026-08-26T00:00:00.000Z");
       sheet.data.push(extra);
     }
-    expect(() => analyzeEdsWorkbook(fixture.sourceSheets)).toThrow(/多个共同工作日或班次/u);
+    try {
+      analyzeEdsWorkbook(fixture.sourceSheets);
+      throw new Error("expected selection requirement");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EdsSelectionRequiredError);
+      expect((error as EdsSelectionRequiredError).selections).toEqual([
+        { date: "2026-08-25", shift: "白班" },
+        { date: "2026-08-26", shift: "白班" },
+      ]);
+    }
+
+    const selected = analyzeEdsWorkbookForSelection(
+      fixture.sourceSheets,
+      { date: "2026-08-26", shift: "白班" },
+    );
+    expect(selected.summary).toMatchObject({ date: "2026-08-26", shift: "白班", matchedRows: 2 });
+    expect(() => analyzeEdsWorkbookForSelection(
+      fixture.sourceSheets,
+      { date: "2026-08-27", shift: "白班" },
+    )).toThrow(/不在当前工作簿/u);
   });
 
   it("目标值发生变化时给出精确单元格差异，不降低比对标准", () => {

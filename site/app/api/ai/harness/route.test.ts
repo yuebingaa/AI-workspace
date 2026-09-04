@@ -439,8 +439,8 @@ describe("Harness 上传数据隐私门", () => {
     expect(modelFetch).not.toHaveBeenCalled();
 
     const turns = [
-      { type: "callTool", message: "检查 EDS 总览。", toolCallId: "eds_dataset", name: "inspectDataset", arguments: { dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID } },
-      { type: "callTool", message: "检查最高异常。", toolCallId: "eds_fields", name: "inspectFields", arguments: { dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID, fields: ["top_line", "top_line_occurrences", "top_issue", "top_issue_minutes"] } },
+      { type: "callTool", message: "读取 EDS 派生报告。", toolCallId: "eds_reports", name: "analyzeEdsReports", arguments: {} },
+      { type: "callTool", message: "检查最高异常字段。", toolCallId: "eds_fields", name: "inspectFields", arguments: { dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID, fields: ["top_line", "top_line_occurrences", "top_issue", "top_issue_minutes"] } },
       { type: "complete", message: "EDS 派生汇总检查完成。" },
     ];
     let call = 0;
@@ -465,7 +465,7 @@ describe("Harness 上传数据隐私门", () => {
     const outbound = modelFetch.mock.calls.map((invocation) => String(invocation[1]?.body)).join("\n");
     expect(outbound).toContain("A5FNL01");
     expect(outbound).toContain("飞达工位飞达报警中");
-    expect(outbound).toContain("top_line_occurrences");
+    expect(outbound).toContain("deltaFromFirst");
     expect(outbound).not.toContain("rowsByDataSourceId");
   });
 

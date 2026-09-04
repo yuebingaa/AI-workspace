@@ -33,6 +33,27 @@ describe("Harness 动作协议标准化", () => {
     )).toThrow("Schema 校验");
   });
 
+  it("只忽略只读完成动作中与当前目标完全一致的 pageId", () => {
+    const options = { ...readonlyComplete, expectedPageId: "page_eds_analysis" };
+    expect(normalizeHarnessModelTurn({
+      type: "complete",
+      message: "夜班异常 173 次，高于白班 162 次，建议优先检查 A5FSL05。",
+      pageId: "page_eds_analysis",
+    }, options)).toEqual({
+      turn: {
+        type: "complete",
+        message: "夜班异常 173 次，高于白班 162 次，建议优先检查 A5FSL05。",
+      },
+      normalized: true,
+      normalizedFrom: "readonlyCompleteWithPageId",
+    });
+    expect(() => normalizeHarnessModelTurn({
+      type: "complete",
+      message: "分析完成。",
+      pageId: "page_other",
+    }, options)).toThrow("Schema 校验");
+  });
+
   it("拒绝缺少 message 的 complete", () => {
     expect(() => normalizeHarnessModelTurn({ type: "complete" }, readonlyComplete))
       .toThrow("Schema 校验");

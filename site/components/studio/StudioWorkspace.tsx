@@ -29,6 +29,7 @@ import {
   type HarnessExecutionTiming,
   type HarnessTaskSummary,
 } from "@/core/harness/contracts";
+import { isLightweightConversation, lightweightConversationReply } from "@/core/harness/conversation";
 import {
   appendHarnessEvent,
   appendHarnessTask,
@@ -51,12 +52,14 @@ import {
 } from "@/core/datasets/workspace-state";
 import {
   createEdsAuditSummary,
-  createEdsWorkspaceSnapshot,
+  createEdsWorkspaceSnapshotForResults,
   EDS_OVERVIEW_DATA_SOURCE_ID,
   EDS_WORKSPACE_PAGE_ID,
+  getEdsWorkspaceReports,
   installEdsWorkspaceInDataProduct,
   installEdsWorkspaceInExecution,
   mergeEdsWorkspaceRuntime,
+  selectEdsWorkspaceReport,
   type EdsAnalysisResponse,
   type EdsWorkspaceSnapshot,
 } from "@/core/eds";
@@ -85,6 +88,8 @@ const harnessUiClock: HarnessTaskClock = {
   now: () => new Date(),
   id: () => `harness_ui_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`,
 };
+
+const EDS_AI_ANALYSIS_INSTRUCTION = "请读取全部 EDS 日期和班次的派生汇总，对比异常次数、异常时长、命中率、主要异常线体和异常类别，指出跨班次差异、优先排查项与可执行改善建议。引用具体数值，不要修改页面，不要创建 ChangeSet。";
 
 function initialHarnessTiming(): HarnessExecutionTiming {
   return {
@@ -160,6 +165,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [hasValidAiPlan, setHasValidAiPlan] = useState(true);
   const [harnessTasks, setHarnessTasks] = useState<HarnessTaskSummary[]>([]);
   const [lastHarnessTaskId, setLastHarnessTaskId] = useState("");
+  const [isLocalAssistantReply, setIsLocalAssistantReply] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
@@ -189,6 +195,14 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const dataset = dataProduct.datasets.find((candidate) => candidate.id === activeDataSourceId) ?? dataProduct.datasets[0];
   const activeDataSource = renderedSpec.dataSources.find((source) => source.id === activeDataSourceId) ?? renderedSpec.dataSources[0];
   const formalAppSpecRevision = useMemo(() => appSpecRevision(execution.present), [execution.present]);
+  const edsReportOptions = useMemo(() => {
+    if (!edsWorkspace || activePageId !== EDS_WORKSPACE_PAGE_ID) return undefined;
+    return getEdsWorkspaceReports(edsWorkspace).map((report) => ({
+      date: report.summary.date,
+      shift: report.summary.shift,
+      selected: report.summary.date === edsWorkspace.summary.date && report.summary.shift === edsWorkspace.summary.shift,
+    }));
+  }, [activePageId, edsWorkspace]);
 
   const handleQueryExecuted = useCallback((record: QueryExecutionRecord) => {
     setQueryRecords((current) => current.some((item) => item.id === record.id)
@@ -323,11 +337,11 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     ));
   }, []);
 
-  function handleCreateEdsWorkspace(result: EdsAnalysisResponse) {
+  function handleCreateEdsWorkspace(results: EdsAnalysisResponse[], activeResultIndex: number) {
     if (role === "viewer") throw new Error("查看者无权生成 EDS 工作区看板，请切换为编辑者或管理员。");
     aiRequestAbortRef.current?.abort();
     const current = latestDatasetWorkspaceRef.current;
-    const snapshot = createEdsWorkspaceSnapshot(result);
+    const snapshot = createEdsWorkspaceSnapshotForResults(results, activeResultIndex);
     let nextAuditRecords = current.auditRecords;
     if (current.execution.preview) {
       const previewId = current.execution.preview.changeSetId;
@@ -376,12 +390,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setPuckSessionKey((value) => value + 1);
     setIsDataSourceOpen(false);
     setAiInstruction("检查 EDS 分析数据，说明异常次数最多的线体和累计时间最长的异常类型。不要修改页面。");
-    setAiMessage("EDS 派生汇总已进入当前页面与 AI 数据上下文；原始工作簿和逐行明细未保存。可让 AI 检查总览或分类字段。");
+    setAiMessage("EDS 派生汇总已进入当前页面与 AI 数据上下文；原始工作簿和逐行明细未保存。点击看板顶部“AI 分析全部班次”可请求 DeepSeek 对比诊断。");
     setAiMetadata(null);
     setAiRequestStatus("idle");
     setAiRequestError(null);
     setHasValidAiPlan(false);
-    setSaveLabel("已保存 · EDS 演示看板");
+    setSaveLabel("已保存 · EDS 分析看板");
     setValidationError(null);
     const persistence = persistExplicitly(
       nextExecution,
@@ -393,6 +407,60 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     );
     if (!persistence.persisted) setSaveLabel("已生成 · 当前页面未持久化");
     handleCloseEdsAnalysis();
+  }
+
+  function handleSelectEdsWorkspaceReport(reportIndex: number) {
+    const current = latestDatasetWorkspaceRef.current;
+    if (!current.edsWorkspace) return;
+    const reports = getEdsWorkspaceReports(current.edsWorkspace);
+    const selected = reports[reportIndex];
+    if (!selected || (
+      selected.summary.date === current.edsWorkspace.summary.date
+      && selected.summary.shift === current.edsWorkspace.summary.shift
+    )) return;
+    aiRequestAbortRef.current?.abort();
+    const nextSnapshot = selectEdsWorkspaceReport(current.edsWorkspace, reportIndex);
+    const nextExecution = installEdsWorkspaceInExecution(current.execution, nextSnapshot);
+    const nextDataProduct = {
+      ...installEdsWorkspaceInDataProduct(current.dataProduct, nextSnapshot),
+      appSpec: nextExecution.present,
+    };
+    const nextDataRuntime = mergeEdsWorkspaceRuntime(current.dataRuntime, nextSnapshot);
+
+    setExecution(nextExecution);
+    setDataProduct(nextDataProduct);
+    setDataRuntime(nextDataRuntime);
+    setEdsWorkspace(nextSnapshot);
+    setActivePageId(EDS_WORKSPACE_PAGE_ID);
+    setActiveDataSourceId(EDS_OVERVIEW_DATA_SOURCE_ID);
+    setCanvasMode("preview");
+    setPendingPuckChangeSet(null);
+    setPendingChangeSource(null);
+    clearPuckDraft();
+    setPuckSessionKey((value) => value + 1);
+    setAiInstruction("比较当前 EDS 班次与同批次其他班次的异常次数、异常时间和主要异常类别。不要修改页面。");
+    setAiMessage(`EDS 看板已切换到 ${nextSnapshot.summary.date} ${nextSnapshot.summary.shift}；${reports.length} 份派生汇总仍同时保存在 AI 数据上下文和本地工作区，原始明细未保存。`);
+    setAiMetadata(null);
+    setAiRequestStatus("idle");
+    setAiRequestError(null);
+    setHasValidAiPlan(false);
+    setSaveLabel(`已保存 · ${nextSnapshot.summary.shift}报告`);
+    setValidationError(null);
+    const persistence = persistExplicitly(
+      nextExecution,
+      current.auditRecords,
+      current.queryRecords,
+      nextDataProduct,
+      current.harnessTasks,
+      nextSnapshot,
+    );
+    if (!persistence.persisted) setSaveLabel(`已切换 · ${nextSnapshot.summary.shift}未持久化`);
+  }
+
+  function handleAnalyzeEdsReports() {
+    if (!edsWorkspace || harnessRequestActiveRef.current) return;
+    setAiInstruction(EDS_AI_ANALYSIS_INSTRUCTION);
+    void handleGenerateAiPlan(EDS_AI_ANALYSIS_INSTRUCTION);
   }
 
   function toAuditMetadata(metadata: AiPlanMetadata | AiChangeSetAuditMetadata | null): AiChangeSetAuditMetadata | undefined {
@@ -518,6 +586,21 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     const submittedInstruction = (instructionOverride ?? aiInstruction).trim();
     if (!submittedInstruction || harnessRequestActiveRef.current) return;
 
+    const hasEdsContext = Boolean(edsWorkspace && activePageId === EDS_WORKSPACE_PAGE_ID);
+    if (!retryOfTaskId && isLightweightConversation(submittedInstruction)) {
+      setLastSubmittedInstruction(submittedInstruction);
+      if (instructionOverride) setAiInstruction(submittedInstruction);
+      setAiMessage(lightweightConversationReply(submittedInstruction, hasEdsContext));
+      setAiMetadata(null);
+      setAiRequestStatus("success");
+      setAiRequestError(null);
+      setHasValidAiPlan(false);
+      setValidationError(null);
+      setIsLocalAssistantReply(true);
+      setSaveLabel("已回复 · 未调用 DeepSeek");
+      return;
+    }
+
     aiRequestAbortRef.current?.abort();
     const controller = new AbortController();
     aiRequestAbortRef.current = controller;
@@ -537,6 +620,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setCanvasMode("preview");
     setLastSubmittedInstruction(submittedInstruction);
     setLastHarnessTaskId(initialTask.id);
+    setIsLocalAssistantReply(false);
     setAiRequestStatus("loading");
     setAiRequestError(null);
     setHasValidAiPlan(false);
@@ -545,11 +629,21 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     persistExplicitly(baseExecution, auditRecords, queryRecords, dataProduct, initialTasks);
 
     try {
+      const previousCompletedTask = harnessTasks.find((task) => task.state === "completed" && task.resultMessage);
+      const previousInstruction = (previousCompletedTask?.instruction ?? lastSubmittedInstruction).trim().slice(0, 1_000);
+      const previousAssistantMessage = (previousCompletedTask?.resultMessage ?? aiMessage).trim().slice(0, 2_000);
+      const hasConversationContext = previousInstruction.length > 0 || previousAssistantMessage.length > 0;
       const { task } = await requestHarnessTask({
         idempotencyKey,
         instruction: submittedInstruction,
         pageId: activePageId,
         ...(activeDataSource ? { dataSourceId: activeDataSource.id } : {}),
+        ...(hasConversationContext ? {
+          conversationContext: {
+            ...(previousInstruction ? { previousInstruction } : {}),
+            ...(previousAssistantMessage ? { previousAssistantMessage } : {}),
+          },
+        } : {}),
         appSpec: baseExecution.present,
         recipes: dataProduct.recipes,
         ...(edsWorkspace ? { edsWorkspace } : {}),
@@ -947,12 +1041,16 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           puckData={puckDraft}
           puckSessionKey={puckSessionKey}
           hasPuckPreview={Boolean(pendingPuckChangeSet && execution.preview?.changeSetId === pendingPuckChangeSet.id)}
+          edsReportOptions={edsReportOptions}
+          edsAnalysisRunning={aiRequestStatus === "loading"}
           onUndo={handleUndo}
           onModeChange={handleCanvasModeChange}
           onPuckDataChange={handlePuckDataChange}
           onRequestPuckPreview={handleRequestPuckPreview}
           onApplyPuckPreview={handleApplyPuckPreview}
           onCancelPuckPreview={handleCancelPuckPreview}
+          onEdsReportChange={handleSelectEdsWorkspaceReport}
+          onAnalyzeEdsReports={handleAnalyzeEdsReports}
           onQueryExecuted={handleQueryExecuted}
         />
         <AiBuilderAssistant
@@ -970,8 +1068,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           requestStatus={aiRequestStatus}
           requestError={aiRequestError}
           canRetry={Boolean(lastSubmittedInstruction && aiRequestError)}
-          harnessTask={harnessTasks[0] ?? null}
+          harnessTask={isLocalAssistantReply ? null : harnessTasks[0] ?? null}
           harnessTaskCount={harnessTasks.length}
+          dataAnalysisMode={Boolean(edsWorkspace && activePageId === EDS_WORKSPACE_PAGE_ID)}
           onInstructionChange={setAiInstruction}
           onGenerate={() => { void handleGenerateAiPlan(); }}
           onCancelRequest={handleCancelAiRequest}

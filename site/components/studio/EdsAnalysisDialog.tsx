@@ -1,19 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { analyzeEdsFiles, EdsClientError } from "@/core/eds/client";
+import { analyzeEdsFiles, EdsClientError, EdsSelectionRequiredClientError } from "@/core/eds/client";
 import {
   EDS_RULE_VERSION,
   EDS_TEMPLATE_VERSION,
   EDS_UPLOAD_LIMITS,
   type EdsAnalysisResponse,
   type EdsChartItem,
+  type EdsWorkbookSelection,
 } from "@/core/eds";
 import { ExcelDownloadButton } from "./ExcelDownloadButton";
 
 interface EdsAnalysisDialogProps {
   onClose: () => void;
-  onCreateWorkspace: (result: EdsAnalysisResponse) => void;
+  onCreateWorkspace: (results: EdsAnalysisResponse[], activeResultIndex: number) => void;
 }
 
 export function canApplyEdsRequestResult(input: {
@@ -169,7 +170,11 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
   const [source, setSource] = useState<File | null>(null);
   const [template, setTemplate] = useState<File | null>(null);
   const [advancedComparison, setAdvancedComparison] = useState(false);
-  const [result, setResult] = useState<EdsAnalysisResponse | null>(null);
+  const [results, setResults] = useState<EdsAnalysisResponse[]>([]);
+  const [activeResultIndex, setActiveResultIndex] = useState(0);
+  const [selectionOptions, setSelectionOptions] = useState<EdsWorkbookSelection[]>([]);
+  const [selectionChoice, setSelectionChoice] = useState<number | "all" | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
@@ -191,7 +196,10 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
     if (!canChooseEdsFile(running, abortRef.current !== null)) return;
     const selection = validateEdsFileSelection(file);
     setError(selection.error);
-    setResult(null);
+    setResults([]);
+    setActiveResultIndex(0);
+    setSelectionOptions([]);
+    setSelectionChoice(null);
     setter(selection.file);
   }
 
@@ -201,8 +209,17 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
       setError("上传的工作簿合计不能超过 20 MiB。");
       return;
     }
+    if (selectionOptions.length > 0 && selectionChoice === null) {
+      setError("请选择要分析的日期和班次，或选择分别生成全部报告。");
+      return;
+    }
+    if (template && selectionChoice === "all") {
+      setError("高级验收基准只能核对一个日期和班次，请选择单份报告。");
+      return;
+    }
     setRunning(true);
     setError(null);
+    setBatchProgress(null);
     const controller = new AbortController();
     const requestId = activeRequestIdRef.current + 1;
     activeRequestIdRef.current = requestId;
@@ -214,14 +231,43 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
       aborted: controller.signal.aborted,
     });
     try {
-      const nextResult = await analyzeEdsFiles(source, template, controller.signal);
-      if (isCurrent()) setResult(nextResult);
+      const sourceBytes = await source.arrayBuffer();
+      const templateBytes = template ? await template.arrayBuffer() : null;
+      if (!isCurrent()) return;
+      const requestSource = () => new File([sourceBytes], source.name, { type: source.type, lastModified: source.lastModified });
+      const requestTemplate = () => template && templateBytes
+        ? new File([templateBytes], template.name, { type: template.type, lastModified: template.lastModified })
+        : null;
+      const requestedSelections: Array<EdsWorkbookSelection | undefined> = selectionOptions.length === 0
+        ? [undefined]
+        : selectionChoice === "all"
+          ? selectionOptions
+          : [selectionOptions[selectionChoice as number]];
+      const nextResults: EdsAnalysisResponse[] = [];
+      for (let index = 0; index < requestedSelections.length; index += 1) {
+        if (isCurrent() && requestedSelections.length > 1) {
+          setBatchProgress({ current: index + 1, total: requestedSelections.length });
+        }
+        nextResults.push(await analyzeEdsFiles(requestSource(), requestTemplate(), controller.signal, requestedSelections[index]));
+      }
+      if (isCurrent()) {
+        setResults(nextResults);
+        setActiveResultIndex(0);
+      }
     } catch (caught) {
-      if (isCurrent()) setError(caught instanceof EdsClientError ? caught.message : "EDS 工作簿分析失败，请重试。");
+      if (isCurrent() && caught instanceof EdsSelectionRequiredClientError) {
+        setSelectionOptions(caught.selections);
+        setSelectionChoice(null);
+        setResults([]);
+        setError(null);
+      } else if (isCurrent()) {
+        setError(caught instanceof EdsClientError ? caught.message : "EDS 工作簿分析失败，请重试。");
+      }
     } finally {
       if (isCurrent()) {
         abortRef.current = null;
         setRunning(false);
+        setBatchProgress(null);
       }
     }
   }
@@ -232,8 +278,22 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
     abortRef.current.abort();
     abortRef.current = null;
     setRunning(false);
+    setBatchProgress(null);
     setError("EDS 分析已取消。");
   }
+
+  const result = results[activeResultIndex] ?? null;
+  const runLabel = running
+    ? batchProgress
+      ? `正在生成第 ${batchProgress.current}/${batchProgress.total} 份报告…`
+      : template ? "正在解析并执行验收比对…" : "正在解析并生成报表…"
+    : selectionOptions.length === 0
+      ? "导入并自动分析"
+      : selectionChoice === "all"
+        ? `分别生成 ${selectionOptions.length} 份报告`
+        : selectionChoice === null
+          ? "请选择分析范围"
+          : `生成 ${selectionOptions[selectionChoice]?.shift ?? "所选班次"}报告`;
 
   return (
     <div className="eds-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !running) onClose(); }}>
@@ -286,34 +346,86 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
                 disabled={running}
                 onClick={() => {
                   if (advancedComparison) setTemplate(null);
+                  if (!advancedComparison && selectionChoice === "all") setSelectionChoice(null);
                   setAdvancedComparison(!advancedComparison);
                   setError(null);
                 }}
               >{advancedComparison ? "关闭高级验收" : "高级验收"}</button>
             </div>
             <div className="eds-privacy-note"><b>数据边界</b><span>原始工作簿和逐行明细仅用于本次内存分析，不进入 AI 上下文、localStorage 或审计正文；分析完成后可选择将日期、班次、KPI 与分类汇总生成到工作区。</span></div>
+            {selectionOptions.length > 0 && (
+              <section className="eds-selection-panel" aria-labelledby="eds-selection-title" aria-live="polite">
+                <div><b id="eds-selection-title">检测到多个日期或班次</b><small>请选择一个范围；普通分析也可以按范围分别生成全部报告。</small></div>
+                <div className="eds-selection-options">
+                  {selectionOptions.map((selection, index) => (
+                    <label className={selectionChoice === index ? "selected" : ""} key={`${selection.date}-${selection.shift}`}>
+                      <input
+                        type="radio"
+                        name="eds-analysis-scope"
+                        checked={selectionChoice === index}
+                        disabled={running}
+                        onChange={() => { setSelectionChoice(index); setError(null); }}
+                      />
+                      <span><b>{selection.shift}</b><small>{selection.date}</small></span>
+                    </label>
+                  ))}
+                  {!advancedComparison && (
+                    <label className={selectionChoice === "all" ? "selected all" : "all"}>
+                      <input
+                        type="radio"
+                        name="eds-analysis-scope"
+                        checked={selectionChoice === "all"}
+                        disabled={running}
+                        onChange={() => { setSelectionChoice("all"); setError(null); }}
+                      />
+                      <span><b>分别生成全部报告</b><small>共 {selectionOptions.length} 个日期/班次，逐份独立统计和导出</small></span>
+                    </label>
+                  )}
+                </div>
+                {advancedComparison && <p>高级验收模式下，一个目标模板只能核对一个日期和班次。</p>}
+              </section>
+            )}
             {error && <EdsErrorMessage message={error} />}
-            <button type="button" className="eds-run-button" disabled={!source || running} onClick={() => { void runAnalysis(); }}>{running ? (template ? "正在解析并执行验收比对…" : "正在解析并生成报表…") : "导入并自动分析"}</button>
+            <button type="button" className="eds-run-button" disabled={!source || running || (selectionOptions.length > 0 && selectionChoice === null)} onClick={() => { void runAnalysis(); }}>{runLabel}</button>
           </div>
         ) : (
           <>
+            {results.length > 1 && (
+              <div className="eds-result-switcher">
+                <div><b>已分别生成 {results.length} 份报告</b><small>切换班次可查看统计并下载对应的独立 Excel。</small></div>
+                <div role="tablist" aria-label="已生成的 EDS 报告">
+                  {results.map((item, index) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeResultIndex === index}
+                      key={`${item.summary.date}-${item.summary.shift}`}
+                      onClick={() => { setActiveResultIndex(index); setError(null); }}
+                    >{item.summary.date} · {item.summary.shift}</button>
+                  ))}
+                </div>
+              </div>
+            )}
             <EdsAnalysisResultView result={result} />
             {error && <EdsErrorMessage message={error} />}
             <div className="eds-workspace-actions">
-              <div><b>在主界面继续分析</b><small>生成真实数据绑定的 EDS 看板；仅派生汇总会进入 AI 上下文、localStorage 和审计正文。</small></div>
+              <div><b>在主界面继续分析</b><small>{results.length > 1 ? `把 ${results.length} 份报告一起生成到主看板，并可切换日期和班次；` : "为当前报告生成真实数据绑定看板；"}仅派生汇总会进入 AI 上下文、localStorage 和审计正文。</small></div>
               <button type="button" onClick={() => {
                 try {
-                  onCreateWorkspace(result);
+                  onCreateWorkspace(results, activeResultIndex);
                 } catch (caught) {
-                  setError(caught instanceof Error ? caught.message : "EDS 演示看板生成失败。");
+                  setError(caught instanceof Error ? caught.message : "EDS 分析看板生成失败。");
                 }
-              }}>生成 EDS 演示看板</button>
+              }}>{results.length > 1 ? `生成可切换的 EDS 看板（${results.length} 份）` : "生成 EDS 分析看板"}</button>
             </div>
             <button type="button" className="eds-reset-button" onClick={() => {
               setSource(null);
               setTemplate(null);
               setAdvancedComparison(false);
-              setResult(null);
+              setResults([]);
+              setActiveResultIndex(0);
+              setSelectionOptions([]);
+              setSelectionChoice(null);
               setError(null);
             }}>重新选择工作簿</button>
           </>

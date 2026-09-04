@@ -3,12 +3,13 @@ import { harnessModelTurnSchema, type HarnessModelTurn } from "./contracts";
 export interface HarnessActionNormalizationOptions {
   readonlyTask: boolean;
   readonlyResultComplete: boolean;
+  expectedPageId?: string;
 }
 
 export interface HarnessActionNormalizationResult {
   turn: HarnessModelTurn;
   normalized: boolean;
-  normalizedFrom?: "completedAlias" | "legacyEnvelope" | "readonlyTextSummary";
+  normalizedFrom?: "completedAlias" | "legacyEnvelope" | "readonlyTextSummary" | "readonlyCompleteWithPageId";
 }
 
 export class HarnessActionProtocolError extends Error {
@@ -49,8 +50,25 @@ function redactedIssues(value: unknown) {
   }).join("、");
 }
 
-function readonlyAlias(value: unknown): HarnessActionNormalizationResult | undefined {
+function readonlyAlias(
+  value: unknown,
+  options: HarnessActionNormalizationOptions,
+): HarnessActionNormalizationResult | undefined {
   if (!isRecord(value)) return undefined;
+
+  if (
+    hasOnlyKeys(value, ["type", "message", "pageId"])
+    && value.type === "complete"
+    && nonEmptyMessage(value.message)
+    && typeof value.pageId === "string"
+    && value.pageId === options.expectedPageId
+  ) {
+    return {
+      turn: { type: "complete", message: value.message },
+      normalized: true,
+      normalizedFrom: "readonlyCompleteWithPageId",
+    };
+  }
 
   if (
     hasOnlyKeys(value, ["type", "message"])
@@ -92,7 +110,7 @@ export function normalizeHarnessModelTurn(
   if (canonical.success) return { turn: canonical.data, normalized: false };
 
   if (options.readonlyTask && options.readonlyResultComplete) {
-    const normalized = readonlyAlias(candidate);
+    const normalized = readonlyAlias(candidate, options);
     if (normalized) return normalized;
   }
 

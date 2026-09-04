@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EDS_RULE_VERSION, EDS_TEMPLATE_VERSION } from "./built-in";
-import { edsAnalysisResponseSchema, type EdsAnalysisResponse } from "./contracts";
+import { edsAnalysisResponseSchema, edsSelectionRequiredResponseSchema, type EdsAnalysisResponse } from "./contracts";
 
 function validResponse(): EdsAnalysisResponse {
   return {
@@ -38,6 +38,28 @@ function validResponse(): EdsAnalysisResponse {
 }
 
 describe("EDS 响应跨汇总一致性", () => {
+  it("只接受互不重复且结构严格的日期/班次选择项", () => {
+    const valid = {
+      error: {
+        code: "EDS_SELECTION_REQUIRED",
+        message: "请选择分析范围。",
+        selections: [
+          { date: "2026-09-03", shift: "白班" },
+          { date: "2026-09-03", shift: "夜班" },
+        ],
+      },
+    };
+    expect(edsSelectionRequiredResponseSchema.parse(valid)).toEqual(valid);
+    expect(edsSelectionRequiredResponseSchema.safeParse({
+      ...valid,
+      error: { ...valid.error, selections: [valid.error.selections[0], valid.error.selections[0]] },
+    }).success).toBe(false);
+    expect(edsSelectionRequiredResponseSchema.safeParse({
+      ...valid,
+      error: { ...valid.error, selections: [{ date: "09/03/2026", shift: "白班" }, valid.error.selections[1]] },
+    }).success).toBe(false);
+  });
+
   it("接受各层合计一致的固定 14×20 响应", () => {
     expect(edsAnalysisResponseSchema.parse(validResponse())).toEqual(validResponse());
 

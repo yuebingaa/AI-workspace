@@ -31,7 +31,7 @@ function task(state: "blocked" | "failed" | "completed"): HarnessTaskSummary {
   } : { error: state === "blocked" ? "缺少外部能力。" : "执行异常。" });
 }
 
-function render(status: AiRequestUiStatus, harnessTask: HarnessTaskSummary, requestError: string | null) {
+function render(status: AiRequestUiStatus, harnessTask: HarnessTaskSummary, requestError: string | null, dataAnalysisMode = false) {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
   return renderToStaticMarkup(<AiBuilderAssistant
     pageTitle="客户洞察"
@@ -50,6 +50,7 @@ function render(status: AiRequestUiStatus, harnessTask: HarnessTaskSummary, requ
     canRetry={false}
     harnessTask={harnessTask}
     harnessTaskCount={1}
+    dataAnalysisMode={dataAnalysisMode}
     onInstructionChange={() => {}}
     onGenerate={() => {}}
     onCancelRequest={() => {}}
@@ -76,5 +77,13 @@ describe("AI 助手 Harness 状态", () => {
     expect(completed).toContain("下载 Excel");
     expect(completed).toContain("/api/exports/assistant_excel_artifact_001");
     expect(completed).toContain("华东异常订单.xlsx");
+  });
+
+  it("EDS 上下文显示只读 AI 数据分析模式和隐私边界", () => {
+    const html = render("success", task("completed"), null, true);
+    expect(html).toContain("AI 数据分析助手");
+    expect(html).toContain("EDS 派生汇总只读分析模式");
+    expect(html).toContain("不会获得原始工作簿或逐行明细");
+    expect(html).toContain("比较白班和夜班的异常差异");
   });
 });

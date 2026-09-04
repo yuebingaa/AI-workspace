@@ -5,6 +5,8 @@ import { jsonByteLength } from "./security";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
 import { excelExportStore } from "@/core/exports/server/excel-export-store";
+import { analyzeEdsWorkbook, createEdsWorkspaceRuntime, createEdsWorkspaceSnapshotForResults, installEdsWorkspaceInDataProduct, type EdsAnalysisResponse } from "@/core/eds";
+import { createSyntheticEdsFixture } from "@/fixtures/eds-synthetic";
 
 function context() {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
@@ -20,10 +22,48 @@ function context() {
   return { request, dataRuntime: data.dataRuntime, now: () => 1_000, id: () => "tool_registry_id" };
 }
 
+function edsContext() {
+  if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+  const analysis = analyzeEdsWorkbook(createSyntheticEdsFixture().sourceSheets);
+  const response: EdsAnalysisResponse = {
+    ...analysis,
+    exportArtifact: {
+      id: "eds-ai-artifact",
+      status: "ready",
+      fileName: "private-source.xlsx",
+      downloadUrl: "/api/exports/private-source",
+      rowCount: 1,
+      fieldCount: 1,
+      sizeBytes: 1,
+      createdAt: "2026-09-04T06:00:00.000Z",
+      expiresAt: "2026-09-04T06:10:00.000Z",
+    },
+    warnings: [],
+  };
+  response.summary.date = "2026-09-03";
+  response.summary.shift = "白班";
+  const night = structuredClone(response);
+  night.summary.shift = "夜班";
+  const edsWorkspace = createEdsWorkspaceSnapshotForResults([response, night], 1);
+  const product = installEdsWorkspaceInDataProduct(demoFixtureResult.data.dataProduct, edsWorkspace);
+  const request: HarnessRequest = {
+    idempotencyKey: "request_eds_ai_tool",
+    instruction: "比较白班和夜班 EDS 异常并给出建议，不要修改页面。",
+    pageId: "page_eds_analysis",
+    dataSourceId: "dataset_eds_overview",
+    appSpec: product.appSpec,
+    recipes: product.recipes,
+    edsWorkspace,
+    role: "editor",
+  };
+  return { request, dataRuntime: createEdsWorkspaceRuntime(edsWorkspace), now: () => 1_000, id: () => "eds_ai_tool_id" };
+}
+
 describe("Harness 类型化工具注册表", () => {
-  it("暴露包含 Excel 导出的七个类型化工具及其参数 Schema", () => {
+  it("暴露包含 EDS 分析和 Excel 导出的八个类型化工具及其参数 Schema", () => {
     const catalog = harnessToolCatalog();
     expect(catalog.map((tool) => tool.name)).toEqual([
+      "analyzeEdsReports",
       "inspectDataset",
       "inspectFields",
       "previewDataRecipe",
@@ -33,6 +73,20 @@ describe("Harness 类型化工具注册表", () => {
       "createChangeSetPreview",
     ]);
     expect(catalog.every((tool) => tool.parameters.type === "object")).toBe(true);
+  });
+
+  it("EDS 分析工具返回全部班次的派生指标和差异且不暴露文件信息", async () => {
+    const result = await executeHarnessTool("analyzeEdsReports", {}, edsContext());
+    const serialized = JSON.stringify(result);
+
+    expect(result.summary).toContain("2 份 EDS 派生报告");
+    expect(result.data).toMatchObject({ reportCount: 2, rawRowsIncluded: false });
+    expect(serialized).toContain("白班");
+    expect(serialized).toContain("夜班");
+    expect(serialized).toContain("deltaFromFirst");
+    expect(serialized).not.toContain("private-source.xlsx");
+    expect(serialized).not.toContain("/api/exports/");
+    expect(jsonByteLength(result.data)).toBeLessThan(MAX_HARNESS_TOOL_RESULT_BYTES);
   });
 
   it("复用字段分析与 AppSpec 检查并限制结果大小", async () => {

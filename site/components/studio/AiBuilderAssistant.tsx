@@ -24,6 +24,7 @@ interface AiBuilderAssistantProps {
   canRetry: boolean;
   harnessTask: HarnessTaskSummary | null;
   harnessTaskCount: number;
+  dataAnalysisMode: boolean;
   onInstructionChange: (instruction: string) => void;
   onGenerate: () => void;
   onCancelRequest: () => void;
@@ -89,6 +90,7 @@ export function AiBuilderAssistant({
   canRetry,
   harnessTask,
   harnessTaskCount,
+  dataAnalysisMode,
   onInstructionChange,
   onGenerate,
   onCancelRequest,
@@ -112,7 +114,7 @@ export function AiBuilderAssistant({
   return (
     <aside className="right-panel panel">
       <div className="assistant-head">
-        <div><span className="ai-mark">✦</span><div><b>AI 构建助手</b><small>{isLoading ? "正在生成结构化 ChangeSet" : "AppSpec 安全规划模式"}</small></div></div>
+        <div><span className="ai-mark">✦</span><div><b>{dataAnalysisMode ? "AI 数据分析助手" : "AI 构建助手"}</b><small>{dataAnalysisMode ? (isLoading ? "正在读取派生汇总并请求 DeepSeek" : "EDS 派生汇总只读分析模式") : (isLoading ? "正在生成结构化 ChangeSet" : "AppSpec 安全规划模式")}</small></div></div>
         <button type="button" aria-label="助手菜单">···</button>
       </div>
       <div className="context-pill">上下文：{pageTitle} · {datasetName.replace(".csv", "")}</div>
@@ -246,7 +248,7 @@ export function AiBuilderAssistant({
                 </button>
               </div>
             </div>}
-            <p className="safe-note">AI 只生成待预览 ChangeSet，不会自动修改正式 AppSpec。</p>
+            <p className="safe-note">{dataAnalysisMode ? "AI 只读取 EDS 派生汇总，不会获得原始工作簿或逐行明细，也不会自动修改页面。" : "AI 只生成待预览 ChangeSet，不会自动修改正式 AppSpec。"}</p>
           </div>
         </div>
       </div>
@@ -256,7 +258,7 @@ export function AiBuilderAssistant({
           maxLength={1_000}
           value={instruction}
           disabled={isLoading}
-          placeholder="例如：将本月收入指标标题改为月度总收入……"
+          placeholder={dataAnalysisMode ? "例如：比较白班和夜班的异常差异，并给出优先排查建议……" : "例如：将本月收入指标标题改为月度总收入……"}
           onChange={(event) => onInstructionChange(event.target.value)}
           onKeyDown={(event) => {
             if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && instruction.trim() && !isLoading) onGenerate();

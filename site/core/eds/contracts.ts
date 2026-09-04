@@ -15,9 +15,28 @@ export const EDS_UPLOAD_LIMITS = {
   maxSharedStrings: 500_000,
   maxStyles: 100_000,
   maxCellChars: 20_000,
+  maxSelections: 20,
 } as const;
 
 export const EDS_MAX_RESPONSE_BYTES = 512 * 1024;
+
+export const edsWorkbookSelectionSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u),
+  shift: z.string().min(1).max(50),
+}).strict();
+
+export const edsSelectionRequiredResponseSchema = z.object({
+  error: z.object({
+    code: z.literal("EDS_SELECTION_REQUIRED"),
+    message: z.string().min(1).max(200),
+    selections: z.array(edsWorkbookSelectionSchema).min(2).max(EDS_UPLOAD_LIMITS.maxSelections),
+  }).strict(),
+}).strict().superRefine((response, context) => {
+  const keys = response.error.selections.map((selection) => `${selection.date}\u0000${selection.shift}`);
+  if (new Set(keys).size !== keys.length) {
+    context.addIssue({ code: "custom", path: ["error", "selections"], message: "可选日期与班次不能重复" });
+  }
+});
 
 export const edsChartItemSchema = z.object({
   label: z.string().min(1).max(200),
@@ -124,6 +143,8 @@ export const edsAnalysisResponseSchema = z.object({
 });
 
 export type EdsAnalysisResponse = z.infer<typeof edsAnalysisResponseSchema>;
+export type EdsWorkbookSelection = z.infer<typeof edsWorkbookSelectionSchema>;
+export type EdsSelectionRequiredResponse = z.infer<typeof edsSelectionRequiredResponseSchema>;
 export type EdsChartItem = z.infer<typeof edsChartItemSchema>;
 export type EdsComparison = z.infer<typeof edsComparisonSchema>;
 export type EdsConfiguration = z.infer<typeof edsConfigurationSchema>;

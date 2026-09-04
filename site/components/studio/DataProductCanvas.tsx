@@ -7,6 +7,12 @@ import type { PreviewDevice } from "./StudioHeader";
 
 export type CanvasMode = "edit" | "preview";
 
+export interface EdsCanvasReportOption {
+  date: string;
+  shift: string;
+  selected: boolean;
+}
+
 interface DataProductCanvasProps {
   appSpec: AppSpec;
   dataRuntime: LocalDataRuntime;
@@ -20,12 +26,16 @@ interface DataProductCanvasProps {
   puckData: StudioPuckData | null;
   puckSessionKey: number;
   hasPuckPreview: boolean;
+  edsReportOptions?: EdsCanvasReportOption[];
+  edsAnalysisRunning?: boolean;
   onUndo: () => void;
   onModeChange: (mode: CanvasMode) => void;
   onPuckDataChange: (data: StudioPuckData) => void;
   onRequestPuckPreview: (data: StudioPuckData) => void;
   onApplyPuckPreview: () => void;
   onCancelPuckPreview: () => void;
+  onEdsReportChange?: (reportIndex: number) => void;
+  onAnalyzeEdsReports?: () => void;
   onQueryExecuted: (record: QueryExecutionRecord) => void;
 }
 
@@ -42,12 +52,16 @@ export function DataProductCanvas({
   puckData,
   puckSessionKey,
   hasPuckPreview,
+  edsReportOptions,
+  edsAnalysisRunning,
   onUndo,
   onModeChange,
   onPuckDataChange,
   onRequestPuckPreview,
   onApplyPuckPreview,
   onCancelPuckPreview,
+  onEdsReportChange,
+  onAnalyzeEdsReports,
   onQueryExecuted,
 }: DataProductCanvasProps) {
   const page = appSpec.pages.find((candidate) => candidate.id === activePageId) ?? appSpec.pages[0];
@@ -70,6 +84,28 @@ export function DataProductCanvas({
           <button type="button">•••</button>
         </div>
       </div>
+      {edsReportOptions && edsReportOptions.length > 0 && (
+        <div className="eds-canvas-switcher">
+          <div><b>EDS 报告</b><small>{edsReportOptions.length > 1 ? "白班、夜班汇总已同时载入；切换后看板和 AI 当前数据同步更新。" : "当前派生汇总已载入，可交给 AI 进行只读诊断。"}</small></div>
+          <div role="tablist" aria-label="EDS 看板班次">
+            {edsReportOptions.map((option, index) => (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={option.selected}
+                key={`${option.date}-${option.shift}`}
+                onClick={() => onEdsReportChange?.(index)}
+              ><b>{option.shift}</b><small>{option.date}</small></button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="eds-canvas-ai-action"
+            disabled={edsAnalysisRunning}
+            onClick={onAnalyzeEdsReports}
+          >{edsAnalysisRunning ? "AI 正在分析…" : "AI 分析全部班次"}</button>
+        </div>
+      )}
       {mode === "edit" ? (
         <div className="puck-editor-stage">
           {puckData ? (

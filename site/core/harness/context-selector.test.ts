@@ -35,10 +35,12 @@ describe("Harness 最小上下文选择器", () => {
     for (const iteration of [1, 2]) {
       const prompt = harnessSystemPrompt(iteration);
       expect(prompt).toContain('{"type":"callTool","message":"检查","toolCallId":"c1","name":"inspectDataset","arguments":{}}');
-      expect(prompt).toContain('{"type":"complete","message":"完成"}');
+      expect(prompt).toContain('{"type":"complete","message":"根据工具结果，数据共48行；建议优先检查退款异常。"}');
       expect(prompt).toContain('{"type":"blocked","message":"受阻","missingRequirements":["字段"]}');
       expect(prompt).toContain("一次一种动作");
       expect(prompt).toContain("禁止Markdown");
+      expect(prompt).toContain("interactionMode为conversation时必须complete");
+      if (iteration > 1) expect(prompt).toContain("禁止仅写“完成”或“已完成”");
       expect(prompt).not.toContain('"action"');
     }
   });
@@ -188,6 +190,24 @@ describe("Harness 最小上下文选择器", () => {
   it("简单只读任务使用较低调用和上下文预算", () => {
     const input = request("检查 retail_orders 数据集是否可用，返回行数和列数。不要修改页面。");
     expect(classifyHarnessTask(input)).toEqual({ complexity: "simpleReadOnly", maxModelCalls: 2, maxToolCalls: 2 });
+  });
+
+  it("闲聊短句保留最近对话并进入 conversation，而不是伪装成缺少数据的任务", () => {
+    const input = {
+      ...request("额"),
+      conversationContext: {
+        previousInstruction: "分析一下数据",
+        previousAssistantMessage: "夜班异常次数高于白班。",
+      },
+    };
+    const selection = buildHarnessContextSelection(input, [], 1);
+
+    expect(selection.toolNames).toEqual([]);
+    expect(selection.blockingReason).toBeUndefined();
+    expect(selection.context).toMatchObject({
+      interactionMode: "conversation",
+      recentConversation: input.conversationContext,
+    });
   });
 
   it("仅在配方成功预览后动态暴露 Excel 导出工具", () => {

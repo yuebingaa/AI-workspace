@@ -1,4 +1,15 @@
-import { analyzeEdsWorkbook, EdsAnalysisError, EDS_MAX_RESPONSE_BYTES, EDS_UPLOAD_LIMITS, edsAnalysisResponseSchema } from "@/core/eds";
+import {
+  analyzeEdsWorkbook,
+  analyzeEdsWorkbookForSelection,
+  EdsAnalysisError,
+  EdsSelectionRequiredError,
+  EDS_MAX_RESPONSE_BYTES,
+  EDS_UPLOAD_LIMITS,
+  edsAnalysisResponseSchema,
+  edsSelectionRequiredResponseSchema,
+  edsWorkbookSelectionSchema,
+  type EdsWorkbookSelection,
+} from "@/core/eds";
 import { generateEdsReportExcel, readEdsXlsx } from "@/core/eds/server/workbook";
 import { sanitizeEdsPublicError } from "@/core/eds/server/public-error";
 import { excelExportStore } from "@/core/exports/server/excel-export-store";
@@ -69,6 +80,13 @@ const noStoreHeaders = {
 
 function jsonError(message: string, status: number, headers: HeadersInit = {}) {
   return Response.json({ error: { message: sanitizeEdsPublicError(message) } }, { status, headers: { ...noStoreHeaders, ...headers } });
+}
+
+function selectionRequired(error: EdsSelectionRequiredError) {
+  const payload = edsSelectionRequiredResponseSchema.parse({
+    error: { code: "EDS_SELECTION_REQUIRED", message: error.message, selections: error.selections },
+  });
+  return Response.json(payload, { status: 409, headers: noStoreHeaders });
 }
 
 function uploadedFile(value: FormDataEntryValue | null, label: string, required: true): File;
@@ -169,12 +187,27 @@ async function parseBoundedMultipart(request: Request, contentType: string): Pro
 }
 
 function validateFormFields(form: FormData): void {
-  const allowed = new Set(["source", "template"]);
+  const allowed = new Set(["source", "template", "selectionDate", "selectionShift"]);
   for (const key of form.keys()) {
     if (!allowed.has(key)) throw new EdsAnalysisError("EDS 上传包含不支持的字段");
   }
   if (form.getAll("source").length !== 1) throw new EdsAnalysisError("输入工作簿字段必须且只能出现一次");
   if (form.getAll("template").length > 1) throw new EdsAnalysisError("验收基准字段最多出现一次");
+  if (form.getAll("selectionDate").length > 1 || form.getAll("selectionShift").length > 1) {
+    throw new EdsAnalysisError("日期和班次选择字段最多出现一次");
+  }
+}
+
+function selectedScope(form: FormData): EdsWorkbookSelection | undefined {
+  const date = form.get("selectionDate");
+  const shift = form.get("selectionShift");
+  if (date === null && shift === null) return undefined;
+  if (typeof date !== "string" || typeof shift !== "string") {
+    throw new EdsAnalysisError("日期和班次必须同时提供且格式有效");
+  }
+  const parsed = edsWorkbookSelectionSchema.safeParse({ date, shift });
+  if (!parsed.success) throw new EdsAnalysisError("日期和班次必须同时提供且格式有效");
+  return parsed.data;
 }
 
 export async function POST(request: Request) {
@@ -197,6 +230,7 @@ export async function POST(request: Request) {
     validateFormFields(form);
     const sourceFile = uploadedFile(form.get("source"), "输入工作簿", true);
     const templateFile = uploadedFile(form.get("template"), "验收基准", false);
+    const selection = selectedScope(form);
     if (sourceFile.size + (templateFile?.size ?? 0) > EDS_UPLOAD_LIMITS.maxCombinedBytes) throw new EdsAnalysisError("EDS 工作簿合计超过 20 MiB 限制", 413);
     const sourceSheets = await withTimeout(concurrencyLease.track(readEdsXlsx({
       buffer: Buffer.from(await sourceFile.arrayBuffer()),
@@ -210,7 +244,9 @@ export async function POST(request: Request) {
           mimeType: templateFile.type,
         })), WORKBOOK_PARSE_TIMEOUT_MS, "验收基准解析超时", 504)
       : undefined;
-    const analysis = analyzeEdsWorkbook(sourceSheets, templateSheets);
+    const analysis = selection
+      ? analyzeEdsWorkbookForSelection(sourceSheets, selection, templateSheets)
+      : analyzeEdsWorkbook(sourceSheets, templateSheets);
     const generated = await generateEdsReportExcel(analysis, new Date(), (operation) => {
       concurrencyLease.track(operation);
     });
@@ -239,6 +275,7 @@ export async function POST(request: Request) {
       throw error;
     }
   } catch (error) {
+    if (error instanceof EdsSelectionRequiredError) return selectionRequired(error);
     if (error instanceof EdsAnalysisError) return jsonError(error.message, error.status);
     return jsonError("EDS 工作簿分析失败，请检查输入文件后重试。", 500);
   } finally {

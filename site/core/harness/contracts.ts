@@ -48,6 +48,7 @@ export const harnessTerminationCodeSchema = z.enum([
 export type HarnessTerminationCode = z.infer<typeof harnessTerminationCodeSchema>;
 
 export const harnessToolNameSchema = z.enum([
+  "analyzeEdsReports",
   "inspectDataset",
   "inspectFields",
   "previewDataRecipe",
@@ -183,6 +184,10 @@ const harnessPublicRequestShape = {
   instruction: z.string().trim().min(1).max(MAX_HARNESS_INSTRUCTION_LENGTH),
   pageId: z.string().min(1).max(120),
   dataSourceId: z.string().min(1).max(160).optional(),
+  conversationContext: z.object({
+    previousInstruction: z.string().trim().min(1).max(1_000).optional(),
+    previousAssistantMessage: z.string().trim().min(1).max(2_000).optional(),
+  }).strict().optional(),
   appSpec: appSpecSchema,
   recipes: z.array(dataRecipeSchema).max(20),
   edsWorkspace: edsWorkspaceSnapshotSchema.optional(),
