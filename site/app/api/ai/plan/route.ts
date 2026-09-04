@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { aiPlanPublicRequestSchema, aiPlanRequestSchema, MAX_AI_REQUEST_BYTES } from "@/core/ai/contracts";
 import { AiPlannerError, planChangeSetWithDeepSeek } from "@/core/ai/server/deepseek-planner";
-import { aiPlannerRateLimiter } from "@/core/ai/server/rate-limit";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 
@@ -13,11 +12,6 @@ const noStoreHeaders = {
   "x-content-type-options": "nosniff",
   ...DEMO_IDENTITY_RESPONSE_HEADERS,
 };
-
-function clientKey(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return (forwarded || request.headers.get("x-real-ip") || "local").slice(0, 120);
-}
 
 function errorResponse(error: AiPlannerError) {
   return NextResponse.json({
@@ -31,10 +25,6 @@ export async function POST(request: Request) {
   if (contentType !== "application/json") {
     return errorResponse(new AiPlannerError("invalid_request", "AI 请求必须使用 application/json。", 415, false));
   }
-  if (!aiPlannerRateLimiter.consume(clientKey(request))) {
-    return errorResponse(new AiPlannerError("rate_limited", "AI 请求过于频繁，请稍后重试。", 429, true));
-  }
-
   let text: string;
   try {
     text = await readBoundedUtf8Body(request, MAX_AI_REQUEST_BYTES, { signal: request.signal, timeoutMs: REQUEST_BODY_TIMEOUT_MS });

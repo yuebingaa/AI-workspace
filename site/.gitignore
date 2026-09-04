@@ -40,3 +40,8 @@ next-env.d.ts
 /work/
 /.studio-data/
 /evidence/
+
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*

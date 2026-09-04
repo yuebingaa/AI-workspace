@@ -1,11 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aiPlannerRateLimiter } from "@/core/ai/server/rate-limit";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_AI_REQUEST_BYTES } from "@/core/ai/contracts";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { POST } from "./route";
 
 describe("AI Planner 服务端身份边界", () => {
-  beforeEach(() => aiPlannerRateLimiter.clear());
   afterEach(() => vi.unstubAllGlobals());
 
   it("returns 408, cancels a stalled request body once, and skips the model", async () => {

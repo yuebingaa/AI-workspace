@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aiPlannerRateLimiter } from "@/core/ai/server/rate-limit";
 import { parseCsvUpload } from "@/core/datasets/server/csv-dataset";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
 import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
@@ -33,7 +32,6 @@ function stream(text: string) {
 describe("Harness 上传数据隐私门", () => {
   beforeEach(() => {
     datasetRepository.clear();
-    aiPlannerRateLimiter.clear();
     vi.stubEnv("DEEPSEEK_API_KEY", "");
     vi.stubEnv("DEEPSEEK_MODEL", "");
   });

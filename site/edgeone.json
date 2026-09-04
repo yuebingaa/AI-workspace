@@ -1,0 +1,12 @@
+{
+  "name": "ai-workspace-eds-cn",
+  "buildCommand": "npm run build:edgeone",
+  "nodeVersion": "22.17.1",
+  "cloudFunctions": {
+    "regions": {
+      "mainland": ["ap-guangzhou"],
+      "overseas": ["ap-hongkong"]
+    },
+    "maxDuration": 120
+  }
+}

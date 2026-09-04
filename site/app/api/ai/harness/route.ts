@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { aiPlannerRateLimiter } from "@/core/ai/server/rate-limit";
 import {
   DeepSeekHarness,
   HarnessIdempotencyConflictError,
@@ -52,11 +51,6 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function clientKey(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return `harness:${(forwarded || request.headers.get("x-real-ip") || "local").slice(0, 110)}`;
-}
-
 function error(message: string, status: number) {
   return NextResponse.json({ error: { message } }, { status, headers: noStoreHeaders });
 }
@@ -98,7 +92,6 @@ export async function POST(request: Request) {
   if (liveEvaluation instanceof NextResponse) return liveEvaluation;
   const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLocaleLowerCase("en-US");
   if (contentType !== "application/json") return error("Harness 请求必须使用 application/json。", 415);
-  if (!aiPlannerRateLimiter.consume(clientKey(request))) return error("Harness 请求过于频繁，请稍后重试。", 429);
   let text: string;
   try {
     text = await readBoundedUtf8Body(request, MAX_HARNESS_REQUEST_BYTES, { signal: request.signal, timeoutMs: REQUEST_BODY_TIMEOUT_MS });
