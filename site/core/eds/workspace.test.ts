@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createExecutionState } from "@/core/changesets";
 import { executeChartBinding, executeMetricBinding, executeTableBinding } from "@/core/data";
-import { buildHarnessContextSelection, executeHarnessTool, resolveHarnessPageDataSourceIds } from "@/core/harness";
+import { buildHarnessContextSelection, executeHarnessTool, harnessToolCatalog, resolveHarnessPageDataSourceIds, type HarnessObservation } from "@/core/harness";
 import type { EdsAnalysisResponse } from "./contracts";
 import { analyzeEdsWorkbook } from "./analysis";
 import { createSyntheticEdsFixture } from "@/fixtures/eds-synthetic";
@@ -27,6 +27,7 @@ function result(): EdsAnalysisResponse {
     summary: analysis.summary,
     issueSummary: analysis.issueSummary,
     lineSummary: analysis.lineSummary,
+    lineIssueSummary: analysis.lineIssueSummary,
     configuration: analysis.configuration,
     comparison: analysis.comparison,
     exportArtifact: {
@@ -104,7 +105,7 @@ describe("EDS 派生汇总工作区", () => {
     expect(second.appSpec.dataSources.filter((source) => [EDS_OVERVIEW_DATA_SOURCE_ID, EDS_BREAKDOWN_DATA_SOURCE_ID].includes(source.id))).toHaveLength(2);
     expect(second.datasets.filter((source) => [EDS_OVERVIEW_DATA_SOURCE_ID, EDS_BREAKDOWN_DATA_SOURCE_ID].includes(source.id))).toHaveLength(2);
     expect(runtime.rowsByDataSourceId[EDS_OVERVIEW_DATA_SOURCE_ID]).toHaveLength(1);
-    expect(runtime.rowsByDataSourceId[EDS_BREAKDOWN_DATA_SOURCE_ID]).toHaveLength(24);
+    expect(runtime.rowsByDataSourceId[EDS_BREAKDOWN_DATA_SOURCE_ID]).toHaveLength(164);
     if (!metric || metric.type !== "MetricCard" || !lineChart || lineChart.type !== "BarChart" || !table || table.type !== "DataTable") {
       throw new Error("EDS 页面组件缺失");
     }
@@ -128,9 +129,9 @@ describe("EDS 派生汇总工作区", () => {
     expect(reports.map((report) => report.summary.shift)).toEqual(["白班", "夜班"]);
     expect(night.summary).toEqual(reports[1].summary);
     expect(runtime.rowsByDataSourceId[EDS_OVERVIEW_DATA_SOURCE_ID]).toHaveLength(2);
-    expect(runtime.rowsByDataSourceId[EDS_BREAKDOWN_DATA_SOURCE_ID]).toHaveLength(48);
+    expect(runtime.rowsByDataSourceId[EDS_BREAKDOWN_DATA_SOURCE_ID]).toHaveLength(328);
     expect(product.appSpec.dataSources.find((source) => source.id === EDS_OVERVIEW_DATA_SOURCE_ID)?.rowCount).toBe(2);
-    expect(product.appSpec.dataSources.find((source) => source.id === EDS_BREAKDOWN_DATA_SOURCE_ID)?.rowCount).toBe(48);
+    expect(product.appSpec.dataSources.find((source) => source.id === EDS_BREAKDOWN_DATA_SOURCE_ID)?.rowCount).toBe(328);
     if (!metric || metric.type !== "MetricCard" || !table || table.type !== "DataTable") throw new Error("EDS 页面组件缺失");
     expect(executeMetricBinding(metric.props.binding, product.appSpec.dataSources, runtime).rawValue).toBe(results[1].summary.inputRows);
     expect(executeTableBinding(table.props.binding, product.appSpec.dataSources, runtime).rows).toHaveLength(24);
@@ -182,6 +183,61 @@ describe("EDS 派生汇总工作区", () => {
     expect(serialized).toContain(String(snapshot.summary.totalOccurrences));
     expect(serialized).toContain(snapshot.configuration.templateVersion);
     expect(serialized).not.toContain("sourceSheets");
+  });
+
+  it("把‘增加 B5FSL01 异常类型图’识别为写任务并生成可确认柱状图", async () => {
+    const data = fixtures();
+    const snapshot = createEdsWorkspaceSnapshot(result());
+    const product = installEdsWorkspaceInDataProduct(data.dataProduct, snapshot);
+    const runtime = createEdsWorkspaceRuntime(snapshot);
+    const request = {
+      idempotencyKey: "request_eds_line_issue_chart",
+      instruction: "增加B5FSL01异常类型分栏图",
+      pageId: EDS_WORKSPACE_PAGE_ID,
+      dataSourceId: EDS_BREAKDOWN_DATA_SOURCE_ID,
+      appSpec: product.appSpec,
+      recipes: product.recipes,
+      edsWorkspace: snapshot,
+      role: "editor" as const,
+    };
+    const initial = buildHarnessContextSelection(request, [], 1);
+    expect(initial.toolNames).toEqual(["analyzeEdsReports"]);
+    expect(initial.context).toMatchObject({ taskMode: "write" });
+    expect(initial.editableNodes.some((node) => node.nodeId === "page_eds_analysis_charts")).toBe(true);
+
+    const analysisResult = await executeHarnessTool("analyzeEdsReports", {}, {
+      request,
+      dataRuntime: runtime,
+      now: () => 1,
+      id: () => "eds_chart_analysis",
+    });
+    const observation: HarnessObservation = {
+      toolCallId: "eds_chart_analysis",
+      toolName: "analyzeEdsReports",
+      summary: analysisResult.summary,
+      data: analysisResult.data,
+    };
+    const followUp = buildHarnessContextSelection(request, [observation], 2);
+    const catalog = harnessToolCatalog({
+      names: followUp.toolNames,
+      editableNodes: followUp.editableNodes,
+      instruction: request.instruction,
+      request,
+    });
+    expect(followUp.toolNames).toEqual(["createEdsLineIssueChartPreview"]);
+    expect(JSON.stringify(catalog)).toContain("B5FSL01");
+    expect(JSON.stringify(analysisResult.data)).toContain("B5FSL01");
+    expect(analysisResult.data).toMatchObject({ lineIssueBreakdownAvailable: true });
+
+    const preview = await executeHarnessTool("createEdsLineIssueChartPreview", {
+      line: "B5FSL01",
+      metric: "occurrences",
+    }, { request, dataRuntime: runtime, now: () => 1, id: () => "eds_chart_change" });
+    expect(preview.pendingChangeSet?.operations).toEqual([expect.objectContaining({
+      type: "addNode",
+      parentId: "page_eds_analysis_charts",
+      node: expect.objectContaining({ type: "BarChart" }),
+    })]);
   });
 
   it("审计正文包含完整派生线体/异常摘要与版本，并声明不含原始行", () => {

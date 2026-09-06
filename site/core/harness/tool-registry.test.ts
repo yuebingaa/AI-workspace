@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessRequest } from "./contracts";
 import { compactHarnessToolResult, executeHarnessTool, harnessToolCatalog, MAX_HARNESS_TOOL_RESULT_BYTES } from "./tool-registry";
+import { buildHarnessContextSelection } from "./context-selector";
 import { jsonByteLength } from "./security";
+import { createExecutionState, previewChangeSet } from "@/core/changesets";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
 import { excelExportStore } from "@/core/exports/server/excel-export-store";
@@ -60,19 +62,92 @@ function edsContext() {
 }
 
 describe("Harness 类型化工具注册表", () => {
-  it("暴露包含 EDS 分析和 Excel 导出的八个类型化工具及其参数 Schema", () => {
+  it("暴露包含 EDS 派生分析、原始全表扫描查询、专用图表/表格预览和 Excel 导出的十五个类型化工具及其参数 Schema", () => {
     const catalog = harnessToolCatalog();
     expect(catalog.map((tool) => tool.name)).toEqual([
       "analyzeEdsReports",
+      "scanEdsRawWorkbook",
+      "queryEdsRawWorkbook",
+      "inspectEdsRawWorkbook",
+      "readEdsRawRows",
       "inspectDataset",
       "inspectFields",
       "previewDataRecipe",
       "validateDataRecipe",
       "exportDataRecipeToExcel",
       "inspectAppSpec",
+      "createEdsBreakdownChartPreview",
+      "createEdsLineIssueChartPreview",
+      "updateEdsTablePreview",
       "createChangeSetPreview",
     ]);
     expect(catalog.every((tool) => tool.parameters.type === "object")).toBe(true);
+  });
+
+  it("原始工作簿工具先检查清单，再按工作表和行列范围读取真实单元格", async () => {
+    const toolContext = edsContext();
+    const sheets = [{
+      sheet: "白班明细",
+      data: [
+        ["线体", "异常类型", "次数"],
+        ["A5FNL01", "飞达工位超时", 3],
+        ["B5FSL01", "贴膜异常", 2],
+      ],
+    }];
+    toolContext.request.rawWorkbookManifest = {
+      fileName: "EDS原始数据.xlsx",
+      contentHash: "e".repeat(64),
+      sheets: [{ name: "白班明细", rowCount: 3, columnCount: 3 }],
+    };
+    const contextWithRaw = { ...toolContext, rawWorkbook: { fileName: "EDS原始数据.xlsx", contentHash: "e".repeat(64), sheets } };
+
+    const scanned = await executeHarnessTool("scanEdsRawWorkbook", {}, contextWithRaw);
+    expect(scanned.data).toMatchObject({
+      scanComplete: true,
+      scannedDataRowCount: 2,
+      scannedCellCount: 6,
+      sheets: [{ name: "白班明细", headerRow: 1, dataRowCount: 2 }],
+    });
+
+    const queried = await executeHarnessTool("queryEdsRawWorkbook", {
+      mode: "aggregate",
+      sheetName: "白班明细",
+      groupBy: ["线体"],
+      aggregations: [{ operation: "count", alias: "异常次数" }],
+      orderBy: [{ field: "异常次数", direction: "descending" }],
+      limit: 10,
+    }, contextWithRaw);
+    expect(queried.data).toMatchObject({
+      scanComplete: true,
+      scannedDataRowCount: 2,
+      matchedRowCount: 2,
+      groups: [{ 线体: "A5FNL01", 异常次数: 1 }, { 线体: "B5FSL01", 异常次数: 1 }],
+    });
+
+    const inspected = await executeHarnessTool("inspectEdsRawWorkbook", {}, contextWithRaw);
+    expect(inspected.data).toMatchObject({
+      access: "session-memory-cache",
+      sheets: [{ name: "白班明细", rowCount: 3, columnCount: 3 }],
+    });
+
+    const read = await executeHarnessTool("readEdsRawRows", {
+      sheetName: "白班明细",
+      startRow: 2,
+      rowCount: 2,
+      startColumn: 1,
+      columnCount: 3,
+    }, contextWithRaw);
+    expect(read.data).toMatchObject({
+      sheetName: "白班明细",
+      startRow: 2,
+      endRow: 3,
+      hasMoreRows: false,
+      rows: [
+        { rowNumber: 2, cells: { A: "A5FNL01", B: "飞达工位超时", C: 3 } },
+        { rowNumber: 3, cells: { A: "B5FSL01", B: "贴膜异常", C: 2 } },
+      ],
+    });
+    expect(JSON.stringify(read)).not.toContain("localStorage");
   });
 
   it("EDS 分析工具返回全部班次的派生指标和差异且不暴露文件信息", async () => {
@@ -87,6 +162,195 @@ describe("Harness 类型化工具注册表", () => {
     expect(serialized).not.toContain("private-source.xlsx");
     expect(serialized).not.toContain("/api/exports/");
     expect(jsonByteLength(result.data)).toBeLessThan(MAX_HARNESS_TOOL_RESULT_BYTES);
+  });
+
+  it("EDS 分类制图工具由服务端生成安全饼图绑定", async () => {
+    const toolContext = edsContext();
+    const formal = structuredClone(toolContext.request.appSpec);
+    const result = await executeHarnessTool("createEdsBreakdownChartPreview", {
+      dimension: "issue",
+      metric: "occurrences",
+      chartType: "pie",
+      limit: 8,
+    }, toolContext);
+
+    expect(result.pendingChangeSet?.operations[0]).toMatchObject({
+      type: "addNode",
+      parentId: "page_eds_analysis_charts",
+      node: {
+        type: "BarChart",
+        props: {
+          chartType: "pie",
+          binding: {
+            dataSourceId: "dataset_eds_breakdown",
+            field: "occurrences",
+            groupBy: "category",
+            filters: expect.arrayContaining([
+              { field: "view", operator: "equals", value: "异常分类" },
+            ]),
+          },
+        },
+      },
+    });
+    expect(toolContext.request.appSpec).toEqual(formal);
+  });
+
+  it("EDS 表格工具支持受控多级排序、显示字段、标题和样式且只生成预览", async () => {
+    const toolContext = edsContext();
+    toolContext.request.instruction = "线体与异常分类明细先按线体、再按异常分类排序，改成紧凑蓝色斑马纹";
+    const formal = structuredClone(toolContext.request.appSpec);
+    const selection = buildHarnessContextSelection(toolContext.request, [], 1);
+    const [tableTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: toolContext.request.instruction,
+      request: toolContext.request,
+    });
+
+    expect(selection.toolNames).toEqual(["updateEdsTablePreview"]);
+    expect(JSON.stringify(tableTool.parameters)).toContain('"line"');
+    expect(JSON.stringify(tableTool.parameters)).toContain('"category"');
+    expect(JSON.stringify(tableTool.parameters)).not.toContain("requestedLineIssues");
+
+    const result = await executeHarnessTool("updateEdsTablePreview", {
+      nodeId: "eds_summary_table",
+      title: "线体异常排序明细",
+      visibleColumns: ["line", "category", "occurrences", "minutes"],
+      sort: [
+        { field: "line", direction: "asc" },
+        { field: "category", direction: "asc" },
+      ],
+      density: "compact",
+      stripedRows: true,
+      accentColor: "blue",
+    }, toolContext);
+
+    expect(result.pendingChangeSet?.operations).toEqual([expect.objectContaining({
+      type: "updateNodeProps",
+      pageId: "page_eds_analysis",
+      nodeId: "eds_summary_table",
+      props: expect.objectContaining({
+        title: "线体异常排序明细",
+        density: "compact",
+        stripedRows: true,
+        accentColor: "blue",
+        binding: expect.objectContaining({
+          sort: [
+            { field: "line", direction: "asc" },
+            { field: "category", direction: "asc" },
+          ],
+          columns: [
+            expect.objectContaining({ field: "line", label: "线体" }),
+            expect.objectContaining({ field: "category", label: "异常分类" }),
+            expect.objectContaining({ field: "occurrences", label: "异常次数" }),
+            expect.objectContaining({ field: "minutes", label: "异常分钟" }),
+          ],
+        }),
+      }),
+    })]);
+    expect(toolContext.request.appSpec).toEqual(formal);
+  });
+
+  it("重复新增同一种 EDS 图表时服务端生成不冲突的节点 ID", async () => {
+    const toolContext = edsContext();
+    const args = { dimension: "issue" as const, metric: "occurrences" as const, chartType: "pie" as const, limit: 8 };
+    const first = await executeHarnessTool("createEdsBreakdownChartPreview", args, toolContext);
+    if (!first.pendingChangeSet) throw new Error("预期第一张饼图存在待确认变更");
+    const firstPreview = previewChangeSet(createExecutionState(toolContext.request.appSpec), first.pendingChangeSet, "editor");
+    if (!firstPreview.preview) throw new Error("预期第一张饼图可生成预览");
+    const second = await executeHarnessTool("createEdsBreakdownChartPreview", args, {
+      ...toolContext,
+      request: { ...toolContext.request, appSpec: firstPreview.preview.appSpec },
+    });
+    const firstOperation = first.pendingChangeSet.operations[0];
+    const secondOperation = second.pendingChangeSet?.operations[0];
+
+    expect(firstOperation.type).toBe("addNode");
+    expect(secondOperation?.type).toBe("addNode");
+    if (firstOperation.type !== "addNode" || secondOperation?.type !== "addNode") throw new Error("预期两次操作均为新增节点");
+    expect(secondOperation.node.id).not.toBe(firstOperation.node.id);
+    expect(secondOperation.node.id).toMatch(/_2$/);
+  });
+
+  it("样式指令只允许更新现有柱形图颜色，不会误生成图表或数据筛选", () => {
+    const toolContext = edsContext();
+    toolContext.request.instruction = "把柱形图颜色换成蓝色";
+    const selection = buildHarnessContextSelection(toolContext.request, [], 1);
+    const [changeTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: toolContext.request.instruction,
+      request: toolContext.request,
+    });
+    const parameters = JSON.stringify(changeTool.parameters);
+
+    expect(selection.toolNames).toEqual(["createChangeSetPreview"]);
+    expect(parameters).toContain('"updateNodeProps"');
+    expect(parameters).toContain('"color"');
+    expect(parameters).toContain('"blue"');
+    expect(parameters).not.toContain('"addNode"');
+    expect(parameters).not.toContain('"binding"');
+    expect(parameters).not.toContain('"view"');
+  });
+
+  it("柱形图增加顶部数字被识别为显示属性更新而不是新增图表", () => {
+    const toolContext = edsContext();
+    toolContext.request.instruction = "柱状图增加顶部数字显示";
+    const selection = buildHarnessContextSelection(toolContext.request, [], 1);
+    const [changeTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: toolContext.request.instruction,
+      request: toolContext.request,
+    });
+    const parameters = JSON.stringify(changeTool.parameters);
+
+    expect(selection.toolNames).toEqual(["createChangeSetPreview"]);
+    expect(parameters).toContain('"updateNodeProps"');
+    expect(parameters).toContain('"showValues"');
+    expect(parameters).toContain('"boolean"');
+    expect(parameters).not.toContain('"addNode"');
+    expect(parameters).not.toContain('"binding"');
+    expect(parameters).not.toContain('"view"');
+  });
+
+  it("新增饼图时只开放饼图类型并保留安全数据绑定 Schema", () => {
+    const toolContext = edsContext();
+    toolContext.request.instruction = "增加一个饼状图";
+    const selection = buildHarnessContextSelection(toolContext.request, [], 1);
+    const [changeTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: toolContext.request.instruction,
+      request: toolContext.request,
+    });
+    const parameters = JSON.stringify(changeTool.parameters);
+
+    expect(selection.toolNames).toEqual(["createChangeSetPreview"]);
+    expect(parameters).toContain('"addNode"');
+    expect(parameters).toContain('"chartType"');
+    expect(parameters).toContain('"pie"');
+    expect(parameters).not.toContain('"donut"');
+    expect(parameters).toContain('"binding"');
+  });
+
+  it("已有图表可以只切换为环形图而不重建或改绑数据", () => {
+    const toolContext = edsContext();
+    toolContext.request.instruction = "把图表改成环形图";
+    const selection = buildHarnessContextSelection(toolContext.request, [], 1);
+    const [changeTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: toolContext.request.instruction,
+      request: toolContext.request,
+    });
+    const parameters = JSON.stringify(changeTool.parameters);
+
+    expect(parameters).toContain('"updateNodeProps"');
+    expect(parameters).toContain('"chartType"');
+    expect(parameters).toContain('"donut"');
+    expect(parameters).not.toContain('"addNode"');
+    expect(parameters).not.toContain('"binding"');
   });
 
   it("复用字段分析与 AppSpec 检查并限制结果大小", async () => {

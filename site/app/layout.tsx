@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
+import { normalizeIcpLicense, SiteComplianceFooter } from '@/components/site/SiteComplianceFooter';
 import './globals.css';
 
 const geistSans = Geist({
@@ -26,12 +27,14 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const icpLicense = normalizeIcpLicense(process.env.NEXT_PUBLIC_ICP_LICENSE);
   return (
     <html lang="zh-CN">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased${icpLicense ? ' has-site-compliance-footer' : ''}`}
       >
         {children}
+        <SiteComplianceFooter license={icpLicense ?? undefined} />
       </body>
     </html>
   );

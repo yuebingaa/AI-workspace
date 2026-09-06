@@ -16,6 +16,9 @@ describe("EDS 确定性统计", () => {
     });
     expect(result.detailRows).toHaveLength(28);
     expect(result.lineSummary).toHaveLength(10);
+    expect(result.lineIssueSummary).toHaveLength(140);
+    expect(result.lineIssueSummary.reduce((total, item) => total + item.count, 0)).toBe(result.summary.totalOccurrences);
+    expect(result.lineIssueSummary.reduce((total, item) => total + item.minutes, 0)).toBeCloseTo(result.summary.totalMinutes, 12);
   });
 
   it("按日期、班次、线体、通道和完整异常名称计算 14×20×2 核心值", () => {

@@ -106,30 +106,32 @@ export function DataProductCanvas({
           >{edsAnalysisRunning ? "AI 正在分析…" : "AI 分析全部班次"}</button>
         </div>
       )}
-      {mode === "edit" ? (
-        <div className="puck-editor-stage">
-          {puckData ? (
-            <PuckEditorBoundary
-              key={`${activePageId}-${puckSessionKey}`}
-              data={puckData}
-              dataSources={appSpec.dataSources}
-              dataRuntime={dataRuntime}
-              role={role}
-              pageId={activePageId}
-              queryRevision={`puck:${puckSessionKey}`}
-              onQueryExecuted={onQueryExecuted}
-              onChange={onPuckDataChange}
-              onRequestPreview={onRequestPuckPreview}
-            />
-          ) : <div className="puck-loading">没有可编辑的页面数据</div>}
-        </div>
-      ) : (
-        <div className={`device-stage ${device} ${isPreviewing ? "previewing" : ""}`}>
-          <div className="dashboard">
-            {page ? <AppSpecRenderer node={page.root} context={{ dataSources: appSpec.dataSources, dataRuntime, pageId: page.id, queryRevision: `canvas:${appSpecRevision}:${isPreviewing ? "preview" : "formal"}`, onQueryExecuted }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
+      <div className="canvas-design-viewport" tabIndex={0} aria-label="看板滚动区域">
+        {mode === "edit" ? (
+          <div className="puck-editor-stage">
+            {puckData ? (
+              <PuckEditorBoundary
+                key={`${activePageId}-${puckSessionKey}`}
+                data={puckData}
+                dataSources={appSpec.dataSources}
+                dataRuntime={dataRuntime}
+                role={role}
+                pageId={activePageId}
+                queryRevision={`puck:${puckSessionKey}`}
+                onQueryExecuted={onQueryExecuted}
+                onChange={onPuckDataChange}
+                onRequestPreview={onRequestPuckPreview}
+              />
+            ) : <div className="puck-loading">没有可编辑的页面数据</div>}
           </div>
-        </div>
-      )}
+        ) : (
+          <div className={`device-stage ${device} ${isPreviewing ? "previewing" : ""}`}>
+            <div className="dashboard">
+              {page ? <AppSpecRenderer node={page.root} context={{ dataSources: appSpec.dataSources, dataRuntime, pageId: page.id, queryRevision: `canvas:${appSpecRevision}:${isPreviewing ? "preview" : "formal"}`, onQueryExecuted }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

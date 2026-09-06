@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import writeXlsxFile, { type SheetData } from "write-excel-file/node";
 import { parseCsvUpload } from "@/core/datasets/server/csv-dataset";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
 import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
@@ -14,6 +15,7 @@ import {
   LIVE_EVALUATION_SESSION_VALUE,
 } from "@/core/evaluation/live/protocol";
 import { findLiveHarnessCase } from "@/core/evaluation/live/manifest";
+import type { HarnessSemanticIntentDecision } from "@/core/harness";
 import { runLiveHarnessEvaluation } from "@/core/evaluation/live/harness-live-runner";
 import {
   EDS_OVERVIEW_DATA_SOURCE_ID,
@@ -27,6 +29,27 @@ import { POST } from "./route";
 
 function stream(text: string) {
   return new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } });
+}
+
+function semanticIntent(overrides: Partial<HarnessSemanticIntentDecision> = {}): HarnessSemanticIntentDecision {
+  return {
+    mode: "readOnlyTask",
+    wantsData: true,
+    wantsEdsAnalysis: false,
+    wantsRawWorkbook: false,
+    wantsFields: false,
+    wantsRecipe: false,
+    wantsAppInspection: false,
+    wantsExcel: false,
+    changeAction: "none",
+    changeTarget: "none",
+    componentKind: "none",
+    chartType: "auto",
+    skillIds: [],
+    confidence: 0.96,
+    rationale: "测试语义路由。",
+    ...overrides,
+  };
 }
 
 describe("Harness 上传数据隐私门", () => {
@@ -74,6 +97,116 @@ describe("Harness 上传数据隐私门", () => {
     expect(response.status).toBe(415);
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(modelFetch).toHaveBeenCalledTimes(0);
+  });
+
+  it("接受会话授权的原始 XLSX，并通过完整扫描和结构化查询把可溯源结果交给模型", async () => {
+    if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+    const workbook = await writeXlsxFile([{
+      sheet: "白班明细",
+      data: [
+        [{ value: "线体", type: String }, { value: "异常类型", type: String }, { value: "次数", type: String }],
+        [{ value: "A5FNL01", type: String }, { value: "飞达工位超时", type: String }, { value: 3, type: Number }],
+      ] as SheetData,
+    }]).toBuffer();
+    const fixture = demoFixtureResult.data.dataProduct;
+    const payload = {
+      idempotencyKey: "request_raw_workbook_route_001",
+      instruction: "读取原始工作簿白班明细第 2 行，并告诉我线体、异常类型和次数。",
+      pageId: "page_home",
+      appSpec: fixture.appSpec,
+      recipes: fixture.recipes,
+    };
+    const form = new FormData();
+    form.set("payload", JSON.stringify(payload));
+    const workbookBytes = new Uint8Array(workbook.byteLength);
+    workbookBytes.set(workbook);
+    form.set("rawWorkbook", new File([workbookBytes], "EDS原始数据.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }));
+    const turns = [
+      semanticIntent({ wantsRawWorkbook: true, skillIds: ["workbook-analysis"] }),
+      { type: "callTool", message: "完整扫描原始工作簿。", toolCallId: "raw_scan", name: "scanEdsRawWorkbook", arguments: {} },
+      { type: "callTool", message: "查询目标行。", toolCallId: "raw_query", name: "queryEdsRawWorkbook", arguments: { mode: "rows", sheetName: "白班明细", select: ["线体", "异常类型", "次数"], filters: [{ column: "$row", operator: "equals", value: 2 }], limit: 1 } },
+      { type: "complete", message: "原始第 2 行为 A5FNL01、飞达工位超时、3 次。" },
+    ];
+    let call = 0;
+    const modelFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "deepseek-chat",
+      choices: [{ message: { content: JSON.stringify(turns[call++]) } }],
+      usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", modelFetch);
+    vi.stubEnv("DEEPSEEK_API_KEY", "fixed-fake-key-for-raw-workbook-test");
+    vi.stubEnv("DEEPSEEK_MODEL", "deepseek-chat");
+
+    const response = await POST(new Request("http://localhost/api/ai/harness", { method: "POST", body: form }));
+    const body = await response.json() as { task: { state: string; resultMessage?: string; counters: { toolCallCount: number } } };
+
+    expect(response.status).toBe(200);
+    expect(body.task, JSON.stringify(body.task)).toMatchObject({ state: "completed", counters: { toolCallCount: 2 } });
+    expect(body.task.resultMessage).toContain("A5FNL01");
+    const outbound = modelFetch.mock.calls.map((invocation) => String(invocation[1]?.body)).join("\n");
+    expect(outbound).toContain("飞达工位超时");
+    expect(outbound).toContain("session-memory-cache");
+    expect(outbound).toContain("scanComplete");
+    expect(JSON.stringify(body.task)).not.toContain("EDS原始数据.xlsx");
+  });
+
+  it("接收用户图片、调用视觉模型，并只把结构化图片证据交给 Harness", async () => {
+    if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+    const fixture = demoFixtureResult.data.dataProduct;
+    const form = new FormData();
+    form.set("payload", JSON.stringify({
+      idempotencyKey: "request_uploaded_image_route_001",
+      instruction: "这张图中有什么布局问题？",
+      pageId: "page_home",
+      appSpec: fixture.appSpec,
+      recipes: fixture.recipes,
+    }));
+    form.append("imageAttachment", new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], "页面截图.jpg", { type: "image/jpeg" }));
+    vi.stubEnv("HARNESS_VISUAL_VERIFICATION_ENABLED", "1");
+    vi.stubEnv("HARNESS_VISION_API_URL", "https://vision.example.test/chat/completions");
+    vi.stubEnv("HARNESS_VISION_API_KEY", "fixed-fake-vision-key");
+    vi.stubEnv("HARNESS_VISION_MODEL", "vision-test");
+    vi.stubEnv("DEEPSEEK_API_KEY", "fixed-fake-key-for-image-route-test");
+    vi.stubEnv("DEEPSEEK_MODEL", "deepseek-chat");
+    const turns = [
+      semanticIntent({ mode: "conversation", wantsData: false, requiresVisualVerification: false }),
+      { type: "complete", message: "图片显示右侧面板遮挡了数据健康度卡片。" },
+    ];
+    let harnessCall = 0;
+    const modelFetch = vi.fn<typeof fetch>(async (_url, init) => {
+      const outbound = JSON.parse(String(init?.body)) as { model: string };
+      if (outbound.model === "vision-test") {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            summary: "右侧面板遮挡数据健康度卡片。",
+            visibleText: ["数据健康度"],
+            findings: ["环形图部分不可见。"],
+            uncertainties: [],
+          }) } }],
+          usage: { prompt_tokens: 80, completion_tokens: 40, total_tokens: 120 },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        model: "deepseek-chat",
+        choices: [{ message: { content: JSON.stringify(turns[harnessCall++]) } }],
+        usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
+      }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", modelFetch);
+
+    const response = await POST(new Request("http://localhost/api/ai/harness", { method: "POST", body: form }));
+    const body = await response.json() as { task: { state: string; resultMessage?: string } };
+
+    expect(response.status).toBe(200);
+    expect(body.task).toMatchObject({ state: "completed", resultMessage: "图片显示右侧面板遮挡了数据健康度卡片。" });
+    const outboundBodies = modelFetch.mock.calls.map((call) => String(call[1]?.body));
+    expect(outboundBodies.find((item) => item.includes('"model":"vision-test"'))).toContain("data:image/jpeg;base64");
+    const harnessBodies = outboundBodies.filter((item) => item.includes('"model":"deepseek-chat"')).join("\n");
+    expect(harnessBodies).toContain("右侧面板遮挡数据健康度卡片");
+    expect(harnessBodies).not.toContain("data:image/jpeg;base64");
+    expect(JSON.stringify(body)).not.toContain("页面截图.jpg");
   });
 
   function liveRequest(
@@ -191,6 +324,7 @@ describe("Harness 上传数据隐私门", () => {
 
   it("Live 路由使用服务端模型配置和单用例上限，不把完整数据行发送给模型", async () => {
     const turns = [
+      semanticIntent(),
       { type: "callTool", message: "检查数据集。", toolCallId: "live_dataset_call", name: "inspectDataset", arguments: { dataSourceId: "dataset_retail_orders" } },
       { type: "complete", message: "数据集摘要完成。" },
     ];
@@ -215,9 +349,9 @@ describe("Harness 上传数据隐私门", () => {
     expect(body.task).toMatchObject({
       state: "completed",
       model: "mock-deepseek-chat",
-      counters: { modelCallCount: 2, toolCallCount: 1 },
+      counters: { modelCallCount: 3, toolCallCount: 1 },
     });
-    expect(modelFetch).toHaveBeenCalledTimes(2);
+    expect(modelFetch).toHaveBeenCalledTimes(3);
     for (const invocation of modelFetch.mock.calls) {
       const outbound = JSON.parse(String(invocation[1]?.body)) as { max_tokens: number; model: string; messages: Array<{ content: string }> };
       expect(outbound.max_tokens).toBe(400);
@@ -231,8 +365,10 @@ describe("Harness 上传数据隐私门", () => {
     if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
     const formalBefore = structuredClone(demoFixtureResult.data.dataProduct.appSpec);
     const turns = [
+      semanticIntent(),
       { type: "callTool", message: "检查数据集。", toolCallId: "live_summary_dataset", name: "inspectDataset", arguments: { dataSourceId: "dataset_retail_orders" } },
       { type: "complete", message: "数据集摘要检查完成。" },
+      semanticIntent({ wantsFields: true, wantsRecipe: true }),
       { type: "callTool", message: "检查数据集。", toolCallId: "live_recipe_dataset", name: "inspectDataset", arguments: { dataSourceId: "dataset_retail_orders" } },
       {
         type: "callTool",
@@ -246,6 +382,14 @@ describe("Harness 上传数据隐私门", () => {
       },
       { type: "callTool", message: "预览配方。", toolCallId: "live_recipe_preview", name: "previewDataRecipe", arguments: { recipeId: "recipe_east_anomalies" } },
       { type: "complete", message: "华东异常订单配方预览完成。" },
+      semanticIntent({
+        mode: "changePreview",
+        wantsData: false,
+        changeAction: "update",
+        changeTarget: "genericComponent",
+        componentKind: "metric",
+        skillIds: ["dashboard-editing"],
+      }),
       {
         type: "callTool",
         message: "生成待确认标题变更。",
@@ -294,8 +438,8 @@ describe("Harness 上传数据隐私门", () => {
       ["completed", ["inspectDataset", "inspectFields", "previewDataRecipe"]],
       ["awaitingConfirmation", ["createChangeSetPreview"]],
     ]);
-    expect(report.budget.used).toMatchObject({ modelCalls: 7, promptTokens: 700, completionTokens: 140 });
-    expect(modelFetch).toHaveBeenCalledTimes(7);
+    expect(report.budget.used).toMatchObject({ modelCalls: 10, promptTokens: 1000, completionTokens: 200 });
+    expect(modelFetch).toHaveBeenCalledTimes(10);
     expect(localHttpFetch).toHaveBeenCalledTimes(3);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(demoFixtureResult.data.dataProduct.appSpec).toEqual(formalBefore);
@@ -437,6 +581,7 @@ describe("Harness 上传数据隐私门", () => {
     expect(modelFetch).not.toHaveBeenCalled();
 
     const turns = [
+      semanticIntent({ wantsEdsAnalysis: true, wantsFields: true, skillIds: ["eds-analysis"] }),
       { type: "callTool", message: "读取 EDS 派生报告。", toolCallId: "eds_reports", name: "analyzeEdsReports", arguments: {} },
       { type: "callTool", message: "检查最高异常字段。", toolCallId: "eds_fields", name: "inspectFields", arguments: { dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID, fields: ["top_line", "top_line_occurrences", "top_issue", "top_issue_minutes"] } },
       { type: "complete", message: "EDS 派生汇总检查完成。" },
@@ -459,7 +604,7 @@ describe("Harness 上传数据隐私门", () => {
 
     expect(accepted.status).toBe(200);
     expect(body.task, JSON.stringify(body)).toMatchObject({ state: "completed", counters: { toolCallCount: 2 } });
-    expect(modelFetch).toHaveBeenCalledTimes(3);
+    expect(modelFetch).toHaveBeenCalledTimes(4);
     const outbound = modelFetch.mock.calls.map((invocation) => String(invocation[1]?.body)).join("\n");
     expect(outbound).toContain("A5FNL01");
     expect(outbound).toContain("飞达工位飞达报警中");

@@ -5,7 +5,7 @@ import { assertValidAppSpecDataBindings, validateRuntimeRows } from "@/core/data
 import { appSpecSchema, dataProductSchema } from "@/core/schemas";
 import { toProjectIsoDateTime } from "@/core/time/project-iso";
 import { EDS_RULE_VERSION, EDS_TEMPLATE_VERSION } from "./built-in";
-import { edsChartItemSchema, type EdsAnalysisResponse } from "./contracts";
+import { edsChartItemSchema, edsLineIssueItemSchema, type EdsAnalysisResponse } from "./contracts";
 
 export const EDS_WORKSPACE_VERSION = 1 as const;
 export const EDS_WORKSPACE_PAGE_ID = "page_eds_analysis";
@@ -27,6 +27,7 @@ const workspaceReportSchema = z.object({
   summary: summarySchema,
   issueSummary: z.array(edsChartItemSchema).length(14),
   lineSummary: z.array(edsChartItemSchema).min(1).max(20),
+  lineIssueSummary: z.array(edsLineIssueItemSchema).min(14).max(280).optional(),
 }).strict();
 
 type EdsWorkspaceReport = z.infer<typeof workspaceReportSchema>;
@@ -53,6 +54,21 @@ function validateReport(
       context.addIssue({ code: "custom", path: [...pathPrefix, key], message: "分类标签不能重复" });
     }
   }
+  if (report.lineIssueSummary) {
+    if (count(report.lineIssueSummary) !== report.summary.totalOccurrences) {
+      context.addIssue({ code: "custom", path: [...pathPrefix, "lineIssueSummary"], message: "线体异常分类次数合计必须等于总异常次数" });
+    }
+    if (!closeEnough(minutes(report.lineIssueSummary), report.summary.totalMinutes)) {
+      context.addIssue({ code: "custom", path: [...pathPrefix, "lineIssueSummary"], message: "线体异常分类时长合计必须等于总异常时长" });
+    }
+    if (report.lineIssueSummary.length !== report.lineSummary.length * report.issueSummary.length) {
+      context.addIssue({ code: "custom", path: [...pathPrefix, "lineIssueSummary"], message: "每条线体必须包含全部异常分类" });
+    }
+    const keys = report.lineIssueSummary.map((item) => `${item.line}\u0000${item.label}`);
+    if (new Set(keys).size !== keys.length) {
+      context.addIssue({ code: "custom", path: [...pathPrefix, "lineIssueSummary"], message: "线体与异常分类组合不能重复" });
+    }
+  }
 }
 
 export const edsWorkspaceSnapshotSchema = z.object({
@@ -61,6 +77,7 @@ export const edsWorkspaceSnapshotSchema = z.object({
   summary: summarySchema,
   issueSummary: z.array(edsChartItemSchema).length(14),
   lineSummary: z.array(edsChartItemSchema).min(1).max(20),
+  lineIssueSummary: z.array(edsLineIssueItemSchema).min(14).max(280).optional(),
   reports: z.array(workspaceReportSchema).min(2).max(20).optional(),
   configuration: z.object({
     templateVersion: z.literal(EDS_TEMPLATE_VERSION),
@@ -81,6 +98,7 @@ export const edsWorkspaceSnapshotSchema = z.object({
       summary: snapshot.summary,
       issueSummary: snapshot.issueSummary,
       lineSummary: snapshot.lineSummary,
+      ...(snapshot.lineIssueSummary ? { lineIssueSummary: snapshot.lineIssueSummary } : {}),
     })) {
       context.addIssue({ code: "custom", path: ["reports"], message: "当前报告必须与报告集合中的对应日期和班次完全一致" });
     }
@@ -120,6 +138,7 @@ export function createEdsWorkspaceSnapshot(
     },
     issueSummary: result.issueSummary,
     lineSummary: result.lineSummary,
+    lineIssueSummary: result.lineIssueSummary,
     configuration: {
       templateVersion: result.configuration.templateVersion,
       ruleVersion: result.configuration.ruleVersion,
@@ -141,6 +160,7 @@ function reportFromResult(result: EdsAnalysisResponse): EdsWorkspaceReport {
     },
     issueSummary: result.issueSummary,
     lineSummary: result.lineSummary,
+    lineIssueSummary: result.lineIssueSummary,
   });
 }
 
@@ -149,6 +169,7 @@ function reportsFromSnapshot(snapshot: EdsWorkspaceSnapshot): EdsWorkspaceReport
     summary: snapshot.summary,
     issueSummary: snapshot.issueSummary,
     lineSummary: snapshot.lineSummary,
+    ...(snapshot.lineIssueSummary ? { lineIssueSummary: snapshot.lineIssueSummary } : {}),
   }];
 }
 
@@ -242,8 +263,8 @@ export function createEdsWorkspaceDataSources(snapshot: EdsWorkspaceSnapshot): D
     {
       id: EDS_BREAKDOWN_DATA_SOURCE_ID,
       name: "EDS 线体与异常分类汇总",
-      rowCount: reports.reduce((total, report) => total + report.lineSummary.length + report.issueSummary.length, 0),
-      columnCount: 6,
+      rowCount: reports.reduce((total, report) => total + report.lineSummary.length + report.issueSummary.length + (report.lineIssueSummary?.length ?? 0), 0),
+      columnCount: 7,
       qualityScore: 100,
       updatedAt: parsed.generatedAt,
       sourceType: "json",
@@ -252,6 +273,7 @@ export function createEdsWorkspaceDataSources(snapshot: EdsWorkspaceSnapshot): D
         stringField("work_date", "工作日期", "date"),
         stringField("shift", "班次"),
         stringField("view", "汇总视图"),
+        stringField("line", "线体"),
         stringField("category", "分类名称"),
         numberField("occurrences", "异常次数"),
         numberField("minutes", "异常分钟数"),
@@ -284,8 +306,9 @@ export function createEdsWorkspaceRuntime(snapshot: EdsWorkspaceSnapshot): Local
     };
   });
   const breakdownRows: DataRow[] = reports.flatMap((report) => [
-    ...report.lineSummary.map((item) => ({ work_date: report.summary.date, shift: report.summary.shift, view: "线体", category: item.label, occurrences: item.count, minutes: item.minutes })),
-    ...report.issueSummary.map((item) => ({ work_date: report.summary.date, shift: report.summary.shift, view: "异常分类", category: item.label, occurrences: item.count, minutes: item.minutes })),
+    ...report.lineSummary.map((item) => ({ work_date: report.summary.date, shift: report.summary.shift, view: "线体", line: item.label, category: item.label, occurrences: item.count, minutes: item.minutes })),
+    ...report.issueSummary.map((item) => ({ work_date: report.summary.date, shift: report.summary.shift, view: "异常分类", line: "全部线体", category: item.label, occurrences: item.count, minutes: item.minutes })),
+    ...(report.lineIssueSummary ?? []).map((item) => ({ work_date: report.summary.date, shift: report.summary.shift, view: "线体异常分类", line: item.line, category: item.label, occurrences: item.count, minutes: item.minutes })),
   ]);
   const sources = createEdsWorkspaceDataSources(parsed);
   validateRuntimeRows(sources[0], overviewRows);
@@ -426,10 +449,10 @@ export function createEdsWorkspacePage(snapshot: EdsWorkspaceSnapshot): AppPage 
           type: "DataTable",
           props: {
             title: "线体与异常分类明细",
-            subtitle: "共 24 条派生汇总，不含原始工作簿行",
+            subtitle: `共 ${parsed.lineSummary.length + parsed.issueSummary.length} 条线体/全局异常汇总，不含原始工作簿行`,
             actionLabel: "派生汇总",
             binding: binding(EDS_BREAKDOWN_DATA_SOURCE_ID, "occurrences", {
-              filters: scopeFilters,
+              filters: [...scopeFilters, { field: "view", operator: "notEquals", value: "线体异常分类" }],
               sort: [{ field: "occurrences", direction: "desc" }],
               limit: 40,
               columns: [

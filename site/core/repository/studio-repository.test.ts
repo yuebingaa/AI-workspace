@@ -229,6 +229,64 @@ describe("StudioRepository 本地持久化", () => {
     expect(loaded.execution.present).toEqual(dataProduct.appSpec);
   });
 
+  it("持久化对话轮次，并从旧版 Harness 任务兼容生成可见聊天上下文", () => {
+    const { dataProduct } = fixtures();
+    const clock = { now: () => new Date("2026-09-05T00:00:00.000Z"), id: () => "event_conversation" };
+    const completed = appendHarnessEvent(createHarnessTask(
+      "request_conversation",
+      "分析 B5FSL01",
+      "page_home",
+      "editor",
+      clock,
+    ), {
+      type: "state",
+      state: "completed",
+      message: "分析完成。",
+    }, clock, { resultMessage: "B5FSL01 共有 12 次异常。" });
+    const conversation = [{
+      id: "conversation_saved",
+      instruction: "好的",
+      response: "我在，可以继续追问。",
+      createdAt: "2026-09-05T00:01:00.000Z",
+      state: "success" as const,
+    }];
+    const storage = new MemoryStorage();
+    const repository = new LocalStorageStudioRepository(storage);
+    repository.save(createStudioSnapshot(
+      dataProduct,
+      createExecutionState(dataProduct.appSpec),
+      [],
+      [],
+      [completed],
+      null,
+      conversation,
+    ));
+
+    expect(loadStudioStateSafely(repository, dataProduct).assistantConversation).toEqual(conversation);
+
+    const legacy = JSON.parse(storage.getItem(STUDIO_STORAGE_KEY)!) as Record<string, unknown>;
+    legacy.version = 3;
+    delete legacy.assistantConversation;
+    storage.setItem(STUDIO_STORAGE_KEY, JSON.stringify(legacy));
+    const restoredLegacy = loadStudioStateSafely(repository, dataProduct);
+    expect(restoredLegacy.assistantConversation).toMatchObject([{
+      instruction: "分析 B5FSL01",
+      response: "B5FSL01 共有 12 次异常。",
+      taskId: completed.id,
+    }]);
+
+    repository.save(createStudioSnapshot(
+      dataProduct,
+      createExecutionState(dataProduct.appSpec),
+      [],
+      [],
+      [completed],
+      null,
+      [],
+    ));
+    expect(loadStudioStateSafely(repository, dataProduct).assistantConversation).toEqual([]);
+  });
+
   it("SSR 环境没有 localStorage 时安全返回 null", () => {
     expect(typeof window).toBe("undefined");
     expect(createBrowserStudioRepository()).toBeNull();
@@ -247,6 +305,13 @@ describe("StudioRepository 本地持久化", () => {
     expect(importStudioBackup(serialized)).toMatchObject({ auditRecords: [{ id: audit.id }], harnessTasks: [{ id: task.id }] });
     restoreStudioBackup(repository, serialized);
     expect(repository.load()).toMatchObject({ auditRecords: [{ id: audit.id }], harnessTasks: [{ id: task.id }] });
+    const legacyBackup = JSON.parse(serialized) as { state: Record<string, unknown> };
+    legacyBackup.state.version = 3;
+    delete legacyBackup.state.assistantConversation;
+    expect(importStudioBackup(JSON.stringify(legacyBackup))).toMatchObject({
+      version: STUDIO_STORAGE_VERSION,
+      assistantConversation: [],
+    });
     expect(() => importStudioBackup("{bad")).toThrow(/备份校验失败/);
     expect(() => exportStudioBackup(snapshot, new Date(Number.NaN))).toThrow(/工作台备份时间无效.*导出时间必须是有效 Date/);
     expect(() => exportStudioBackup(snapshot, new Date(8_640_000_000_000_000))).toThrow(/工作台备份时间无效.*导出时间必须是有效 Date/);

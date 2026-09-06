@@ -44,6 +44,10 @@ export const edsChartItemSchema = z.object({
   minutes: z.number().finite().nonnegative(),
 }).strict();
 
+export const edsLineIssueItemSchema = edsChartItemSchema.extend({
+  line: z.string().min(1).max(100),
+}).strict();
+
 export const edsComparisonSchema = z.object({
   coreMatched: z.number().int().nonnegative(),
   coreTotal: z.number().int().positive(),
@@ -90,6 +94,7 @@ export const edsAnalysisResponseSchema = z.object({
   }).strict(),
   issueSummary: z.array(edsChartItemSchema).length(14),
   lineSummary: z.array(edsChartItemSchema).min(1).max(20),
+  lineIssueSummary: z.array(edsLineIssueItemSchema).min(14).max(280),
   configuration: edsConfigurationSchema,
   comparison: edsComparisonSchema.nullable(),
   exportArtifact: excelExportArtifactSchema,
@@ -128,11 +133,23 @@ export const edsAnalysisResponseSchema = z.object({
   if (!closeEnough(minuteSum(response.lineSummary), response.summary.totalMinutes)) {
     addIssue(["lineSummary"], "线体时长合计必须等于总异常时长");
   }
+  if (countSum(response.lineIssueSummary) !== response.summary.totalOccurrences) {
+    addIssue(["lineIssueSummary"], "线体异常分类次数合计必须等于总异常次数");
+  }
+  if (!closeEnough(minuteSum(response.lineIssueSummary), response.summary.totalMinutes)) {
+    addIssue(["lineIssueSummary"], "线体异常分类时长合计必须等于总异常时长");
+  }
   if (new Set(response.issueSummary.map((item) => item.label)).size !== response.issueSummary.length) {
     addIssue(["issueSummary"], "异常分类标签不能重复");
   }
   if (new Set(response.lineSummary.map((item) => item.label)).size !== response.lineSummary.length) {
     addIssue(["lineSummary"], "线体标签不能重复");
+  }
+  if (new Set(response.lineIssueSummary.map((item) => `${item.line}\u0000${item.label}`)).size !== response.lineIssueSummary.length) {
+    addIssue(["lineIssueSummary"], "线体与异常分类组合不能重复");
+  }
+  if (response.lineIssueSummary.length !== response.lineSummary.length * response.issueSummary.length) {
+    addIssue(["lineIssueSummary"], "每条线体必须包含全部异常分类");
   }
   if (new Set(response.summary.sourceSheets).size !== response.summary.sourceSheets.length) {
     addIssue(["summary", "sourceSheets"], "来源工作表不能重复");
@@ -146,5 +163,6 @@ export type EdsAnalysisResponse = z.infer<typeof edsAnalysisResponseSchema>;
 export type EdsWorkbookSelection = z.infer<typeof edsWorkbookSelectionSchema>;
 export type EdsSelectionRequiredResponse = z.infer<typeof edsSelectionRequiredResponseSchema>;
 export type EdsChartItem = z.infer<typeof edsChartItemSchema>;
+export type EdsLineIssueItem = z.infer<typeof edsLineIssueItemSchema>;
 export type EdsComparison = z.infer<typeof edsComparisonSchema>;
 export type EdsConfiguration = z.infer<typeof edsConfigurationSchema>;

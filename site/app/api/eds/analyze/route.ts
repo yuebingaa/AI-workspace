@@ -257,6 +257,7 @@ export async function POST(request: Request) {
         summary: analysis.summary,
         issueSummary: analysis.issueSummary,
         lineSummary: analysis.lineSummary,
+        lineIssueSummary: analysis.lineIssueSummary,
         configuration: analysis.configuration,
         comparison: analysis.comparison,
         exportArtifact,

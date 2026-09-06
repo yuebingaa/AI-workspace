@@ -5,6 +5,12 @@ import {
   harnessTaskSummarySchema,
   type HarnessTaskSummary,
 } from "@/core/harness/contracts";
+import {
+  assistantConversationFromHarnessTasks,
+  assistantConversationTurnSchema,
+  MAX_ASSISTANT_CONVERSATION_TURNS,
+  type AssistantConversationTurn,
+} from "@/core/harness/conversation";
 import { edsWorkspaceSnapshotSchema, type EdsWorkspaceSnapshot } from "@/core/eds";
 import {
   recoverHarnessTasksAfterRefresh,
@@ -19,7 +25,7 @@ import type {
 import { appSpecSchema, dataProductSchema, formatSchemaIssues, StudioValidationError } from "@/core/schemas";
 import { toProjectIsoDateTime } from "@/core/time/project-iso";
 
-export const STUDIO_STORAGE_VERSION = 3 as const;
+export const STUDIO_STORAGE_VERSION = 5 as const;
 export const STUDIO_STORAGE_KEY = "datacanvas-ai:studio:v1";
 export const STUDIO_BACKUP_FORMAT = "datacanvas-ai-studio-backup-v1" as const;
 export const STUDIO_BACKUP_MAX_BYTES = 5 * 1024 * 1024;
@@ -90,6 +96,8 @@ export interface StudioPersistedState {
   auditRecords: ChangeSetAuditRecord[];
   queryRecords: QueryExecutionRecord[];
   harnessTasks: HarnessTaskSummary[];
+  assistantConversation: AssistantConversationTurn[];
+  assistantConversationInitialized: boolean;
   edsWorkspace: EdsWorkspaceSnapshot | null;
   savedAt: string;
 }
@@ -103,6 +111,8 @@ const persistedStateSchema: z.ZodType<StudioPersistedState> = z.object({
   auditRecords: z.array(auditRecordSchema).max(100),
   queryRecords: z.array(queryRecordSchema).max(100),
   harnessTasks: z.array(harnessTaskSummarySchema).max(20),
+  assistantConversation: z.array(assistantConversationTurnSchema).max(MAX_ASSISTANT_CONVERSATION_TURNS),
+  assistantConversationInitialized: z.boolean(),
   edsWorkspace: edsWorkspaceSnapshotSchema.nullable(),
   savedAt: z.iso.datetime(),
 }).strict();
@@ -143,6 +153,17 @@ const migrations: Record<number, (value: Record<string, unknown>) => Record<stri
   },
   1: (value) => ({ ...value, version: 2, harnessTasks: value.harnessTasks ?? [] }),
   2: (value) => ({ ...value, version: 3, edsWorkspace: value.edsWorkspace ?? null }),
+  3: (value) => ({
+    ...value,
+    version: 4,
+    assistantConversation: value.assistantConversation ?? [],
+    assistantConversationInitialized: false,
+  }),
+  4: (value) => ({
+    ...value,
+    version: 5,
+    assistantConversationInitialized: value.assistantConversationInitialized ?? true,
+  }),
 };
 
 export function migrateStudioState(value: unknown): unknown {
@@ -174,7 +195,7 @@ export function parseStudioPersistedState(value: unknown): StudioPersistedState 
 const studioBackupSchema = z.object({
   format: z.literal(STUDIO_BACKUP_FORMAT),
   exportedAt: z.iso.datetime(),
-  state: persistedStateSchema,
+  state: z.unknown(),
 }).strict();
 
 export function exportStudioBackup(state: StudioPersistedState, now = new Date()): string {
@@ -194,7 +215,8 @@ export function exportStudioBackup(state: StudioPersistedState, now = new Date()
 export function importStudioBackup(serialized: string): StudioPersistedState {
   assertStudioSerializedSize(serialized, STUDIO_BACKUP_MAX_BYTES, "工作台备份");
   try {
-    return studioBackupSchema.parse(JSON.parse(serialized) as unknown).state;
+    const backup = studioBackupSchema.parse(JSON.parse(serialized) as unknown);
+    return parseStudioPersistedState(backup.state);
   } catch (error) {
     if (error instanceof StudioValidationError) throw error;
     throw new StudioValidationError("工作台备份校验失败", [error instanceof Error ? error.message : "备份不是有效 JSON"]);
@@ -278,6 +300,7 @@ export interface SafeStudioState {
   auditRecords: ChangeSetAuditRecord[];
   queryRecords: QueryExecutionRecord[];
   harnessTasks: HarnessTaskSummary[];
+  assistantConversation: AssistantConversationTurn[];
   edsWorkspace: EdsWorkspaceSnapshot | null;
   notice: string | null;
   restored: boolean;
@@ -294,6 +317,7 @@ export function loadStudioStateSafely(
     auditRecords: [],
     queryRecords: [],
     harnessTasks: [],
+    assistantConversation: [],
     edsWorkspace: null,
     notice: null,
     restored: false,
@@ -322,12 +346,16 @@ export function loadStudioStateSafely(
         return `harness_recovery_${recoveryTimestamp}_${++recoverySequence}`;
       },
     };
+    const recoveredHarnessTasks = recoverHarnessTasksAfterRefresh(saved.harnessTasks, recoveryClock);
     return {
       dataProduct: { ...saved.dataProduct, appSpec: execution.present },
       execution,
       auditRecords: saved.auditRecords,
       queryRecords: saved.queryRecords,
-      harnessTasks: recoverHarnessTasksAfterRefresh(saved.harnessTasks, recoveryClock),
+      harnessTasks: recoveredHarnessTasks,
+      assistantConversation: saved.assistantConversationInitialized
+        ? saved.assistantConversation
+        : assistantConversationFromHarnessTasks(recoveredHarnessTasks),
       edsWorkspace: saved.edsWorkspace,
       notice: "已恢复上次保存在此浏览器中的工作台状态。",
       restored: true,
@@ -348,6 +376,7 @@ export function createStudioSnapshot(
   queryRecords: QueryExecutionRecord[],
   harnessTasks: HarnessTaskSummary[] = [],
   edsWorkspace: EdsWorkspaceSnapshot | null = null,
+  assistantConversation: AssistantConversationTurn[] = [],
 ): StudioPersistedState {
   return parseStudioPersistedState({
     version: STUDIO_STORAGE_VERSION,
@@ -358,6 +387,8 @@ export function createStudioSnapshot(
     auditRecords,
     queryRecords,
     harnessTasks,
+    assistantConversation,
+    assistantConversationInitialized: true,
     edsWorkspace,
     savedAt: new Date().toISOString(),
   });
@@ -376,6 +407,7 @@ export function restoreDemoData(repository: StudioRepository | null, fixture: Da
     auditRecords: [],
     queryRecords: [],
     harnessTasks: [],
+    assistantConversation: [],
     edsWorkspace: null,
     notice,
     restored: false,

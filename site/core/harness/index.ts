@@ -6,3 +6,7 @@ export * from "./deepseek-harness";
 export * from "./client";
 export * from "./context-selector";
 export * from "./action-normalizer";
+export * from "./conversation";
+export * from "./execution-planner";
+export * from "./task-verifier";
+export * from "./visual-verifier";

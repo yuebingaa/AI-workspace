@@ -5,9 +5,18 @@ interface DataTableViewProps extends Omit<DataTableProps, "binding"> {
   rows: Array<Record<string, string>>;
 }
 
-export function DataTable({ title, subtitle, actionLabel, columns, rows }: DataTableViewProps) {
+export function DataTable({
+  title,
+  subtitle,
+  actionLabel,
+  density = "comfortable",
+  stripedRows = false,
+  accentColor = "green",
+  columns,
+  rows,
+}: DataTableViewProps) {
   return (
-    <article className="table-card">
+    <article className={`table-card table-density-${density} table-accent-${accentColor}${stripedRows ? " table-striped" : ""}`}>
       <div className="card-head">
         <div><b>{title}</b><small>{subtitle}</small></div>
         <button type="button" title="阶段 A 当前使用模拟导出">{actionLabel}</button>

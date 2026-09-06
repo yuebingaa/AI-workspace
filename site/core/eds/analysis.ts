@@ -1,4 +1,4 @@
-import { EDS_UPLOAD_LIMITS, type EdsChartItem, type EdsComparison, type EdsWorkbookSelection } from "./contracts";
+import { EDS_UPLOAD_LIMITS, type EdsChartItem, type EdsComparison, type EdsLineIssueItem, type EdsWorkbookSelection } from "./contracts";
 import {
   EDS_BUILT_IN_DEFINITION,
   EDS_RULE_VERSION,
@@ -51,6 +51,7 @@ export interface EdsAnalysisResult<TComparison extends EdsComparison | null = Ed
   reportRows: number[][];
   issueSummary: EdsChartItem[];
   lineSummary: EdsChartItem[];
+  lineIssueSummary: EdsLineIssueItem[];
   comparison: TComparison;
   configuration: {
     templateVersion: typeof EDS_TEMPLATE_VERSION;
@@ -468,6 +469,12 @@ function analyzeEdsWorkbookInternal(
     count: sum(group.channels.map((channel) => reportRows[28][EDS_DETAIL_COLUMN_INDEXES[channel]])),
     minutes: sum(group.channels.map((channel) => reportRows[29][EDS_DETAIL_COLUMN_INDEXES[channel]])),
   }));
+  const lineIssueSummary = [...lineGroups.values()].flatMap((group) => template.issues.map((issue, issueIndex) => ({
+    line: group.label,
+    label: issue.display,
+    count: sum(group.channels.map((channel) => detailRows[issueIndex * 2][channel])),
+    minutes: sum(group.channels.map((channel) => detailRows[issueIndex * 2 + 1][channel])),
+  })));
   const comparison = comparisonTemplate ? compareReport(comparisonTemplate, reportRows) : null;
   const warnings = comparison && comparison.mismatchCount > 0
     ? [`目标表存在 ${comparison.mismatchCount} 个数值差异，请检查源数据、日期、班次或模板映射。`]
@@ -478,6 +485,7 @@ function analyzeEdsWorkbookInternal(
     reportRows,
     issueSummary,
     lineSummary,
+    lineIssueSummary,
     comparison,
     configuration: {
       templateVersion: EDS_TEMPLATE_VERSION,

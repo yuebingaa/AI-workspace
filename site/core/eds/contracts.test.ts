@@ -20,6 +20,12 @@ function validResponse(): EdsAnalysisResponse {
       { label: "线体 A", count: 7, minutes: 14 },
       { label: "线体 B", count: 7, minutes: 14 },
     ],
+    lineIssueSummary: ["线体 A", "线体 B"].flatMap((line, lineIndex) => Array.from({ length: 14 }, (_, issueIndex) => ({
+      line,
+      label: `异常 ${issueIndex + 1}`,
+      count: Number(Math.floor(issueIndex / 7) === lineIndex),
+      minutes: Math.floor(issueIndex / 7) === lineIndex ? 2 : 0,
+    }))),
     configuration: { templateVersion: EDS_TEMPLATE_VERSION, ruleVersion: EDS_RULE_VERSION, comparisonMode: "custom_template" },
     comparison: { coreMatched: 560, coreTotal: 560, reportMatched: 660, reportTotal: 660, mismatchCount: 0, mismatches: [] },
     exportArtifact: {
@@ -76,6 +82,8 @@ describe("EDS 响应跨汇总一致性", () => {
       (value) => { value.summary.matchedRows = 13; },
       (value) => { value.issueSummary[0].count = 2; },
       (value) => { value.lineSummary[0].minutes = 13; },
+      (value) => { value.lineIssueSummary[0].count += 1; },
+      (value) => { value.lineIssueSummary[1].line = value.lineIssueSummary[0].line; value.lineIssueSummary[1].label = value.lineIssueSummary[0].label; },
       (value) => { value.issueSummary[1].label = value.issueSummary[0].label; },
       (value) => { value.lineSummary[1].label = value.lineSummary[0].label; },
       (value) => { value.summary.sourceSheets[1] = value.summary.sourceSheets[0]; },

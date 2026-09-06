@@ -9,6 +9,7 @@ import type {
   ComponentPropsMap,
   DataProduct,
 } from "@/core/models";
+import { BAR_CHART_COLORS, CHART_TYPES } from "@/core/models";
 import { dataBindingSchema, dataSourceDefinitionSchema } from "./data-binding";
 import { dataRecipeSchema } from "./data-recipe";
 
@@ -41,6 +42,9 @@ export const componentPropsSchemas: {
   BarChart: z.object({
     title: textSchema,
     subtitle: textSchema,
+    color: z.enum(BAR_CHART_COLORS).optional(),
+    chartType: z.enum(CHART_TYPES).optional(),
+    showValues: z.boolean().optional(),
     binding: dataBindingSchema,
   }).strict(),
   DataHealth: z.object({
@@ -57,6 +61,9 @@ export const componentPropsSchemas: {
     title: textSchema,
     subtitle: textSchema,
     actionLabel: textSchema,
+    density: z.enum(["comfortable", "compact"]).optional(),
+    stripedRows: z.boolean().optional(),
+    accentColor: z.enum(BAR_CHART_COLORS).optional(),
     binding: dataBindingSchema,
   }).strict(),
 };

@@ -8,6 +8,11 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
 
 const { d1, r2 } = hostingConfig;
+const liveHarnessBindings = Object.fromEntries(
+  ["HARNESS_EVAL_SERVER", "HARNESS_EVAL_SESSION_NONCE"].flatMap((name) => (
+    process.env[name] ? [[name, process.env[name]]] : []
+  )),
+);
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
@@ -15,6 +20,7 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
 const localBindingConfig = {
   main: 'vinext/server/app-router-entry',
   compatibility_flags: ['nodejs_compat'],
+  vars: liveHarnessBindings,
   d1_databases: d1
     ? [
         {

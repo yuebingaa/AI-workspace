@@ -19,6 +19,8 @@
 # misc
 .DS_Store
 *.pem
+__pycache__/
+*.py[cod]
 
 # debug
 npm-debug.log*
@@ -40,6 +42,7 @@ next-env.d.ts
 /work/
 /.studio-data/
 /evidence/
+/.runtime/
 
 # Tencent Cloud EdgeOne
 .env

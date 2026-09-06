@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyChangeSet, createExecutionState, previewChangeSet } from "@/core/changesets";
-import type { HarnessModel, HarnessModelInput, HarnessModelResult, HarnessModelTurn, HarnessRequest, HarnessTaskSummary } from "@/core/harness";
+import type { HarnessModel, HarnessModelInput, HarnessModelResult, HarnessModelTurn, HarnessRequest, HarnessSemanticIntentDecision, HarnessTaskSummary, HarnessVisualVerifier } from "@/core/harness";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { harnessExcelExporter } from "@/core/exports/server/harness-excel-exporter";
 import { excelExportStore } from "@/core/exports/server/excel-export-store";
+import { StudioValidationError } from "@/core/schemas";
 import { analyzeEdsWorkbook, createEdsWorkspaceRuntime, createEdsWorkspaceSnapshotForResults, installEdsWorkspaceInDataProduct, type EdsAnalysisResponse } from "@/core/eds";
 import { createSyntheticEdsFixture } from "@/fixtures/eds-synthetic";
 import { redactedCompleteActionFailureFixture } from "./fixtures/redacted-complete-action";
+import { selectedHarnessSkillSummaries } from "./skill-registry";
 import {
   DeepSeekHarness,
   DeepSeekHarnessModel,
@@ -19,6 +21,7 @@ import {
   createHarnessTask,
   harnessTaskSummarySchema,
   harnessToolCatalog,
+  executeHarnessTool,
   recoverHarnessTasksAfterRefresh,
   settleHarnessConfirmation,
 } from "./index";
@@ -84,6 +87,27 @@ const blocked = (message: string, missingRequirements: string[]): HarnessModelTu
   message,
   missingRequirements,
 });
+
+function semanticDecision(overrides: Partial<HarnessSemanticIntentDecision> = {}): HarnessSemanticIntentDecision {
+  return {
+    mode: "readOnlyTask",
+    wantsData: true,
+    wantsEdsAnalysis: false,
+    wantsRawWorkbook: false,
+    wantsFields: false,
+    wantsRecipe: false,
+    wantsAppInspection: false,
+    wantsExcel: false,
+    changeAction: "none",
+    changeTarget: "none",
+    componentKind: "none",
+    chartType: "auto",
+    skillIds: [],
+    confidence: 0.96,
+    rationale: "用户要求只读分析。",
+    ...overrides,
+  };
+}
 
 function customerAnalysisRequest(idempotencyKey = "request_customer_analysis"): HarnessRequest {
   return {
@@ -164,6 +188,47 @@ function repurchaseMetricDraft() {
 }
 
 describe("DeepSeekHarness 服务端状态机", () => {
+  it("在会话授权后通过两步只读工具访问原始工作簿，并且任务摘要不保存原文件", async () => {
+    const data = fixtures();
+    const input: HarnessRequest = {
+      ...request("request_raw_workbook_read", "读取原始工作簿白班明细第 2 行，并告诉我线体、异常类型和次数。"),
+      rawWorkbookManifest: {
+        fileName: "EDS原始数据.xlsx",
+        contentHash: "f".repeat(64),
+        sheets: [{ name: "白班明细", rowCount: 2, columnCount: 3 }],
+      },
+    };
+    const model = new ScriptedModel([
+      tool("scanEdsRawWorkbook", {}, "call_raw_scan"),
+      tool("queryEdsRawWorkbook", {
+        mode: "rows",
+        sheetName: "白班明细",
+        select: ["线体", "异常类型", "次数"],
+        filters: [{ column: "$row", operator: "equals", value: 2 }],
+        limit: 1,
+      }, "call_raw_query"),
+      complete("原始第 2 行是 A5FNL01、飞达工位超时、3 次。"),
+    ]);
+    const task = await new DeepSeekHarness().run(input, {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      rawWorkbook: {
+        fileName: "EDS原始数据.xlsx",
+        contentHash: "f".repeat(64),
+        sheets: [{ sheet: "白班明细", data: [["线体", "异常类型", "次数"], ["A5FNL01", "飞达工位超时", 3]] }],
+      },
+    });
+
+    expect(task.state, JSON.stringify(task)).toBe("completed");
+    expect(task.resultMessage).toContain("A5FNL01");
+    expect(model.inputs.map((item) => item.tools.map((toolItem) => toolItem.name))).toEqual([
+      ["scanEdsRawWorkbook"],
+      ["queryEdsRawWorkbook"],
+      [],
+    ]);
+    expect(JSON.stringify(task)).not.toContain("EDS原始数据.xlsx");
+  });
+
   it("低成本数据可用性检查只调用 inspectDataset，并在第二轮完成", async () => {
     const data = fixtures();
     const input = request(
@@ -186,6 +251,23 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.counters).toEqual({ loopCount: 2, modelCallCount: 2, toolCallCount: 1 });
     expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["inspectDataset"]);
     expect(model.inputs[1].tools).toEqual([]);
+    expect(model.inputs[0].context).toMatchObject({
+      executionPlan: {
+        separation: "plannerThenExecutor",
+        currentStep: { objective: "检查目标数据集概况" },
+        allowedTools: ["inspectDataset"],
+      },
+    });
+    expect(model.inputs[1].context).toMatchObject({
+      executionPlan: {
+        currentStep: { kind: "finalize", objective: "根据工具验证结果直接回答用户" },
+        allowedTools: [],
+      },
+    });
+    expect(task.executionPlan?.steps.every((step) => step.status === "completed")).toBe(true);
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 1 });
+    expect(task.verification?.checks.every((item) => item.status === "passed")).toBe(true);
+    expect(task.events.some((event) => event.message.includes("Executor 按 Planner 计划"))).toBe(true);
     expect(task.events.some((event) => event.toolCall?.name === "createChangeSetPreview")).toBe(false);
     expect(task.pendingChangeSet).toBeUndefined();
     expect(task.contextUsage?.complexity).toBe("simpleReadOnly");
@@ -240,6 +322,374 @@ describe("DeepSeekHarness 服务端状态机", () => {
       counters: { loopCount: 2, modelCallCount: 2, toolCallCount: 1 },
     });
     expect(task.resultMessage).toContain("夜班异常 173 次");
+  });
+
+  it("指定 EDS 线体的异常类型分析使用多步骤预算，读完汇总后仍能返回答案", async () => {
+    const input = edsAnalysisRequest("A5FNL01 的异常类型");
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_line_issue_types"),
+      complete("A5FNL01 的主要异常类型包括飞达工位超时和贴膜定位异常。"),
+    ], [
+      { promptTokens: 2_600, completionTokens: 10, totalTokens: 2_610 },
+      { promptTokens: 1_800, completionTokens: 10, totalTokens: 1_810 },
+    ]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    expect(task).toMatchObject({
+      state: "completed",
+      resultMessage: expect.stringContaining("A5FNL01"),
+      contextUsage: {
+        complexity: "multiStep",
+        totalPromptTokens: 4_400,
+        limits: { maxTotalPromptTokens: 8_000 },
+      },
+    });
+    expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["analyzeEdsReports"]);
+    expect(model.inputs[1].tools).toEqual([]);
+  });
+
+  it("模型误报缺少明细时使用已验证 EDS 排名完成汇总回答", async () => {
+    const input = edsAnalysisRequest("检查 EDS 分析数据，说明异常次数最多的线体和累计时间最长的异常类型。不要修改页面。");
+    delete input.request.edsWorkspace?.lineIssueSummary;
+    input.request.edsWorkspace?.reports?.forEach((report) => { delete report.lineIssueSummary; });
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_verified_rankings"),
+      blocked("当前结果只有报告级汇总，无法统计。", ["线体维度明细", "异常类型明细"]),
+    ]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.terminationCode).toBe("completed");
+    expect(task.error).toBeUndefined();
+    expect(task.resultMessage).toContain("异常次数最多的线体是");
+    expect(task.resultMessage).toContain("累计时间最长的异常类型是");
+    expect(task.resultMessage).toContain("不影响以上汇总排名");
+    expect(task.resultMessage).toContain("如需生成单条线体的异常分类图，请重新导入工作簿");
+  });
+
+  it("明确索取 EDS 原始逐行数据时不会用汇总排名伪造完成", async () => {
+    const input = edsAnalysisRequest("请提供每一行原始 EDS 明细数据");
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_raw_rows_boundary"),
+      blocked("当前工具只读取派生汇总。", ["原始逐行数据"]),
+    ]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    expect(task.state).toBe("blocked");
+    expect(task.resultMessage).toContain("原始逐行数据");
+    expect(task.resultMessage).not.toContain("异常次数最多的线体是");
+  });
+
+  it("EDS 指定线体图表使用短参数专用工具并停在人工确认前", async () => {
+    const input = edsAnalysisRequest("增加B5FSL01异常类型分栏图");
+    const formal = structuredClone(input.request.appSpec);
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_chart_analysis"),
+      tool("createEdsLineIssueChartPreview", { line: "B5FSL01", metric: "occurrences" }, "call_eds_chart_preview"),
+    ]);
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 4, maxToolCalls: 4 },
+    });
+
+    expect(model.inputs.map((input) => input.tools.map((item) => item.name))).toEqual([
+      ["analyzeEdsReports"],
+      ["createEdsLineIssueChartPreview"],
+    ]);
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.skills?.map((skill) => skill.id)).toEqual(expect.arrayContaining([
+      "data-visualization", "eds-analysis", "dashboard-editing",
+    ]));
+    expect(task.pendingChangeSet?.operations).toEqual([expect.objectContaining({
+      type: "addNode",
+      parentId: "page_eds_analysis_charts",
+      node: expect.objectContaining({ type: "BarChart", props: expect.objectContaining({ title: expect.stringContaining("B5FSL01") }) }),
+    })]);
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 1 });
+    expect(input.request.appSpec).toEqual(formal);
+  });
+
+  it("截图原句会为 A5FNL01 生成面积图 ChangeSet，而不是把解释性拒绝当成完成", async () => {
+    const input = edsAnalysisRequest("A5FNL01的异常类型帮我做面积图吗");
+    const formal = structuredClone(input.request.appSpec);
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_area_analysis"),
+      tool("createEdsLineIssueChartPreview", {
+        line: "A5FNL01",
+        metric: "occurrences",
+        chartType: "area",
+      }, "call_eds_area_preview"),
+    ]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+    });
+
+    expect(model.inputs.map((item) => item.tools.map((toolItem) => toolItem.name))).toEqual([
+      ["analyzeEdsReports"],
+      ["createEdsLineIssueChartPreview"],
+    ]);
+    expect(model.inputs[1].tools[0].parameters).toMatchObject({
+      required: ["line", "metric", "chartType"],
+      properties: {
+        line: { enum: ["A5FNL01"] },
+        chartType: { enum: ["area"] },
+      },
+    });
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.pendingChangeSet?.operations).toEqual([expect.objectContaining({
+      type: "addNode",
+      parentId: "page_eds_analysis_charts",
+      node: expect.objectContaining({
+        type: "BarChart",
+        props: expect.objectContaining({
+          title: expect.stringContaining("A5FNL01"),
+          chartType: "area",
+          binding: expect.objectContaining({
+            dataSourceId: "dataset_eds_breakdown",
+            groupBy: "category",
+            filters: expect.arrayContaining([
+              { field: "view", operator: "equals", value: "线体异常分类" },
+              { field: "line", operator: "equals", value: "A5FNL01" },
+            ]),
+          }),
+        }),
+      }),
+    })]);
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 1 });
+    expect(input.request.appSpec).toEqual(formal);
+  });
+
+  it("多轮对话能把‘它’解析为上一轮 EDS 线体并继续生成图表", async () => {
+    const input = edsAnalysisRequest("给它加个柱状图");
+    input.request.conversationContext = {
+      previousInstruction: "B5FSL01 有哪些异常类型？",
+      previousAssistantMessage: "B5FSL01 的主要异常已经列出。",
+    };
+    const model = new ScriptedModel([
+      tool("analyzeEdsReports", {}, "call_eds_referenced_analysis"),
+      tool("createEdsLineIssueChartPreview", { line: "B5FSL01", metric: "occurrences" }, "call_eds_referenced_chart"),
+    ]);
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+    });
+
+    expect(model.inputs.map((item) => item.tools.map((tool) => tool.name))).toEqual([
+      ["analyzeEdsReports"],
+      ["createEdsLineIssueChartPreview"],
+    ]);
+    expect(model.inputs[0].context).toMatchObject({
+      resolvedReferences: { edsLine: { line: "B5FSL01", source: "previousInstruction" } },
+    });
+    expect(JSON.stringify(model.inputs[1].tools[0].parameters)).toContain("B5FSL01");
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.pendingChangeSet?.operations[0]).toMatchObject({
+      type: "addNode",
+      node: { type: "BarChart", props: { title: expect.stringContaining("B5FSL01") } },
+    });
+  });
+
+  it("柱形图换色指令只更新现有组件颜色并保留原数据绑定", async () => {
+    const input = edsAnalysisRequest("把柱形图颜色换成蓝色");
+    const formal = structuredClone(input.request.appSpec);
+    const model = new ScriptedModel([tool("createChangeSetPreview", {
+      message: "已把各线体异常次数柱形图切换为蓝色，等待确认。",
+      operations: [{
+        type: "updateNodeProps",
+        pageId: "page_eds_analysis",
+        nodeId: "eds_chart_lines",
+        props: { color: "blue" },
+      }],
+    }, "call_eds_chart_color")]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    expect(model.inputs).toHaveLength(1);
+    expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["createChangeSetPreview"]);
+    const parameters = JSON.stringify(model.inputs[0].tools[0].parameters);
+    expect(parameters).toContain('"color"');
+    expect(parameters).toContain('"blue"');
+    expect(parameters).not.toContain('"addNode"');
+    expect(parameters).not.toContain('"binding"');
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.pendingChangeSet?.operations).toEqual([expect.objectContaining({
+      type: "updateNodeProps",
+      pageId: "page_eds_analysis",
+      nodeId: "eds_chart_lines",
+      props: { color: "blue" },
+    })]);
+    expect(input.request.appSpec).toEqual(formal);
+
+    if (!task.pendingChangeSet) throw new Error("预期存在柱形图换色预览");
+    const previewed = previewChangeSet(createExecutionState(input.request.appSpec), task.pendingChangeSet, "editor");
+    const previewJson = JSON.stringify(previewed.preview?.appSpec);
+    expect(previewJson).toContain('"color":"blue"');
+    expect(previewJson).toContain('"dataSourceId":"dataset_eds_breakdown"');
+    expect(previewJson).toContain('"field":"occurrences"');
+  });
+
+  it("EDS 明细表多级排序直接走表格预览工具，不再错误要求线体交叉明细", async () => {
+    const input = edsAnalysisRequest("线体与异常分类明细能不能先按线体排序再到异常分类");
+    const formal = structuredClone(input.request.appSpec);
+    const model = new ScriptedModel([tool("updateEdsTablePreview", {
+      nodeId: "eds_summary_table",
+      visibleColumns: ["line", "category", "occurrences", "minutes"],
+      sort: [
+        { field: "line", direction: "asc" },
+        { field: "category", direction: "asc" },
+      ],
+    }, "call_eds_table_sort")]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+
+    expect(model.inputs).toHaveLength(1);
+    expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["updateEdsTablePreview"]);
+    expect(JSON.stringify(model.inputs[0])).not.toContain("requestedLineIssues");
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.pendingChangeSet?.operations[0]).toMatchObject({
+      type: "updateNodeProps",
+      nodeId: "eds_summary_table",
+      props: {
+        binding: {
+          sort: [
+            { field: "line", direction: "asc" },
+            { field: "category", direction: "asc" },
+          ],
+        },
+      },
+    });
+    expect(input.request.appSpec).toEqual(formal);
+  });
+
+  it("柱顶数字指令只更新现有图表显示属性并保留原数据绑定", async () => {
+    const input = edsAnalysisRequest("柱状图增加顶部数字显示");
+    const formal = structuredClone(input.request.appSpec);
+    const model = new ScriptedModel([tool("createChangeSetPreview", {
+      message: "已为现有柱状图开启顶部数值显示，等待确认。",
+      operations: [{
+        type: "updateNodeProps",
+        pageId: "page_eds_analysis",
+        nodeId: "eds_chart_lines",
+        props: { showValues: true },
+      }, {
+        type: "updateNodeProps",
+        pageId: "page_eds_analysis",
+        nodeId: "eds_chart_issues",
+        props: { showValues: true },
+      }],
+    }, "call_eds_chart_values")]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+    const parameters = JSON.stringify(model.inputs[0].tools[0].parameters);
+
+    expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["createChangeSetPreview"]);
+    expect(parameters).toContain('"showValues"');
+    expect(parameters).not.toContain('"addNode"');
+    expect(parameters).not.toContain('"binding"');
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.pendingChangeSet?.operations).toHaveLength(2);
+    expect(task.pendingChangeSet?.operations.every((operation) => (
+      operation.type === "updateNodeProps" && operation.props.showValues === true
+    ))).toBe(true);
+    expect(input.request.appSpec).toEqual(formal);
+
+    if (!task.pendingChangeSet) throw new Error("预期存在柱顶数值预览");
+    const previewed = previewChangeSet(createExecutionState(input.request.appSpec), task.pendingChangeSet, "editor");
+    const previewJson = JSON.stringify(previewed.preview?.appSpec);
+    expect(previewJson.match(/"showValues":true/g)).toHaveLength(2);
+    expect(previewJson).toContain('"dataSourceId":"dataset_eds_breakdown"');
+    expect(previewJson).toContain('"field":"occurrences"');
+  });
+
+  it("新增饼图指令生成真实数据绑定的饼图预览", async () => {
+    const input = edsAnalysisRequest("增加一个饼状图");
+    expect(selectedHarnessSkillSummaries(input.request).map((skill) => skill.id)).toEqual(expect.arrayContaining([
+      "data-visualization", "eds-analysis", "dashboard-editing",
+    ]));
+    const formal = structuredClone(input.request.appSpec);
+    const model = new ScriptedModel([tool("createChangeSetPreview", {
+      message: "已生成异常类型次数占比饼图，等待确认。",
+      operations: [{
+        type: "addNode",
+        pageId: "page_eds_analysis",
+        parentId: "page_eds_analysis_charts",
+        node: {
+          id: "eds_chart_issue_share",
+          type: "BarChart",
+          props: {
+            title: "异常类型次数占比",
+            subtitle: "按异常次数汇总",
+            chartType: "pie",
+            color: "green",
+            showValues: true,
+            binding: {
+              dataSourceId: "dataset_eds_breakdown",
+              field: "occurrences",
+              aggregation: "sum",
+              groupBy: "category",
+              filters: [{ field: "view", operator: "equals", value: "异常分类" }],
+              sort: [{ field: "occurrences", direction: "desc" }],
+              limit: 8,
+              format: { style: "number", decimals: 0 },
+            },
+          },
+        },
+      }],
+    }, "call_eds_pie_chart")]);
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+      bounds: { maxModelCalls: 2, maxToolCalls: 2 },
+    });
+    const parameters = JSON.stringify(model.inputs[0].tools[0].parameters);
+
+    expect(parameters).toContain('"chartType"');
+    expect(parameters).toContain('"pie"');
+    expect(parameters).not.toContain('"donut"');
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.skills?.map((skill) => skill.id)).toEqual(expect.arrayContaining([
+      "data-visualization", "eds-analysis", "dashboard-editing",
+    ]));
+    expect(task.pendingChangeSet?.operations[0]).toMatchObject({
+      type: "addNode",
+      node: { type: "BarChart", props: { chartType: "pie" } },
+    });
+    expect(input.request.appSpec).toEqual(formal);
+
+    if (!task.pendingChangeSet) throw new Error("预期存在饼图预览");
+    const previewed = previewChangeSet(createExecutionState(input.request.appSpec), task.pendingChangeSet, "editor");
+    expect(JSON.stringify(previewed.preview?.appSpec)).toContain('"chartType":"pie"');
   });
 
   it("EDS 页面中的自然追问继续读取派生汇总，而闲聊短句正常完成对话", async () => {
@@ -393,6 +843,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
 
     expect(task.state).toBe("completed");
     expect(task.error).toBeUndefined();
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 1 });
     expect(task.counters).toEqual({ loopCount: 4, modelCallCount: 4, toolCallCount: 4 });
     expect(model.inputs.map((entry) => entry.tools.map((toolDefinition) => toolDefinition.name))).toEqual([
       ["inspectDataset"],
@@ -486,6 +937,75 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(userPayload).not.toHaveProperty("appSpec");
     expect(userPayload).not.toHaveProperty("request");
     expect(userPayload).not.toHaveProperty("observations");
+  });
+
+  it("兼容 DeepSeek 偶发返回的完整 JSON 代码围栏，但拒绝围栏外说明", async () => {
+    const response = (content: string) => vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "mock-deepseek-chat",
+      choices: [{ message: { content } }],
+      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const fenced = new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "mock-deepseek-chat",
+      fetchImpl: response("```json\n" + JSON.stringify(complete("只读检查完成。")) + "\n```"),
+    });
+    await expect(fenced.next({
+      tools: [],
+      context: { phase: "test" },
+      estimatedInputChars: 100,
+      iteration: 1,
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({ turn: complete("只读检查完成。") });
+
+    const prefixed = new DeepSeekHarnessModel({
+      apiKey: "mock-credential",
+      model: "mock-deepseek-chat",
+      fetchImpl: response(`说明：${JSON.stringify(complete("只读检查完成。"))}`),
+    });
+    await expect(prefixed.next({
+      tools: [],
+      context: { phase: "test" },
+      estimatedInputChars: 100,
+      iteration: 1,
+      signal: new AbortController().signal,
+    })).rejects.toThrow(/不是有效 JSON.*非对象开头/u);
+  });
+
+  it("班次对比最终动作格式异常时保留工具证据并自动修正一次", async () => {
+    const input = edsAnalysisRequest("比较当前 EDS 班次与其他班次的异常次数、异常时间和主要异常类别。不要修改页面。");
+    const turns: Array<HarnessModelTurn | string> = [
+      JSON.stringify(semanticDecision({ wantsEdsAnalysis: true, skillIds: ["eds-analysis"] })),
+      tool("analyzeEdsReports", {}, "call_eds_shift_compare"),
+      "说明：已经完成班次对比",
+      complete("当前白班与夜班均为 293 次异常、231.78 分钟；两班主要异常类别一致，应继续核对实际导入班次数据。"),
+    ];
+    let call = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      const content = turns[call++];
+      return new Response(JSON.stringify({
+        model: "mock-deepseek-chat",
+        choices: [{ message: { content: typeof content === "string" ? content : JSON.stringify(content) } }],
+        usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const model = new DeepSeekHarnessModel({ apiKey: "mock-credential", model: "mock-deepseek-chat", fetchImpl });
+
+    const task = await new DeepSeekHarness().run(input.request, {
+      dataRuntime: input.dataRuntime,
+      modelClient: model,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 4, toolCallCount: 1 });
+    expect(task.usage).toEqual({ promptTokens: 400, completionTokens: 80, totalTokens: 480 });
+    expect(task.semanticIntent).toMatchObject({ mode: "readOnlyTask", wantsEdsAnalysis: true });
+    expect(task.resultMessage).toContain("白班与夜班");
+    expect(task.events.some((event) => event.message.includes("模型动作格式未通过校验") && event.state === "planning")).toBe(true);
+    const repairedRequest = JSON.parse(String(fetchImpl.mock.calls[3][1]?.body)) as { messages: Array<{ content: string }> };
+    expect(repairedRequest.messages[1].content).toContain('"phase":"repairMalformedAction"');
+    expect(repairedRequest.messages[1].content).toContain("只返回一个符合系统示例");
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 1 });
   });
 
   it("拒绝超出硬上限的 DeepSeek Harness 响应体", async () => {
@@ -722,11 +1242,25 @@ describe("DeepSeekHarness 服务端状态机", () => {
         get length() { return storage.size; },
       },
     });
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
-      model: "mock-deepseek-chat",
-      choices: [{ message: { content: JSON.stringify({ message: "已修改页面。" }) } }],
-      usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 },
-    }), { status: 200, headers: { "content-type": "application/json" } }));
+    let requestIndex = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      const content = requestIndex++ === 0
+        ? JSON.stringify(semanticDecision({
+            mode: "changePreview",
+            wantsData: false,
+            changeAction: "update",
+            changeTarget: "genericComponent",
+            componentKind: "metric",
+            skillIds: ["dashboard-editing"],
+            rationale: "用户明确要求修改指标标题。",
+          }))
+        : JSON.stringify({ message: "已修改页面。" });
+      return new Response(JSON.stringify({
+        model: "mock-deepseek-chat",
+        choices: [{ message: { content } }],
+        usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
 
     try {
       const task = await new DeepSeekHarness().run(input, {
@@ -739,7 +1273,8 @@ describe("DeepSeekHarness 服务端状态机", () => {
       expect(task.pendingChangeSet).toBeUndefined();
       expect(input.appSpec).toEqual(formal);
       expect(globalThis.localStorage.getItem(storageKey)).toBe(storageValue);
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(task.events.some((event) => event.message.includes("模型动作格式未通过校验"))).toBe(true);
     } finally {
       if (originalLocalStorage) Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
       else Reflect.deleteProperty(globalThis, "localStorage");
@@ -853,7 +1388,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(applied.present).not.toEqual(initial.present);
   });
 
-  it("拒绝非法工具和非法参数并返回脱敏失败事件", async () => {
+  it("拒绝非法工具，参数连续错误时在一次自动修正后安全失败", async () => {
     const data = fixtures();
     const illegalTool = await new DeepSeekHarness().run(request("request_illegal_tool"), {
       dataRuntime: data.dataRuntime,
@@ -865,11 +1400,272 @@ describe("DeepSeekHarness 服务端状态机", () => {
 
     const illegalArgs = await new DeepSeekHarness().run(request("request_illegal_args"), {
       dataRuntime: data.dataRuntime,
-      modelClient: new ScriptedModel([tool("inspectDataset", { dataSourceId: 123 }, "call_bad_args")]),
+      modelClient: new ScriptedModel([
+        tool("inspectDataset", { dataSourceId: 123 }, "call_bad_args"),
+        tool("inspectDataset", { dataSourceId: false }, "call_bad_args_again"),
+      ]),
     });
     expect(illegalArgs.state).toBe("failed");
     expect(illegalArgs.terminationCode).toBe("toolExecutionFailed");
     expect(illegalArgs.error).toContain("参数不符合定义");
+    expect(illegalArgs.events.filter((event) => event.toolCall?.status === "failure")).toHaveLength(2);
+  });
+
+  it("把工具参数校验结果反馈给模型并自动修正一次", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: 123 }, "call_bad_args_once"),
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_repaired_args"),
+      complete("参数已经自动修正；retail_orders 共 48 行、14 列。"),
+    ]);
+    const task = await new DeepSeekHarness().run(request("request_args_auto_repair"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 3, toolCallCount: 2 });
+    expect(model.inputs[1].tools.map((item) => item.name)).toEqual(["inspectDataset"]);
+    expect(model.inputs[1].context).toMatchObject({
+      toolCorrection: {
+        toolName: "inspectDataset",
+        attempt: 1,
+        maxAttempts: 1,
+        issueSummary: [expect.stringContaining("dataSourceId")],
+      },
+    });
+    expect(task.resultMessage).toContain("48 行、14 列");
+    expect(task.events.some((event) => event.message.includes("自动修正一次"))).toBe(true);
+  });
+
+  it("工具运行失败后把错误反馈给模型，自动重新规划并重试成功", async () => {
+    const data = fixtures();
+    const formal = structuredClone(data.dataProduct.appSpec);
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_runtime_failure"),
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_runtime_retry"),
+      complete("恢复后已确认 retail_orders 共 48 行、14 列。"),
+    ]);
+    let attempts = 0;
+    const task = await new DeepSeekHarness().run(request("request_runtime_recovery"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      toolExecutor: async (name, args, context) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("数据运行时暂时不可用");
+        return executeHarnessTool(name, args, context);
+      },
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 3, toolCallCount: 2 });
+    expect(model.inputs[1].context).toMatchObject({
+      phase: "followUp",
+      recovery: {
+        failedTool: "inspectDataset",
+        failureKind: "execution",
+        attempt: 1,
+        maxAttempts: 2,
+        sameCallFailureCount: 1,
+        issueSummary: ["数据运行时暂时不可用"],
+      },
+      workingMemory: {
+        failedAttempts: [{
+          toolName: "inspectDataset",
+          failureKind: "execution",
+          status: "recovering",
+        }],
+      },
+    });
+    expect(task.workingMemory).toMatchObject({
+      completedTools: ["inspectDataset"],
+      completedSteps: ["已检查数据集概况"],
+      failedAttempts: [{ toolName: "inspectDataset", status: "recovered" }],
+    });
+    expect(task.events.some((event) => event.toolCall?.status === "failure" && event.state === "observing")).toBe(true);
+    expect(task.events.some((event) => event.message.includes("正在恢复并重新规划（1/2）"))).toBe(true);
+    expect(data.dataProduct.appSpec).toEqual(formal);
+  });
+
+  it("任务级 Verifier 驳回笼统结果并返回 Planner 修正后再完成", async () => {
+    const data = fixtures();
+    const input = request(
+      "request_verifier_replan",
+      "检查 retail_orders 数据集的字段分析与质量，不要修改页面。",
+    );
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_verifier_dataset"),
+      tool("inspectFields", { dataSourceId: "dataset_retail_orders" }, "call_verifier_fields"),
+      complete("已完成。"),
+      complete("retail_orders 共 48 行、14 列，字段类型与质量检查已完成。"),
+    ]);
+
+    const task = await new DeepSeekHarness().run(input, {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.counters).toEqual({ loopCount: 4, modelCallCount: 4, toolCallCount: 2 });
+    expect(task.executionPlan).toMatchObject({ revision: 2, replanReason: expect.stringContaining("Verifier 未通过") });
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 2 });
+    expect(model.inputs[3].tools).toEqual([]);
+    expect(model.inputs[3].context).toMatchObject({
+      verifier: {
+        phase: "repairAfterTaskVerification",
+        attempt: 1,
+        issues: [expect.stringContaining("过于笼统")],
+      },
+    });
+    expect(task.events.some((event) => event.message.includes("Verifier 未通过任务验收"))).toBe(true);
+  });
+
+  it("Verifier 二次验收仍不通过时禁止任务伪装成完成", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_verifier_fail_dataset"),
+      tool("inspectFields", { dataSourceId: "dataset_retail_orders" }, "call_verifier_fail_fields"),
+      complete("已完成。"),
+      complete("任务已完成。"),
+    ]);
+
+    const task = await new DeepSeekHarness().run(request(
+      "request_verifier_hard_gate",
+      "检查 retail_orders 数据集的字段分析与质量，不要修改页面。",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+    });
+
+    expect(task.state).toBe("failed");
+    expect(task.terminationCode).toBe("verificationFailed");
+    expect(task.verification).toMatchObject({ status: "failed", attempt: 2 });
+    expect(task.error).toContain("Verifier 未通过任务验收");
+    expect(task.resultMessage).not.toContain("任务已完成");
+  });
+
+  it("视觉任务在 Playwright 多模态证据通过后才允许 completed", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([
+      tool("inspectAppSpec", { pageId: "page_home" }, "call_visual_appspec"),
+      complete("桌面与窄屏页面均未发现组件重叠。"),
+    ]);
+    const visualVerifier: HarnessVisualVerifier = {
+      verify: vi.fn(async () => ({
+        required: true,
+        status: "passed" as const,
+        source: "playwright-multimodal" as const,
+        summary: "1440px 与 900px 截图均未发现重叠或裁切。",
+        model: "vision-test",
+        capturedAt: "2026-09-06T00:00:00.000Z",
+        screenshots: [{
+          viewport: { width: 1440, height: 1000 },
+          pageUrl: "http://127.0.0.1:3102/",
+          mimeType: "image/jpeg" as const,
+          byteLength: 1024,
+          sha256: "a".repeat(64),
+        }],
+        checks: [{ id: "layout_integrity", label: "布局完整性", status: "passed" as const, detail: "无重叠或裁切。" }],
+        issues: [],
+      })),
+    };
+
+    const task = await new DeepSeekHarness().run(request(
+      "request_visual_verifier_pass",
+      "检查页面布局在窄屏下是否有重叠。",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      visualVerifier,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(visualVerifier.verify).toHaveBeenCalledTimes(1);
+    expect(model.inputs[0]?.context).toMatchObject({
+      visualVerification: { required: true, available: true },
+    });
+    expect(task.verification).toMatchObject({
+      status: "passed",
+      visualEvidence: { status: "passed", source: "playwright-multimodal" },
+    });
+    expect(task.executionPlan?.steps.at(-1)?.objective).toContain("多模态模型完成视觉验收");
+  });
+
+  it("图片能力问答会收到上传图片与当前页面截图能力，不再误报完全不能看图", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([complete("可以上传 JPEG、PNG 或 WebP 让我解析，也可以让我自动检查当前网页截图。")]);
+    const visualVerifier: HarnessVisualVerifier = {
+      verify: vi.fn(async () => { throw new Error("能力问答不应执行页面视觉验收"); }),
+    };
+
+    const task = await new DeepSeekHarness().run(request(
+      "request_visual_capability_answer",
+      "怎么才能让你查看图片？",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      visualVerifier,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.resultMessage).toContain("上传");
+    expect(visualVerifier.verify).not.toHaveBeenCalled();
+    expect(model.inputs[0]?.context).toMatchObject({
+      visualVerification: {
+        required: false,
+        available: true,
+        acceptsUploadedImages: true,
+      },
+    });
+  });
+
+  it("工具失败确认缺少外部条件后，由恢复规划转为受限而不是直接失败", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_missing_runtime"),
+      blocked("当前无法读取数据集。", ["数据运行服务恢复可用"]),
+    ]);
+    const task = await new DeepSeekHarness().run(request("request_recovery_to_blocked"), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      toolExecutor: async () => {
+        throw new StudioValidationError("Harness 数据源校验失败", ["服务端运行数据暂不可用"]);
+      },
+    });
+
+    expect(task.state).toBe("blocked");
+    expect(task.terminationCode).toBe("missingRequirements");
+    expect(task.error).toContain("数据运行服务恢复可用");
+    expect(model.inputs[1].context).toMatchObject({
+      recovery: { failureKind: "precondition", failedTool: "inspectDataset" },
+    });
+    expect(task.workingMemory?.failedAttempts).toEqual([
+      expect.objectContaining({ toolName: "inspectDataset", failureKind: "precondition", status: "exhausted" }),
+    ]);
+    expect(task.workingMemory?.missingCapabilities).toContain("服务端运行数据暂不可用");
+    expect(task.events.some((event) => event.message.includes("正在恢复并重新规划"))).toBe(true);
+  });
+
+  it("相同工具参数累计失败两次后不再执行第三次，安全终止恢复循环", async () => {
+    const data = fixtures();
+    const repeatedTool = tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_repeated_failure");
+    const executor = vi.fn(async () => { throw new Error("数据运行时持续不可用"); });
+    const task = await new DeepSeekHarness().run(request(
+      "request_bounded_runtime_recovery",
+      "检查 retail_orders 数据集概况，并将页面标题改为新的经营概览",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: new ScriptedModel([repeatedTool, repeatedTool, repeatedTool]),
+      toolExecutor: executor,
+    });
+
+    expect(task.state).toBe("failed");
+    expect(task.terminationCode).toBe("toolExecutionFailed");
+    expect(task.error).toContain("使用相同参数在本任务中已经失败 2 次");
+    expect(executor).toHaveBeenCalledTimes(2);
+    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 3, toolCallCount: 2 });
+    expect(task.events.filter((event) => event.toolCall?.status === "failure")).toHaveLength(2);
+    expect(task.workingMemory?.failedAttempts.every((attempt) => attempt.status === "exhausted")).toBe(true);
   });
 
   it("任务事件不会记录认证头、密钥或 reasoning_content", async () => {
@@ -915,7 +1711,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const toolTimedOut = await new DeepSeekHarness().run(request("request_tool_timeout"), {
       dataRuntime: data.dataRuntime,
       modelClient: new ScriptedModel([tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_slow")]),
-      bounds: { toolCallTimeoutMs: 5 },
+      bounds: { toolCallTimeoutMs: 5, maxModelCalls: 1 },
       toolExecutor: () => new Promise((resolve) => setTimeout(() => resolve({ summary: "迟到结果", data: {} }), 30)),
     });
     expect(toolTimedOut.state).toBe("failed");

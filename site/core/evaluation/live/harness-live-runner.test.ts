@@ -257,21 +257,21 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
     expect(liveConfig).toContain("testTimeout: 240_000");
   });
 
-  it("manifest 精确包含三个用例及 2/1、4/3、1/1 上限", () => {
+  it("manifest 精确包含三个用例及包含语义路由的模型调用上限", () => {
     expect(liveHarnessSmokeCases.map((item) => item.id)).toEqual([
       "dataset-summary",
       "east-anomaly-recipe-preview",
       "revenue-title-change-preview",
     ]);
     expect(liveHarnessSmokeCases.map((item) => [item.limits.maxModelCalls, item.limits.maxToolCalls])).toEqual([
+      [3, 1],
+      [5, 3],
       [2, 1],
-      [4, 3],
-      [1, 1],
     ]);
     expect(LIVE_HARNESS_GLOBAL_BUDGET).toMatchObject({
-      maxModelCalls: 7,
-      maxPromptTokens: 12_000,
-      maxCompletionTokens: 3_000,
+      maxModelCalls: 10,
+      maxPromptTokens: 15_000,
+      maxCompletionTokens: 4_000,
       maxActiveElapsedMs: 180_000,
       maxRetriesPerCase: 0,
     });
@@ -425,9 +425,9 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
   });
 
   it.each([
-    ["模型调用", { maxModelCalls: 2 }, "model_budget"],
-    ["prompt", { maxPromptTokens: 2_600 }, "prompt_budget"],
-    ["completion", { maxCompletionTokens: 900 }, "completion_budget"],
+    ["模型调用", { maxModelCalls: 3 }, "model_budget"],
+    ["prompt", { maxPromptTokens: 3_300 }, "prompt_budget"],
+    ["completion", { maxCompletionTokens: 1_200 }, "completion_budget"],
     ["主动时间", { maxActiveElapsedMs: 45_100 }, "time_budget"],
   ])("%s 全局预算不足时不发送下一个用例", async (_label, budget, code) => {
     const server = fakeServer();
@@ -557,7 +557,7 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
       ["awaitingConfirmation", ["createChangeSetPreview"]],
     ]);
     expect(report.cases.every((item) => item.hardGates.passed)).toBe(true);
-    expect(report.budget.used).toMatchObject({ modelCalls: 7, promptTokens: 300, completionTokens: 60, totalTokens: 360 });
+    expect(report.budget.used).toMatchObject({ modelCalls: 10, promptTokens: 300, completionTokens: 60, totalTokens: 360 });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(server.stop).toHaveBeenCalledTimes(1);
     expect(localStorageWrite).toHaveBeenCalledTimes(0);

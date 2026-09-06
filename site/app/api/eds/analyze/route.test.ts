@@ -44,6 +44,7 @@ describe("EDS 分析 API", () => {
     expect(result.summary).toMatchObject({ issueCount: 14, channelCount: 20 });
     expect(result.issueSummary).toHaveLength(14);
     expect(result.lineSummary).toHaveLength(10);
+    expect(result.lineIssueSummary).toHaveLength(140);
     expect(result.configuration.comparisonMode).toBe("custom_template");
     expect(result.comparison).toMatchObject({ coreMatched: 560, reportMatched: 660, mismatchCount: 0 });
 

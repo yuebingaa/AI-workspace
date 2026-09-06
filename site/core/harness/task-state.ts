@@ -25,6 +25,7 @@ export function createHarnessTask(
     executionTiming?: HarnessExecutionTiming;
     retryOfTaskId?: string;
     contextUsage?: HarnessTaskSummary["contextUsage"];
+    skills?: HarnessTaskSummary["skills"];
   } = {},
 ): HarnessTaskSummary {
   const timestamp = clock.now().toISOString();
@@ -42,6 +43,7 @@ export function createHarnessTask(
     ...(options.executionTiming ? { executionTiming: options.executionTiming } : {}),
     ...(options.retryOfTaskId ? { retryOfTaskId: options.retryOfTaskId } : {}),
     ...(options.contextUsage ? { contextUsage: options.contextUsage } : {}),
+    ...(options.skills?.length ? { skills: options.skills } : {}),
   });
 }
 

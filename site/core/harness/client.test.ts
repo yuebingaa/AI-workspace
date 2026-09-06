@@ -42,6 +42,43 @@ describe("Harness 客户端", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("原始数据授权时使用 multipart 随请求附带工作簿，且不把文件写入 JSON payload", async () => {
+    const task = createHarnessTask("request_client_test", "检查数据", "page_home", "editor", {
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      id: () => "event_client_raw",
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ task }), { status: 200 }));
+    const workbook = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], "EDS原始数据.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    await requestHarnessTask(request(), { fetchImpl, rawWorkbook: workbook });
+    const init = fetchImpl.mock.calls[0][1];
+    expect(init?.headers).toBeUndefined();
+    expect(init?.body).toBeInstanceOf(FormData);
+    const body = init?.body as FormData;
+    expect(body.get("rawWorkbook")).toBe(workbook);
+    const payload = JSON.parse(String(body.get("payload"))) as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("rawWorkbook");
+    expect(payload).not.toHaveProperty("rawWorkbookManifest");
+  });
+
+  it("图片使用 multipart 上传且不进入 JSON payload", async () => {
+    const task = createHarnessTask("request_client_test", "查看图片", "page_home", "editor", {
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      id: () => "event_client_image",
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ task }), { status: 200 }));
+    const image = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], "界面截图.jpg", { type: "image/jpeg" });
+
+    await requestHarnessTask(request(), { fetchImpl, imageAttachments: [image] });
+
+    const body = fetchImpl.mock.calls[0][1]?.body as FormData;
+    expect(body).toBeInstanceOf(FormData);
+    expect(body.get("imageAttachment")).toBe(image);
+    expect(String(body.get("payload"))).not.toContain("界面截图.jpg");
+  });
+
   it("客户端超时覆盖收到响应头后的 Harness 正文读取", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => new Response(new ReadableStream<Uint8Array>({
       start(controller) {
@@ -80,6 +117,24 @@ describe("Harness 客户端", () => {
       code: "invalid_response",
       retryable: true,
     } satisfies Partial<HarnessClientError>);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("响应正文瞬时损坏时使用同一幂等请求自动重取一次", async () => {
+    const task = createHarnessTask("request_client_test", "检查数据", "page_home", "editor", {
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+      id: () => "event_client_retry",
+    });
+    let attempt = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      attempt += 1;
+      return attempt === 1
+        ? new Response("{truncated", { status: 200 })
+        : new Response(JSON.stringify({ task }), { status: 200 });
+    });
+
+    await expect(requestHarnessTask(request(), { fetchImpl })).resolves.toEqual({ task });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0][1]?.body).toBe(fetchImpl.mock.calls[1][1]?.body);
   });
 });

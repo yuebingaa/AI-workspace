@@ -68,9 +68,9 @@ export class LiveHarnessReportSafetyError extends Error {
 }
 
 export const LIVE_HARNESS_GLOBAL_BUDGET = Object.freeze({
-  maxModelCalls: 7,
-  maxPromptTokens: 12_000,
-  maxCompletionTokens: 3_000,
+  maxModelCalls: 10,
+  maxPromptTokens: 15_000,
+  maxCompletionTokens: 4_000,
   maxActiveElapsedMs: 180_000,
   maxRetriesPerCase: 0,
 });

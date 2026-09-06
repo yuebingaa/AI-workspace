@@ -17,7 +17,18 @@ export interface PageHeaderProps { eyebrow: string; title: string; description: 
 export interface InsightBannerProps { title: string; description: string; actionLabel: string }
 export interface MetricGridProps { columns: number }
 export interface MetricCardProps { label: string; trend: string; isNew?: boolean; binding: DataBinding }
-export interface BarChartProps { title: string; subtitle: string; binding: DataBinding }
+export const BAR_CHART_COLORS = ["green", "blue", "violet", "orange", "red", "teal"] as const;
+export type BarChartColor = (typeof BAR_CHART_COLORS)[number];
+export const CHART_TYPES = ["bar", "line", "area", "pie", "donut"] as const;
+export type ChartType = (typeof CHART_TYPES)[number];
+export interface BarChartProps {
+  title: string;
+  subtitle: string;
+  color?: BarChartColor;
+  chartType?: ChartType;
+  showValues?: boolean;
+  binding: DataBinding;
+}
 export interface DataHealthProps {
   title: string;
   subtitle: string;
@@ -28,6 +39,9 @@ export interface DataTableProps {
   title: string;
   subtitle: string;
   actionLabel: string;
+  density?: "comfortable" | "compact";
+  stripedRows?: boolean;
+  accentColor?: BarChartColor;
   binding: DataBinding;
 }
 

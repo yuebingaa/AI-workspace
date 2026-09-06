@@ -9,11 +9,11 @@ export class BoundedBodyError extends Error {
 
 type ReadableHttpBody = Pick<Request, "body" | "headers">;
 
-export async function readBoundedUtf8Body(
+export async function readBoundedBodyBytes(
   source: ReadableHttpBody,
   maxBytes: number,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<string> {
+): Promise<Uint8Array> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error("请求体大小限制必须是正整数");
   if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1)) {
     throw new Error("请求体读取超时必须是正整数毫秒");
@@ -27,7 +27,7 @@ export async function readBoundedUtf8Body(
     throw new BoundedBodyError("too-large");
   }
   if (options.signal?.aborted) throw new BoundedBodyError("aborted");
-  if (!source.body) return "";
+  if (!source.body) return new Uint8Array();
 
   const reader = source.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -72,6 +72,15 @@ export async function readBoundedUtf8Body(
   const bytes = new Uint8Array(totalBytes);
   let offset = 0;
   chunks.forEach((chunk) => { bytes.set(chunk, offset); offset += chunk.byteLength; });
+  return bytes;
+}
+
+export async function readBoundedUtf8Body(
+  source: ReadableHttpBody,
+  maxBytes: number,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<string> {
+  const bytes = await readBoundedBodyBytes(source, maxBytes, options);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
