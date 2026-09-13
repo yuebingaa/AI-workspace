@@ -12,7 +12,6 @@ describe("StudioHeader", () => {
         description: "导入工作簿并查看分析看板",
       }]}
       activeInterfaceId="eds-analysis"
-      device="desktop"
       canUndo={false}
       saveLabel="已保存"
       role="editor"
@@ -21,7 +20,6 @@ describe("StudioHeader", () => {
       publishButtonRef={createRef<HTMLButtonElement>()}
       pagesButtonRef={createRef<HTMLButtonElement>()}
       assistantButtonRef={createRef<HTMLButtonElement>()}
-      onDeviceChange={() => undefined}
       onUndo={() => undefined}
       onRoleChange={() => undefined}
       onExportBackup={() => undefined}

@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1440" viewBox="0 0 2000 1440" role="img" aria-labelledby="title desc">
+  <title id="title">AgentCanvas 当前系统架构</title>
+  <desc id="desc">展示 Web Studio、API、Harness Agent Runtime、数据产品执行引擎、状态持久化和外部服务之间的关系。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f8fbfa"/><stop offset="1" stop-color="#edf5f2"/></linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="7" stdDeviation="8" flood-color="#17352c" flood-opacity=".10"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#55756a"/></marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#118565"/></marker>
+    <style>
+      .title{font:700 34px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#102a22}.subtitle{font:400 15px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#60736c}.layer{fill:#fff;stroke:#cddbd6;stroke-width:2;rx:22;filter:url(#shadow)}.layer-title{font:700 18px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#24463a;letter-spacing:.06em}.card{fill:#f8fbfa;stroke:#d3dfdb;stroke-width:1.5;rx:14}.card.ai{fill:#eef8f4;stroke:#9bcdbd}.card.api{fill:#f4f1ff;stroke:#c7bdf2}.card.domain{fill:#fffaf0;stroke:#e8d09f}.card.state{fill:#f2f6f5;stroke:#cbd8d4}.card.external{fill:#132f27;stroke:#132f27}.card.boundary{fill:#fff5ed;stroke:#e6a578;stroke-width:2;stroke-dasharray:8 6}.label{font:700 15px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#1d3930}.small{font:400 12px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#667a73}.external-label{font:700 15px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#fff}.external-small{font:400 12px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#c8d9d3}.edge{fill:none;stroke:#55756a;stroke-width:2.2;marker-end:url(#arrow)}.edge-green{fill:none;stroke:#118565;stroke-width:2.8;marker-end:url(#arrowGreen)}.edge-dash{fill:none;stroke:#c87843;stroke-width:2;stroke-dasharray:7 6;marker-end:url(#arrow)}.flow-label{font:600 11px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#4f6d63}.pill{fill:#e4f4ee;stroke:#a9d4c6;rx:14}.pill-text{font:700 12px 'Microsoft YaHei','Segoe UI',sans-serif;fill:#0e7558}.step{fill:#118565}.step-num{font:700 13px 'Segoe UI',sans-serif;fill:#fff;text-anchor:middle;dominant-baseline:middle}
+    </style>
+  </defs>
+
+  <rect width="2000" height="1440" fill="url(#bg)"/>
+  <text x="58" y="55" class="title">AgentCanvas 当前系统架构</text>
+  <text x="58" y="83" class="subtitle">基于当前 AI-workspace 实际代码 · Web Studio + Harness Agent Runtime + 数据产品执行引擎</text>
+  <rect x="1510" y="42" width="425" height="42" class="pill"/><text x="1722" y="68" text-anchor="middle" class="pill-text">实线：当前调用关系　虚线：当前能力边界</text>
+
+  <!-- Inputs -->
+  <rect x="70" y="112" width="230" height="64" class="card external"/>
+  <text x="185" y="140" text-anchor="middle" class="external-label">用户</text><text x="185" y="160" text-anchor="middle" class="external-small">浏览器交互与确认</text>
+  <rect x="330" y="112" width="260" height="64" class="card external"/>
+  <text x="460" y="140" text-anchor="middle" class="external-label">本地文件</text><text x="460" y="160" text-anchor="middle" class="external-small">CSV · XLSX · 图片</text>
+
+  <!-- UI layer -->
+  <rect x="50" y="205" width="1590" height="205" class="layer"/>
+  <text x="78" y="238" class="layer-title">01　WEB STUDIO 交互层</text>
+  <rect x="82" y="262" width="270" height="108" class="card ai"/><text x="217" y="295" text-anchor="middle" class="label">StudioWorkspace</text><text x="217" y="320" text-anchor="middle" class="small">状态、权限、交互编排</text><text x="217" y="341" text-anchor="middle" class="small">页面 / 数据 / 任务总入口</text>
+  <rect x="372" y="262" width="220" height="108" class="card"/><text x="482" y="295" text-anchor="middle" class="label">导航与页面结构</text><text x="482" y="320" text-anchor="middle" class="small">Header · Sidebar</text><text x="482" y="341" text-anchor="middle" class="small">PageStructurePanel</text>
+  <rect x="612" y="262" width="235" height="108" class="card"/><text x="730" y="295" text-anchor="middle" class="label">看板画布</text><text x="730" y="320" text-anchor="middle" class="small">DataProductCanvas</text><text x="730" y="341" text-anchor="middle" class="small">Puck 编辑 / 预览</text>
+  <rect x="867" y="262" width="235" height="108" class="card"/><text x="985" y="295" text-anchor="middle" class="label">表格工作区</text><text x="985" y="320" text-anchor="middle" class="small">SpreadsheetWorkspace</text><text x="985" y="341" text-anchor="middle" class="small">原始表格 / 处理结果</text>
+  <rect x="1122" y="262" width="235" height="108" class="card ai"/><text x="1240" y="295" text-anchor="middle" class="label">AI 助手</text><text x="1240" y="320" text-anchor="middle" class="small">对话 · 图片 · 任务进度</text><text x="1240" y="341" text-anchor="middle" class="small">ChangeSet 确认</text>
+  <rect x="1377" y="262" width="230" height="108" class="card"/><text x="1492" y="295" text-anchor="middle" class="label">工作台弹窗</text><text x="1492" y="320" text-anchor="middle" class="small">上传 · 原始工作簿</text><text x="1492" y="341" text-anchor="middle" class="small">EDS · 历史 · 发布</text>
+
+  <!-- API layer -->
+  <rect x="50" y="448" width="1590" height="150" class="layer"/>
+  <text x="78" y="481" class="layer-title">02　VINEXT / NEXT API 层</text>
+  <rect x="82" y="505" width="275" height="62" class="card api"/><text x="220" y="532" text-anchor="middle" class="label">/api/datasets</text><text x="220" y="551" text-anchor="middle" class="small">上传 · 读取 · 授权 · 删除</text>
+  <rect x="377" y="505" width="245" height="62" class="card api"/><text x="500" y="532" text-anchor="middle" class="label">/api/eds/analyze</text><text x="500" y="551" text-anchor="middle" class="small">EDS 工作簿分析</text>
+  <rect x="642" y="505" width="310" height="62" class="card ai"/><text x="797" y="532" text-anchor="middle" class="label">/api/ai/harness · /plan</text><text x="797" y="551" text-anchor="middle" class="small">Agent 任务入口</text>
+  <rect x="972" y="505" width="250" height="62" class="card api"/><text x="1097" y="532" text-anchor="middle" class="label">/api/exports</text><text x="1097" y="551" text-anchor="middle" class="small">限时 Excel 下载</text>
+  <rect x="1242" y="505" width="365" height="62" class="card api"/><text x="1425" y="532" text-anchor="middle" class="label">/api/settings/ai · /health</text><text x="1425" y="551" text-anchor="middle" class="small">临时密钥 · 运行状态</text>
+
+  <!-- Agent layer -->
+  <rect x="50" y="636" width="1590" height="330" class="layer"/>
+  <text x="78" y="669" class="layer-title">03　HARNESS AGENT RUNTIME</text>
+  <rect x="82" y="697" width="220" height="88" class="card ai"/><text x="192" y="727" text-anchor="middle" class="label">Context Selector</text><text x="192" y="750" text-anchor="middle" class="small">选择页面 / 数据 / 历史</text><text x="192" y="769" text-anchor="middle" class="small">控制上下文预算</text>
+  <rect x="322" y="697" width="220" height="88" class="card ai"/><text x="432" y="727" text-anchor="middle" class="label">动态 Skill Registry</text><text x="432" y="750" text-anchor="middle" class="small">可视化 · 工作簿</text><text x="432" y="769" text-anchor="middle" class="small">看板编辑 · EDS</text>
+  <rect x="562" y="697" width="220" height="88" class="card ai"/><text x="672" y="727" text-anchor="middle" class="label">模型语义 Planner</text><text x="672" y="750" text-anchor="middle" class="small">理解意图并生成</text><text x="672" y="769" text-anchor="middle" class="small">动态子任务计划</text>
+  <rect x="802" y="697" width="220" height="88" class="card ai"/><text x="912" y="727" text-anchor="middle" class="label">Execution Planner</text><text x="912" y="750" text-anchor="middle" class="small">步骤、所需证据</text><text x="912" y="769" text-anchor="middle" class="small">完成条件与工具限制</text>
+  <rect x="1042" y="697" width="250" height="88" class="card ai"/><text x="1167" y="727" text-anchor="middle" class="label">Tool Registry / Executor</text><text x="1167" y="750" text-anchor="middle" class="small">只执行当前步骤</text><text x="1167" y="769" text-anchor="middle" class="small">内置工具 + MCP 工具</text>
+  <rect x="1312" y="697" width="295" height="88" class="card ai"/><text x="1460" y="727" text-anchor="middle" class="label">Evidence Bus</text><text x="1460" y="750" text-anchor="middle" class="small">DOM · 截图 · 工具原始结果</text><text x="1460" y="769" text-anchor="middle" class="small">跨阶段共享与引用</text>
+
+  <rect x="82" y="815" width="280" height="108" class="card ai"/><text x="222" y="848" text-anchor="middle" class="label">Working Memory</text><text x="222" y="872" text-anchor="middle" class="small">Conversation（最多 20 轮）</text><text x="222" y="893" text-anchor="middle" class="small">任务、决定和已知数据</text>
+  <rect x="382" y="815" width="280" height="108" class="card ai"/><text x="522" y="848" text-anchor="middle" class="label">Recovery / Replan</text><text x="522" y="872" text-anchor="middle" class="small">工具失败后分类原因</text><text x="522" y="893" text-anchor="middle" class="small">换参数 / 换工具 / 重规划</text>
+  <rect x="682" y="815" width="350" height="108" class="card ai"/><text x="857" y="848" text-anchor="middle" class="label">任务级 Verifier</text><text x="857" y="872" text-anchor="middle" class="small">证据、数值、目标、ChangeSet 验收</text><text x="857" y="893" text-anchor="middle" class="small">UI 任务必须经过视觉验证</text>
+  <rect x="1052" y="815" width="255" height="108" class="card ai"/><text x="1180" y="848" text-anchor="middle" class="label">Visual Verifier</text><text x="1180" y="872" text-anchor="middle" class="small">Playwright 截图</text><text x="1180" y="893" text-anchor="middle" class="small">DOM / 控制台 / 交互</text>
+  <rect x="1327" y="815" width="280" height="108" class="card ai"/><text x="1467" y="848" text-anchor="middle" class="label">MCP Client Runtime</text><text x="1467" y="872" text-anchor="middle" class="small">工具发现、权限策略</text><text x="1467" y="893" text-anchor="middle" class="small">外部服务调用</text>
+
+  <!-- Domain -->
+  <rect x="50" y="1004" width="1590" height="225" class="layer"/>
+  <text x="78" y="1037" class="layer-title">04　数据产品与执行引擎</text>
+  <rect x="82" y="1063" width="205" height="120" class="card domain"/><text x="185" y="1095" text-anchor="middle" class="label">Dataset</text><text x="185" y="1119" text-anchor="middle" class="small">CSV / XLSX 解析</text><text x="185" y="1140" text-anchor="middle" class="small">字段分析 · Repository</text><text x="185" y="1161" text-anchor="middle" class="small">AI 数据授权</text>
+  <rect x="307" y="1063" width="205" height="120" class="card domain"/><text x="410" y="1095" text-anchor="middle" class="label">Raw Workbook</text><text x="410" y="1119" text-anchor="middle" class="small">结构扫描 · 索引</text><text x="410" y="1140" text-anchor="middle" class="small">相关片段查询</text><text x="410" y="1161" text-anchor="middle" class="small">按需完整读取</text>
+  <rect x="532" y="1063" width="205" height="120" class="card domain"/><text x="635" y="1095" text-anchor="middle" class="label">DataRecipe</text><text x="635" y="1119" text-anchor="middle" class="small">筛选 · 排序 · 聚合</text><text x="635" y="1140" text-anchor="middle" class="small">计算字段 · 校验</text><text x="635" y="1161" text-anchor="middle" class="small">字段血缘</text>
+  <rect x="757" y="1063" width="185" height="120" class="card domain"/><text x="850" y="1095" text-anchor="middle" class="label">EDS 引擎</text><text x="850" y="1119" text-anchor="middle" class="small">班次 / 异常</text><text x="850" y="1140" text-anchor="middle" class="small">派生汇总</text><text x="850" y="1161" text-anchor="middle" class="small">专用分析规则</text>
+  <rect x="962" y="1063" width="215" height="120" class="card domain"/><text x="1070" y="1095" text-anchor="middle" class="label">ChangeSet</text><text x="1070" y="1119" text-anchor="middle" class="small">预览 · 确认 · 应用</text><text x="1070" y="1140" text-anchor="middle" class="small">撤销 · 权限</text><text x="1070" y="1161" text-anchor="middle" class="small">审计记录</text>
+  <rect x="1197" y="1063" width="205" height="120" class="card domain"/><text x="1300" y="1095" text-anchor="middle" class="label">AppSpec Renderer</text><text x="1300" y="1119" text-anchor="middle" class="small">组件注册表</text><text x="1300" y="1140" text-anchor="middle" class="small">Puck + Recharts</text><text x="1300" y="1161" text-anchor="middle" class="small">字体和布局</text>
+  <rect x="1422" y="1063" width="185" height="120" class="card domain"/><text x="1515" y="1095" text-anchor="middle" class="label">Excel Export</text><text x="1515" y="1119" text-anchor="middle" class="small">处理结果工作簿</text><text x="1515" y="1140" text-anchor="middle" class="small">限时下载令牌</text><text x="1515" y="1161" text-anchor="middle" class="small">结果元数据</text>
+
+  <!-- State -->
+  <rect x="50" y="1268" width="1590" height="125" class="layer"/>
+  <text x="78" y="1301" class="layer-title">05　状态、持久化与运行</text>
+  <rect x="82" y="1320" width="430" height="52" class="card state"/><text x="297" y="1342" text-anchor="middle" class="label">浏览器 Studio Repository</text><text x="297" y="1361" text-anchor="middle" class="small">快照 · 备份 · 页面状态 · 对话与审计</text>
+  <rect x="532" y="1320" width="420" height="52" class="card state"/><text x="742" y="1342" text-anchor="middle" class="label">服务端 JSON 本地状态</text><text x="742" y="1361" text-anchor="middle" class="small">数据集 · 导出记录 · 容量与健康检查</text>
+  <rect x="972" y="1320" width="635" height="52" class="card state"/><text x="1290" y="1342" text-anchor="middle" class="label">Vinext Standalone + 内置 Node Runtime</text><text x="1290" y="1361" text-anchor="middle" class="small">Windows x64 便携包 · localhost 启动 · 无需目标机安装 Node/npm</text>
+
+  <!-- External column -->
+  <text x="1690" y="123" class="layer-title">外部能力</text>
+  <rect x="1680" y="145" width="270" height="94" class="card external"/><text x="1815" y="178" text-anchor="middle" class="external-label">DeepSeek API</text><text x="1815" y="201" text-anchor="middle" class="external-small">语义规划 · 工具调用</text><text x="1815" y="220" text-anchor="middle" class="external-small">回答生成</text>
+  <rect x="1680" y="675" width="270" height="94" class="card external"/><text x="1815" y="708" text-anchor="middle" class="external-label">外部 MCP Server</text><text x="1815" y="731" text-anchor="middle" class="external-small">数据库 / API / 企业工具</text><text x="1815" y="750" text-anchor="middle" class="external-small">当前仅有 Client 基础</text>
+  <rect x="1680" y="805" width="270" height="94" class="card external"/><text x="1815" y="838" text-anchor="middle" class="external-label">Playwright / 多模态模型</text><text x="1815" y="861" text-anchor="middle" class="external-small">页面截图 · DOM 测量</text><text x="1815" y="880" text-anchor="middle" class="external-small">视觉验收证据</text>
+  <rect x="1680" y="1040" width="270" height="156" class="card boundary"/><text x="1815" y="1074" text-anchor="middle" class="label">当前能力边界</text><text x="1815" y="1103" text-anchor="middle" class="small">尚无通用数据库连接器</text><text x="1815" y="1127" text-anchor="middle" class="small">尚无任意 SQL 执行器</text><text x="1815" y="1151" text-anchor="middle" class="small">尚无隔离 Python 沙箱</text><text x="1815" y="1176" text-anchor="middle" class="small">这些不属于当前实现</text>
+
+  <!-- Main flow arrows -->
+  <path d="M185 176 V220 H217 V258" class="edge-green"/><path d="M460 176 V238 H1492 V258" class="edge-green"/>
+  <path d="M797 410 V501" class="edge-green"/><text x="810" y="440" class="flow-label">请求</text>
+  <path d="M797 567 V632" class="edge-green"/><text x="810" y="615" class="flow-label">任务</text>
+  <path d="M1167 785 V990 H635 V1059" class="edge-green"/><text x="1035" y="981" class="flow-label">执行内置工具</text>
+  <path d="M1070 1063 V986 H730 V374" class="edge"/><text x="741" y="992" class="flow-label">预览 / 渲染</text>
+  <path d="M985 370 V1000 H410 V1059" class="edge"/>
+  <path d="M185 1183 V1316" class="edge"/><path d="M1515 1183 V1244 H742 V1316" class="edge"/>
+
+  <!-- Agent internal flow -->
+  <path d="M302 741 H318" class="edge"/><path d="M542 741 H558" class="edge"/><path d="M782 741 H798" class="edge"/><path d="M1022 741 H1038" class="edge"/><path d="M1292 741 H1308" class="edge"/>
+  <path d="M1460 785 V805 H857 V811" class="edge"/><path d="M682 869 H666" class="edge-dash"/><text x="666" y="856" text-anchor="end" class="flow-label">失败重规划</text>
+  <path d="M522 815 V797 H912 V789" class="edge-dash"/><path d="M857 923 V945 H222 V927" class="edge"/><text x="555" y="941" class="flow-label">通过后写入任务记忆</text>
+  <path d="M222 815 V796 H192 V789" class="edge"/>
+
+  <!-- External arrows -->
+  <path d="M1425 505 V430 H1655 V192 H1676" class="edge"/><path d="M1680 192 H1655 V719 H1467 V693" class="edge"/><text x="1650" y="333" text-anchor="end" class="flow-label">模型请求</text>
+  <path d="M1607 869 H1676" class="edge"/><path d="M1607 869 V722 H1676" class="edge"/>
+  <path d="M1680 1118 H1648" class="edge-dash"/>
+
+  <!-- Step markers -->
+  <circle cx="66" cy="221" r="14" class="step"/><text x="66" y="222" class="step-num">1</text>
+  <circle cx="66" cy="464" r="14" class="step"/><text x="66" y="465" class="step-num">2</text>
+  <circle cx="66" cy="652" r="14" class="step"/><text x="66" y="653" class="step-num">3</text>
+  <circle cx="66" cy="1020" r="14" class="step"/><text x="66" y="1021" class="step-num">4</text>
+  <circle cx="66" cy="1284" r="14" class="step"/><text x="66" y="1285" class="step-num">5</text>
+</svg>

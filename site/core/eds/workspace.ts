@@ -495,6 +495,7 @@ export function installEdsWorkspaceInDataProduct(dataProduct: DataProduct, snaps
     datasets: upsertById(dataProduct.datasets, sources.map((source) => ({
       id: source.id,
       name: source.name,
+      workspaceId: EDS_WORKSPACE_PAGE_ID,
       rowCount: source.rowCount,
       columnCount: source.columnCount,
       qualityScore: source.qualityScore,

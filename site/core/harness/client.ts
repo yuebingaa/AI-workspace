@@ -6,7 +6,10 @@ import {
   harnessResponseSchema,
   type HarnessPublicRequest,
   type HarnessResponse,
+  type HarnessTraceEvent,
 } from "./contracts";
+import { readHarnessStream } from "./stream";
+import { projectHeaders } from "@/core/projects/client";
 import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 
 export const MAX_HARNESS_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -24,6 +27,8 @@ export class HarnessClientError extends Error {
 }
 
 export interface HarnessClientOptions {
+  stream?: boolean;
+  onEvent?: (event: HarnessTraceEvent) => void;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -66,14 +71,29 @@ export async function requestHarnessTask(
     }
     const fetchImpl = options.fetchImpl ?? fetch;
     const requestBody = body ?? JSON.stringify(payload);
+    const headers = projectHeaders(body ? {} : { "content-type": "application/json" });
     for (let responseAttempt = 0; responseAttempt <= MAX_HARNESS_INVALID_RESPONSE_RETRIES; responseAttempt += 1) {
-      const response = await fetchImpl("/api/ai/harness", {
+      const response = await fetchImpl(options.stream ? "/api/ai/harness/stream" : "/api/ai/harness", {
         method: "POST",
-        ...(body ? {} : { headers: { "content-type": "application/json" } }),
+        headers: Object.keys(headers).length ? headers : undefined,
         body: requestBody,
         cache: "no-store",
         signal: controller.signal,
       });
+      if (options.stream && response.ok) {
+        try {
+          const result = await readHarnessStream(response, controller.signal, (event) => {
+            if (event.taskId !== `harness_${payload.idempotencyKey}`) throw new Error("事件不属于当前请求。");
+            options.onEvent?.(event);
+          });
+          if (result.task.idempotencyKey !== payload.idempotencyKey || result.task.pageId !== payload.pageId) throw new Error("最终任务与当前请求不匹配。");
+          return result;
+        }
+        catch (error) {
+          if (controller.signal.aborted) throw error;
+          throw new HarnessClientError("invalid_response", error instanceof Error ? error.message : "事件流格式无效。", true);
+        }
+      }
       let raw: unknown = null;
       try {
         raw = JSON.parse(await readBoundedUtf8Body(response, MAX_HARNESS_RESPONSE_BYTES)) as unknown;

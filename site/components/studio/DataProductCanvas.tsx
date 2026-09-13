@@ -1,9 +1,14 @@
-import type { AppSpec, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
+import { useEffect, useRef } from "react";
+import type { AppSpec, DataRecipe, DataRow, DataSourceDefinition, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
+import type { HarnessTableArtifact } from "@/core/harness/contracts";
+import type { ExcelExportArtifact } from "@/core/exports/contracts";
 import type { StudioRole } from "@/core/permissions";
 import type { StudioPuckData } from "@/adapters/puck";
 import { AppSpecRenderer } from "./AppSpecRenderer";
 import { PuckEditorBoundary } from "./PuckEditorBoundary";
 import type { PreviewDevice } from "./StudioHeader";
+import { SpreadsheetWorkspace } from "./SpreadsheetWorkspace";
+import { StudioArtwork } from "./StudioArtwork";
 
 export type CanvasMode = "edit" | "preview";
 
@@ -13,7 +18,14 @@ export interface EdsCanvasReportOption {
   selected: boolean;
 }
 
+export interface CanvasChangeFeedback {
+  revision: string;
+  status: "preview" | "applied";
+  nodeIds: string[];
+}
+
 interface DataProductCanvasProps {
+  hidden?: boolean;
   appSpec: AppSpec;
   dataRuntime: LocalDataRuntime;
   role: StudioRole;
@@ -26,8 +38,15 @@ interface DataProductCanvasProps {
   puckData: StudioPuckData | null;
   puckSessionKey: number;
   hasPuckPreview: boolean;
+  changeFeedback?: CanvasChangeFeedback | null;
   edsReportOptions?: EdsCanvasReportOption[];
   edsAnalysisRunning?: boolean;
+  spreadsheetSource?: DataSourceDefinition;
+  spreadsheetRows?: DataRow[];
+  spreadsheetRecipe?: DataRecipe;
+  spreadsheetAiResult?: HarnessTableArtifact;
+  spreadsheetResultFocusRevision?: number;
+  spreadsheetExportArtifact?: ExcelExportArtifact;
   onUndo: () => void;
   onModeChange: (mode: CanvasMode) => void;
   onPuckDataChange: (data: StudioPuckData) => void;
@@ -36,10 +55,13 @@ interface DataProductCanvasProps {
   onCancelPuckPreview: () => void;
   onEdsReportChange?: (reportIndex: number) => void;
   onAnalyzeEdsReports?: () => void;
+  onImportSpreadsheet: () => void;
+  onOpenSpreadsheetSource: () => void;
   onQueryExecuted: (record: QueryExecutionRecord) => void;
 }
 
 export function DataProductCanvas({
+  hidden = false,
   appSpec,
   dataRuntime,
   role,
@@ -52,8 +74,15 @@ export function DataProductCanvas({
   puckData,
   puckSessionKey,
   hasPuckPreview,
+  changeFeedback,
   edsReportOptions,
   edsAnalysisRunning,
+  spreadsheetSource,
+  spreadsheetRows = [],
+  spreadsheetRecipe,
+  spreadsheetAiResult,
+  spreadsheetResultFocusRevision,
+  spreadsheetExportArtifact,
   onUndo,
   onModeChange,
   onPuckDataChange,
@@ -62,13 +91,30 @@ export function DataProductCanvas({
   onCancelPuckPreview,
   onEdsReportChange,
   onAnalyzeEdsReports,
+  onImportSpreadsheet,
+  onOpenSpreadsheetSource,
   onQueryExecuted,
 }: DataProductCanvasProps) {
   const page = appSpec.pages.find((candidate) => candidate.id === activePageId) ?? appSpec.pages[0];
   const canEdit = role !== "viewer";
+  const isBlankWorkspace = Boolean(page && (page.root.children?.length ?? 0) === 0 && !spreadsheetSource);
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!changeFeedback) return;
+    const frame = requestAnimationFrame(() => {
+      const candidates = viewportRef.current?.querySelectorAll<HTMLElement>("[data-node-id]") ?? [];
+      const target = Array.from(candidates).find((candidate) => (
+        changeFeedback.nodeIds.includes(candidate.dataset.nodeId ?? "")
+      ));
+      const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      target?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "center", inline: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [changeFeedback]);
 
   return (
-    <section className="canvas-area">
+    <section className="canvas-area" hidden={hidden}>
       <div className="canvas-toolbar">
         <div><button type="button" disabled={!canUndo} onClick={onUndo}>↶</button><button type="button" disabled>↷</button><span>100%</span></div>
         <div className="canvas-mode-switch" aria-label="画布模式">
@@ -106,7 +152,13 @@ export function DataProductCanvas({
           >{edsAnalysisRunning ? "AI 正在分析…" : "AI 分析全部班次"}</button>
         </div>
       )}
-      <div className="canvas-design-viewport" tabIndex={0} aria-label="看板滚动区域">
+      <div ref={viewportRef} className="canvas-design-viewport" tabIndex={0} aria-label="看板滚动区域">
+        {changeFeedback && (
+          <div className={`canvas-change-feedback ${changeFeedback.status}`} role="status">
+            <i aria-hidden="true">{changeFeedback.status === "applied" ? "✓" : "✦"}</i>
+            <span><b>{changeFeedback.status === "applied" ? "变更已应用" : "已定位变更组件"}</b><small>{changeFeedback.status === "applied" ? "正式页面已经更新" : "边框标记区域是本次预览内容"}</small></span>
+          </div>
+        )}
         {mode === "edit" ? (
           <div className="puck-editor-stage">
             {puckData ? (
@@ -125,10 +177,41 @@ export function DataProductCanvas({
             ) : <div className="puck-loading">没有可编辑的页面数据</div>}
           </div>
         ) : (
-          <div className={`device-stage ${device} ${isPreviewing ? "previewing" : ""}`}>
-            <div className="dashboard">
-              {page ? <AppSpecRenderer node={page.root} context={{ dataSources: appSpec.dataSources, dataRuntime, pageId: page.id, queryRevision: `canvas:${appSpecRevision}:${isPreviewing ? "preview" : "formal"}`, onQueryExecuted }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
-            </div>
+          <div className={`device-stage ${device} ${isPreviewing ? "previewing" : ""}${isBlankWorkspace ? " is-empty" : ""}`}>
+            {isBlankWorkspace ? (
+              <div className="empty-workspace-canvas">
+                <div className="canvas-empty-copy">
+                  <span className="canvas-empty-eyebrow">从数据到洞察</span>
+                  <h2>{page?.title ?? "空白工作界面"}</h2>
+                  <p>每一个好看板，都从一份数据开始。<br />导入表格，让 AI 帮你把发现变成清晰的图表。</p>
+                  <button type="button" onClick={onImportSpreadsheet}>导入第一份表格 <span aria-hidden="true">↗</span></button>
+                  <small>支持 CSV / XLSX · 可同时导入多份文件</small>
+                </div>
+                <StudioArtwork className="canvas-empty-art" />
+              </div>
+            ) : <div className="dashboard">
+              {page ? <AppSpecRenderer node={page.root} context={{
+                dataSources: appSpec.dataSources,
+                dataRuntime,
+                pageId: page.id,
+                queryRevision: `canvas:${appSpecRevision}:${isPreviewing ? "preview" : "formal"}`,
+                onQueryExecuted,
+                ...(changeFeedback ? {
+                  highlightedNodeIds: changeFeedback.nodeIds,
+                  changeFeedback: changeFeedback.status,
+                } : {}),
+              }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
+            </div>}
+            <SpreadsheetWorkspace
+              source={spreadsheetSource}
+              rows={spreadsheetRows}
+              recipe={spreadsheetRecipe}
+              aiResult={spreadsheetAiResult}
+              resultFocusRevision={spreadsheetResultFocusRevision}
+              exportArtifact={spreadsheetExportArtifact}
+              onImportSpreadsheet={onImportSpreadsheet}
+              onOpenDataSource={onOpenSpreadsheetSource}
+            />
           </div>
         )}
       </div>

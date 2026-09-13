@@ -9,14 +9,13 @@ describe("WorkspaceSidebarRail", () => {
       toggleButtonRef={createRef<HTMLButtonElement>()}
       hasOriginalWorkbook={false}
       onExpand={() => undefined}
-      onOpenEdsAnalysis={() => undefined}
       onUploadCsv={() => undefined}
       onOpenOriginalWorkbook={() => undefined}
     />);
 
     expect(html).toContain('aria-label="打开侧边栏"');
-    expect(html).toContain('aria-label="EDS 分析"');
-    expect(html).toContain('aria-label="上传 CSV"');
+    expect(html).not.toContain('aria-label="EDS 分析"');
+    expect(html).toContain('aria-label="导入表格"');
     expect(html).toContain('aria-label="放置原始表格"');
     expect(html).not.toContain("disabled");
   });
@@ -26,7 +25,6 @@ describe("WorkspaceSidebarRail", () => {
       toggleButtonRef={createRef<HTMLButtonElement>()}
       hasOriginalWorkbook
       onExpand={() => undefined}
-      onOpenEdsAnalysis={() => undefined}
       onUploadCsv={() => undefined}
       onOpenOriginalWorkbook={() => undefined}
     />);

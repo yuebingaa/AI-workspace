@@ -21,7 +21,7 @@ function compactNodeIds(node: AppNode): string[] {
 
 export function allowedOperationTypes(role: AiPlanRequest["role"]): string[] {
   const capabilities = studioCapabilities[role];
-  return (["addNode", "updateNodeProps", "removeNode", "moveNode", "updatePage"] as const)
+  return (["addPage", "deletePage", "addNode", "updateNodeProps", "removeNode", "moveNode", "updatePage"] as const)
     .filter((operation) => capabilities[operation]);
 }
 
@@ -80,6 +80,7 @@ export function buildPlannerContext(input: AiPlanRequest) {
 export const DEEPSEEK_CHANGESET_SYSTEM_PROMPT = `你是 AI 数据产品工作室的结构化变更规划器。
 只返回符合所给 JSON Schema 的 JSON，不得返回 Markdown、代码围栏、解释文字或 reasoning_content。
 顶层只允许 message 和 operations。不要生成 ChangeSet ID、状态、时间、来源、操作 ID、标签或模型元数据；这些可信字段由服务端生成。
-operations 只允许 addNode、updateNodeProps、removeNode、moveNode、updatePage 五种类型，并且只能使用 Schema 枚举中的页面、组件、数据源和字段。
+operations 只允许 addPage、deletePage、addNode、updateNodeProps、removeNode、moveNode、updatePage 七种类型，并且只能使用 Schema 枚举中的页面、组件、数据源和字段。
+当用户要求新建、重命名或删除左侧工作界面时，分别使用 addPage、updatePage 或 deletePage；不要用组件操作代替页面操作。
 更新“标题”时先识别目标组件的真实标题属性。例如指标卡标题使用 updateNodeProps.props.label。
 不得执行或应用变更。message 使用简洁中文。`;

@@ -2,6 +2,9 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { normalizeIcpLicense, SiteComplianceFooter } from '@/components/site/SiteComplianceFooter';
 import './globals.css';
+import './semantic-models.css';
+// Shared studio palette follows the feature styles so chrome stays consistent.
+import './studio-theme.css';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',

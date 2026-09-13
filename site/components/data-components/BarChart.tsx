@@ -19,12 +19,15 @@ import {
   YAxis,
 } from "recharts";
 import type { BarChartColor, BarChartProps } from "@/core/models";
+import { componentTypographyStyle } from "./typography";
 
 interface BarChartViewProps extends Omit<BarChartProps, "binding"> {
   labels: string[];
   values: number[];
   yAxis: string[];
   domain: { minimum: number; maximum: number };
+  nodeId?: string;
+  changeFeedback?: "preview" | "applied";
 }
 
 interface ChartDatum {
@@ -198,7 +201,7 @@ function RadialChart({ labels, values, palette, donut, showValues }: Pick<BarCha
 
 const chartTypeLabels = { bar: "汇总值", line: "折线趋势", area: "面积趋势", pie: "分类占比", donut: "分类占比" } as const;
 
-export function BarChart({ title, subtitle, color = "green", chartType = "bar", showValues = false, labels, values, yAxis, domain }: BarChartViewProps) {
+export function BarChart({ title, subtitle, color = "green", chartType = "bar", showValues = false, labels, values, yAxis, domain, nodeId, changeFeedback, ...typography }: BarChartViewProps) {
   const palette = BAR_CHART_PALETTES[color];
   const colorVariables = {
     "--chart-bar-color": palette.bar,
@@ -215,10 +218,12 @@ export function BarChart({ title, subtitle, color = "green", chartType = "bar", 
       data-show-values={showValues ? "true" : "false"}
       data-has-negative={values.some((value) => value < 0) ? "true" : "false"}
       data-has-positive={values.some((value) => value >= 0) ? "true" : "false"}
+      data-node-id={nodeId}
+      data-change-feedback={changeFeedback}
       style={colorVariables}
     >
       <div className="card-head">
-        <div><b>{title}</b><small>{subtitle}</small></div>
+        <div><b style={componentTypographyStyle(typography)}>{title}</b><small>{subtitle}</small></div>
         <span className="legend"><i />{chartTypeLabels[chartType]}</span>
       </div>
       {chartType === "bar" && <div className={`chart${prefersVerticalLabels(labels) ? " vertical-labels" : ""}`}><div className="y-axis">{yAxis.map((label, index) => <span key={`${index}-${label}`}>{label}</span>)}</div><BarColumns labels={labels} values={values} domain={domain} showValues={showValues} palette={palette} /></div>}

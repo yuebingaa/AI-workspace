@@ -6,6 +6,7 @@ export function loadInstructions(): string[] {
     "表格 sort 数组从前到后表示优先级；‘先按线体、再按异常分类’对应 line asc、category asc，不依赖交叉明细。",
     "visibleColumns 同时决定显示字段和列顺序；不要擅自隐藏用户未要求删除的重要指标。",
     "所有写操作只生成待确认 ChangeSet；工具存在且参数足够时必须调用，不得因缺少无关原始数据或分析字段而阻塞。",
+    "用户要求管理左侧工作界面时，把工作界面视为页面而不是内部组件：新增用 addPage，重命名用 updatePage，删除用 deletePage；必须依据 workspaceInterfaces 的名称与 ID 精确定位。",
     "预览说明应概括目标组件和实际变化，避免只写‘检查’或‘完成’。",
   ];
 }

@@ -1,11 +1,12 @@
 import { datasetConsentRequestSchema } from "@/core/datasets";
 import {
   DatasetAiAccessPolicyConflictError,
-  datasetRepository,
 } from "@/core/datasets/server/dataset-repository";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 import { StudioValidationError } from "@/core/schemas";
+import { requestDatasetRepository, projectErrorResponse } from "@/core/projects/server/request";
+import { ProjectError } from "@/core/projects/server/store";
 
 export const runtime = "nodejs";
 
@@ -54,9 +55,10 @@ export async function POST(request: Request) {
   const parsed = datasetConsentRequestSchema.safeParse(raw);
   if (!parsed.success) return Response.json({ error: { message: "敏感字段处理方式无效。" } }, { status: 400, headers: noStoreHeaders });
   try {
-    const dataset = await datasetRepository.setAiAccessPolicy(resolveDemoRequestIdentity(), datasetId, parsed.data.policy);
+    const dataset = await requestDatasetRepository(request).setAiAccessPolicy(resolveDemoRequestIdentity(), datasetId, parsed.data.policy);
     return Response.json({ dataset }, { headers: noStoreHeaders });
   } catch (error) {
+    if (error instanceof ProjectError) return projectErrorResponse(error);
     if (error instanceof DatasetAiAccessPolicyConflictError) {
       return Response.json({ error: { message: error.message } }, { status: 409, headers: noStoreHeaders });
     }

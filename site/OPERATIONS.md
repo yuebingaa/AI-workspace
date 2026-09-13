@@ -6,6 +6,8 @@
 
 ## 启动与停止
 
+本工作区已提供经用户确认的本机后台运行方案：日常稳定站使用 `http://127.0.0.1:3000`，开发站使用 `http://127.0.0.1:3001`。启停、发布、回退和数据位置见 [稳定运行说明](./STABLE-RUNTIME.md)。下文的 `pnpm dev` 为前台调试方式，不要与受管服务争用同一端口。
+
 要求 Node.js 22.13 或更高版本。首次在当前工作树运行：
 
 ```powershell
@@ -13,7 +15,7 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm dev
 ```
 
-生产构建验证使用 `corepack pnpm build`。本项目没有获准部署；构建成功不代表允许发布。
+生产构建验证使用 `corepack pnpm build`。本次授权限于本机后台运行；构建成功不代表允许部署到公网。
 
 前台运行时按 `Ctrl+C` 停止。停止后确认进程已退出，再检查 `GET /api/health` 不再可访问。禁止以明文命令行参数传入 API 密钥。
 
@@ -83,11 +85,13 @@ Invoke-RestMethod http://127.0.0.1:3000/api/health
 corepack pnpm test
 corepack pnpm test:eval
 corepack pnpm test:eds:browser:unit
-corepack pnpm exec tsc --noEmit --incremental false
 corepack pnpm lint
 corepack pnpm build
+npm run typecheck -- --incremental false
 corepack pnpm audit --prod
 ```
+
+全量类型检查使用 `npm run typecheck`（`next typegen` → `tsc --noEmit`）。当前运行构建使用 vinext，但保留 Next.js 的页面、布局和 API 路由签名校验；两者会生成不同格式的 `.next/types/routes.d.ts`，因此检查前必须重新生成同一套配套类型，不能依赖上一次构建缓存。命令仍检查源码、测试及路由校验文件，没有放宽 `strict` 或排除报错文件。构建与类型检查应串行执行；构建或增删路由后重新运行该命令。生成文件不手工修改、不提交 Git，此命令不启动、停止或发布网站。
 
 真实 EDS 原始材料验收不会混入普通离线测试。先以只读路径显式设置输入与目标模板，再运行专用命令；缺少任一路径时命令会失败，不能以“跳过”冒充验收成功：
 

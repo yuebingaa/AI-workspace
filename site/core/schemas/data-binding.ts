@@ -97,7 +97,7 @@ export const dataSourceDefinitionSchema: z.ZodType<DataSourceDefinition> = z.obj
   columnCount: z.number().int().nonnegative(),
   qualityScore: z.number().min(0).max(100),
   updatedAt: z.iso.datetime(),
-  sourceType: z.enum(["csv", "json", "local-fixture"]),
+  sourceType: z.enum(["csv", "json", "local-fixture", "bi"]),
   fields: z.array(dataSourceFieldSchema).min(1),
   expiresAt: z.iso.datetime().optional(),
   ephemeral: z.boolean().optional(),

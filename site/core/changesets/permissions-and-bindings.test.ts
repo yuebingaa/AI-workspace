@@ -77,7 +77,7 @@ describe("数据绑定 ChangeSet 与编辑权限", () => {
     expect(() => undoLastChange(applied, "viewer")).toThrow(/查看者无权撤销/);
   });
 
-  it("editor 可以添加、排序和修改，但不能删除组件或修改页面结构", () => {
+  it("editor 可以添加、排序、修改和重命名页面，但不能删除组件", () => {
     const { dataProduct } = fixtures();
     const state = createExecutionState(dataProduct.appSpec);
     const remove: ChangeSet = {
@@ -93,7 +93,8 @@ describe("数据绑定 ChangeSet 与编辑权限", () => {
       operations: [{ id: "update_page", type: "updatePage", label: "重命名页面", description: "权限测试", pageId: "page_home", title: "新名称" }],
     };
     expect(() => applyChangeSet(state, remove, "editor")).toThrow(/编辑者无权删除组件/);
-    expect(() => applyChangeSet(state, updatePage, "editor")).toThrow(/编辑者无权修改页面结构/);
+    const renamed = applyChangeSet(state, updatePage, "editor");
+    expect(renamed.present.pages.find((page) => page.id === "page_home")?.title).toBe("新名称");
   });
 
   it("admin 可以删除组件和修改页面结构", () => {

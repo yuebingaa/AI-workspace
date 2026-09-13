@@ -3,6 +3,7 @@ import { demoFixtureResult } from "@/fixtures/demo-product";
 import type { HarnessObservation, HarnessRequest, HarnessWorkingMemory } from "./contracts";
 import {
   createHarnessExecutionPlan,
+  createModelHarnessExecutionPlan,
   finishHarnessExecutionPlan,
   harnessExecutionPlanContext,
   replanHarnessExecutionPlanAfterVerification,
@@ -36,6 +37,43 @@ describe("Harness Planner / Executor 分离", () => {
       currentStep: { objective: "检查目标数据集概况" },
       allowedTools: ["inspectDataset"],
     });
+  });
+
+  it("模型计划为每一步补充证据和完成条件，同时不能打乱安全工具顺序", () => {
+    const input = request();
+    const fallback = createHarnessExecutionPlan(input);
+    const plan = createModelHarnessExecutionPlan(input.instruction, fallback, {
+      goal: "先验证数据，再生成标题变更预览",
+      rationale: "Evidence Bus 尚无数据工具结果，需要先检查数据集。",
+      steps: [
+        {
+          objective: "生成最小标题 ChangeSet",
+          toolName: "createChangeSetPreview",
+          requiredEvidence: ["已验证的目标组件"],
+          completionCriteria: ["ChangeSet 只修改标题"],
+        },
+        {
+          objective: "确认 retail_orders 数据概况",
+          toolName: "inspectDataset",
+          requiredEvidence: ["数据集行列统计"],
+          completionCriteria: ["数据集工具成功返回"],
+        },
+      ],
+      finalResponseCriteria: ["关键声明引用 Evidence Bus 证据", "正式页面保持不变"],
+    });
+
+    expect(plan.source).toBe("model");
+    expect(plan.steps.map((step) => step.toolName).filter(Boolean)).toEqual([
+      "inspectDataset",
+      "createChangeSetPreview",
+    ]);
+    expect(plan.steps[0]).toMatchObject({
+      objective: "确认 retail_orders 数据概况",
+      requiredEvidence: ["数据集行列统计"],
+      completionCriteria: ["数据集工具成功返回"],
+    });
+    expect(plan.steps.at(-1)?.completionCriteria).toContain("正式页面保持不变");
+    expect(plan.steps.at(-1)?.completionCriteria).toContain("最终回答逐项说明修改对象、修改字段和改前/改后值");
   });
 
   it("Executor 完成当前步骤后只激活下一步，完成时关闭工具权限", () => {

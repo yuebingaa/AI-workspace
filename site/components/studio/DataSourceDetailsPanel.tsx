@@ -29,7 +29,7 @@ const tabs: Array<{ id: DataSourceTab; label: string }> = [
 ];
 
 const typeLabels = { string: "文本", number: "数值", date: "日期", boolean: "布尔值" } as const;
-const sourceTypeLabels = { csv: "CSV 文件", json: "JSON 文件", "local-fixture": "本地 Fixture" } as const;
+const sourceTypeLabels = { csv: "CSV 文件", json: "JSON 文件", "local-fixture": "本地 Fixture", bi: "BI 连接器" } as const;
 const stepTypeLabels: Record<DataRecipeStep["type"], string> = {
   selectFields: "选择字段",
   filter: "筛选",
@@ -134,7 +134,7 @@ export function DataSourceDetailsPanel({
   }
 
   async function deleteDataset() {
-    if (!onDelete || !window.confirm("确定删除这个临时数据集吗？删除后无法恢复。")) return;
+    if (!onDelete || !window.confirm(source.ephemeral ? "确定删除这个临时数据集吗？删除后无法恢复。" : "将数据表移入项目回收站？原始文件会保留，可在 Data Browser 中恢复。")) return;
     setDatasetActionBusy(true);
     setDatasetActionError(null);
     try { await onDelete(); } catch (error) { setDatasetActionError(readableError(error)); setDatasetActionBusy(false); }
@@ -157,7 +157,7 @@ export function DataSourceDetailsPanel({
       >
         <header className="data-source-panel-head">
           <div><span className="db">◉</span><div><small>数据源工作区</small><h2>{source.name}</h2></div></div>
-          <div className="data-source-head-actions">{source.ephemeral && onDelete && <button type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>删除数据集</button>}<button type="button" aria-label="关闭数据源详情" disabled={datasetActionBusy} onClick={onClose}>×</button></div>
+          <div className="data-source-head-actions">{source.sourceType === "csv" && onDelete && <button type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>{source.ephemeral ? "删除数据集" : "移入回收站"}</button>}<button type="button" aria-label="关闭数据源详情" disabled={datasetActionBusy} onClick={onClose}>×</button></div>
         </header>
         <nav className="data-source-tabs" aria-label="数据源详情标签">
           {tabs.map((item) => (
@@ -174,13 +174,14 @@ export function DataSourceDetailsPanel({
             <div className="source-overview-grid">
               <article><span>数据源名称</span><b>{source.name}</b><small>{source.id}</small></article>
               <article><span>数据规模</span><b>{source.rowCount.toLocaleString("zh-CN")} 行</b><small>{source.columnCount} 个字段</small></article>
-              <article><span>更新时间</span><b>{new Date(source.updatedAt).toLocaleString("zh-CN")}</b><small>{source.ephemeral ? "上传解析时间" : "Fixture 固定时间"}</small></article>
+              <article><span>更新时间</span><b>{new Date(source.updatedAt).toLocaleString("zh-CN")}</b><small>{source.sourceType === "csv" ? "上传解析时间" : "数据更新时间"}</small></article>
               <article><span>数据质量</span><b>{source.qualityScore}%</b><small>{source.quality ? `空值率 ${(source.quality.nullRate * 100).toFixed(1)}% · 重复行 ${source.quality.duplicateRowCount}` : "通过本地结构校验"}</small></article>
-              <article><span>数据类型</span><b>{sourceTypeLabels[source.sourceType]}</b><small>{source.ephemeral ? "服务端临时存储" : "阶段 A 本地数据"}</small></article>
+              <article><span>数据类型</span><b>{sourceTypeLabels[source.sourceType]}</b><small>{source.ephemeral ? "服务端临时存储" : source.sourceType === "csv" ? "本地项目持久存储" : source.sourceType === "bi" ? "外部同步数据" : "阶段 A 本地数据"}</small></article>
               {source.expiresAt && <article><span>保留时间</span><b>{new Date(source.expiresAt).toLocaleString("zh-CN")}</b><small>到期必定失效；重启恢复取决于本地持久化配置</small></article>}
             </div>
             {source.quality && <div className="dataset-quality-summary"><span>类型冲突 <b>{source.quality.typeConflictCount}</b></span><span>异常提示 <b>{source.quality.anomalies.length}</b></span><span>重复行 <b>{source.quality.duplicateRowCount}</b></span></div>}
             {source.ephemeral && <div className="dataset-ephemeral-notice">上传数据不会写入浏览器 localStorage；服务端最多保留 30 分钟，未启用本地持久化时重启失效。</div>}
+            {source.sourceType === "csv" && !source.ephemeral && <div className="dataset-ephemeral-notice">数据已保存到本地项目文件夹，不按临时保留期过期。请定期备份整个项目。</div>}
             {source.fields.some((field) => field.sensitiveCategories?.length) && (
               <div className={`dataset-sensitive-card ${source.aiAccessPolicy === "pending" ? "pending" : "confirmed"}`}>
                 <b>敏感字段风险标记</b>

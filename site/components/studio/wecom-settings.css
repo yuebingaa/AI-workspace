@@ -1,0 +1,29 @@
+.wecom-trigger { white-space: nowrap; }
+.wecom-status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--studio-muted); }
+.wecom-status-dot.connected { background: #10b981; }
+.wecom-dialog { padding: 0; width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; border: 1px solid var(--studio-border); border-radius: 18px; color: var(--studio-ink); background: var(--studio-surface); box-shadow: 0 24px 80px color-mix(in srgb, var(--studio-ink) 21.96%, transparent); }
+.wecom-dialog::backdrop { background: color-mix(in srgb, var(--studio-ink) 37.65%, transparent); }
+.wecom-dialog-content { padding: 24px; display: grid; gap: 18px; font-size: 13px; line-height: 1.65; }
+.wecom-dialog header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.wecom-dialog h2 { margin: 0; font-size: 21px; }
+.wecom-dialog h3 { margin: 0 0 8px; font-size: 14px; }
+.wecom-dialog p { margin: 4px 0 0; }
+.wecom-dialog ul { padding-left: 20px; margin: 0 0 8px; }
+.wecom-dialog button { cursor: pointer; border: 1px solid var(--studio-border); background: var(--studio-surface); padding: 8px 12px; border-radius: 8px; font: inherit; color: var(--studio-ink); }
+.wecom-dialog button:focus-visible, .wecom-dialog input:focus-visible { outline: 3px solid var(--studio-border); outline-offset: 2px; }
+.wecom-dialog button:disabled { opacity: .5; cursor: not-allowed; }
+.wecom-dialog header button { padding: 0 9px; font-size: 24px; }
+.wecom-dialog header p, .wecom-muted { color: var(--studio-secondary); font-size: 12px; }
+.wecom-connection-card { background: var(--studio-paper); border: 1px solid var(--studio-border); border-radius: 12px; padding: 14px; }
+.wecom-connection-card.connected { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+.wecom-consent { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: var(--studio-paper); border-radius: 10px; }
+.wecom-consent input { margin-top: 5px; flex: none; }
+.wecom-qr { text-align: center; }
+.wecom-qr img { max-width: 100%; object-fit: contain; background: var(--studio-surface); }
+.wecom-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wecom-dialog .wecom-primary { background: var(--studio-ink); border-color: var(--studio-ink); color: white; }
+.wecom-error { color: #b91c1c; }
+.wecom-examples { display: grid; gap: 8px; }
+.wecom-examples button { text-align: left; background: var(--studio-surface); }
+.wecom-footer { border-top: 1px solid var(--studio-border); padding-top: 14px; }
+@media (max-width: 600px) { .wecom-dialog-content { padding: 18px; } .wecom-dialog { max-height: calc(100dvh - 24px); } }

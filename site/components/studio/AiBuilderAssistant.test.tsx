@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { appendHarnessEvent, createHarnessTask, type AssistantConversationTurn, type HarnessTaskSummary } from "@/core/harness";
 import { demoFixtureResult } from "@/fixtures/demo-product";
-import { AiBuilderAssistant, isConversationNearBottom, type AiRequestUiStatus } from "./AiBuilderAssistant";
+import { AiBuilderAssistant, clipboardImageFiles, isConversationNearBottom, type AiRequestUiStatus } from "./AiBuilderAssistant";
 
 const clock = {
   now: () => new Date("2026-09-02T03:00:00.000Z"),
@@ -39,6 +39,7 @@ function render(
   conversationTurns: AssistantConversationTurn[] = [],
   pendingInstruction = "",
   imageAttachments: File[] = [],
+  presentation: "sidebar" | "workspace" = "sidebar",
 ) {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
   return renderToStaticMarkup(<AiBuilderAssistant
@@ -49,15 +50,14 @@ function render(
     validationError={null}
     canApply
     canPreview={false}
-    auditRecords={[]}
     aiMessage="测试消息"
     aiMetadata={null}
     instruction="测试指令"
     requestStatus={status}
     requestError={requestError}
-    canRetry={false}
+    canRetry={status === "error"}
     harnessTask={harnessTask}
-    harnessTaskCount={1}
+    presentation={presentation}
     conversationTurns={conversationTurns}
     pendingInstruction={pendingInstruction}
     dataAnalysisMode={dataAnalysisMode}
@@ -75,6 +75,49 @@ function render(
 }
 
 describe("AI 助手 Harness 状态", () => {
+  it("失败解释只显示在当前聊天回复中，保留重试入口", () => {
+    const failed = task("failed");
+    const response = "暂时没能完成销售数据检查，你可以缩小范围后再试。";
+    const turns: AssistantConversationTurn[] = [{ id: "failed_turn", instruction: failed.instruction,
+      response, taskId: failed.id, createdAt: failed.updatedAt, state: "failed" }];
+    const html = render("error", failed, response, false, turns);
+    expect(html.split(response)).toHaveLength(2);
+    expect(html).not.toContain("AI 生成失败");
+    expect(html).toContain("重试这次任务");
+    // An unrelated error (e.g. failed context clearing) must still be visible.
+    expect(render("error", failed, "上下文清除失败", false, turns)).toContain("上下文清除失败");
+  });
+  it("工作台和侧栏移除顶部运行详情，保留回答执行过程和下载入口", () => {
+    const completed: HarnessTaskSummary = {
+      ...task("completed"),
+      trace: [{
+        id: "trace_no_diagnostics",
+        sequence: 1,
+        taskId: task("completed").id,
+        timestamp: clock.now().toISOString(),
+        type: "context_loaded",
+        message: "已读取数据上下文。",
+      }],
+    };
+    const turns: AssistantConversationTurn[] = [{
+      id: "turn_no_diagnostics",
+      instruction: completed.instruction,
+      response: completed.resultMessage!,
+      createdAt: completed.updatedAt,
+      state: "success",
+      taskId: completed.id,
+    }];
+    for (const presentation of ["sidebar", "workspace"] as const) {
+      const html = render("success", completed, null, false, turns, "", [], presentation);
+      expect(html).not.toContain("运行详情");
+      expect(html).not.toContain("assistant-diagnostics");
+      expect(html).toContain("harness-trace success");
+      expect(html).toContain("已完成分析");
+      expect(html).toContain("已读取数据上下文。");
+      expect(html).toContain("下载 Excel");
+    }
+  });
+
   it("输入框提供图片上传入口并显示待发送图片", () => {
     const image = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], "页面问题.jpg", { type: "image/jpeg" });
     const html = render("idle", task("completed"), null, false, [], "", [image]);
@@ -83,6 +126,19 @@ describe("AI 助手 Harness 状态", () => {
     expect(html).toContain("页面问题.jpg");
     expect(html).toContain("1 张图片");
     expect(html).toContain('accept="image/jpeg,image/png,image/webp"');
+    expect(html).toContain("Ctrl+V 粘贴图片");
+  });
+
+  it("从剪贴板提取支持的图片并忽略文字或不支持文件", () => {
+    const png = new File([new Uint8Array([1, 2, 3])], "截图.png", { type: "image/png" });
+    const gif = new File([new Uint8Array([4, 5, 6])], "动图.gif", { type: "image/gif" });
+    const files = clipboardImageFiles([
+      { kind: "string", type: "text/plain", getAsFile: () => null },
+      { kind: "file", type: "image/png", getAsFile: () => png },
+      { kind: "file", type: "image/gif", getAsFile: () => gif },
+    ]);
+
+    expect(files).toEqual([png]);
   });
 
   it("只有接近消息底部时才保持自动贴底", () => {
@@ -107,142 +163,6 @@ describe("AI 助手 Harness 状态", () => {
     expect(completed).toContain("华东异常订单.xlsx");
   });
 
-  it("运行详情显示本次 Harness 自动加载的 Skill", () => {
-    const skilledTask = createHarnessTask("assistant_skill_task", "增加一个饼图", "page_home", "editor", clock, {
-      skills: [{ id: "data-visualization", name: "数据可视化", version: "1.0.0" }],
-    });
-    const html = render("success", skilledTask, null, true);
-
-    expect(html).toContain("已加载 Skill");
-    expect(html).toContain("数据可视化 v1.0.0");
-    expect(html).toContain('aria-label="本次加载的技能"');
-  });
-
-  it("运行详情显示 Working Memory 的完成、验证、待办与失败路径", () => {
-    const memoryTask: HarnessTaskSummary = {
-      ...createHarnessTask("assistant_memory_task", "检查并分析数据", "page_home", "editor", clock),
-      workingMemory: {
-        goal: "检查并分析数据",
-        iteration: 3,
-        confirmedDataSources: [{ id: "dataset_retail_orders", rowCount: 48, columnCount: 14 }],
-        confirmedFields: [],
-        completedTools: ["inspectDataset"],
-        completedSteps: ["已检查数据集概况"],
-        keyStatistics: ["dataset_retail_orders: 48 行 / 14 列"],
-        pendingGoals: ["确认分析字段"],
-        failedAttempts: [{
-          toolName: "inspectFields",
-          failureKind: "execution",
-          attempt: 1,
-          issueSummary: ["字段服务暂时不可用"],
-          status: "recovering",
-        }],
-        missingCapabilities: [],
-      },
-    };
-    const html = render("success", memoryTask, null, true);
-
-    expect(html).toContain('aria-label="Harness Working Memory"');
-    expect(html).toContain("Working Memory");
-    expect(html).toContain("第 3 轮");
-    expect(html).toContain("已完成 1");
-    expect(html).toContain("已验证 1");
-    expect(html).toContain("待办 1");
-    expect(html).toContain("失败路径 1");
-    expect(html).toContain("下一步：确认分析字段");
-  });
-
-  it("运行详情显示 Planner 计划版本与逐步执行状态", () => {
-    const plannedTask: HarnessTaskSummary = {
-      ...createHarnessTask("assistant_plan_task", "检查数据后生成图表", "page_home", "editor", clock),
-      executionPlan: {
-        revision: 2,
-        goal: "检查数据后生成图表",
-        currentStepId: "step_2_preview",
-        allowedTools: ["createChangeSetPreview"],
-        replanReason: "第 1 次重新规划：图表专用工具暂时不可用",
-        steps: [{
-          id: "step_1_inspect",
-          kind: "tool",
-          objective: "检查目标数据集概况",
-          toolName: "inspectDataset",
-          status: "completed",
-          attempts: 0,
-        }, {
-          id: "step_2_preview",
-          kind: "tool",
-          objective: "生成页面变更预览",
-          toolName: "createChangeSetPreview",
-          status: "active",
-          attempts: 1,
-        }, {
-          id: "step_3_finalize",
-          kind: "finalize",
-          objective: "提交待确认 ChangeSet 并暂停，等待用户确认",
-          status: "pending",
-          attempts: 0,
-        }],
-      },
-    };
-    const html = render("loading", plannedTask, null, true);
-
-    expect(html).toContain('aria-label="Planner 执行计划"');
-    expect(html).toContain("Planner 执行计划");
-    expect(html).toContain("v2");
-    expect(html).toContain("检查目标数据集概况");
-    expect(html).toContain("生成页面变更预览");
-    expect(html).toContain("已完成");
-    expect(html).toContain("执行中");
-    expect(html).toContain("Replan：第 1 次重新规划");
-  });
-
-  it("运行详情显示真正的任务级 Verifier 验收结果", () => {
-    const verifiedTask: HarnessTaskSummary = {
-      ...createHarnessTask("assistant_verifier_task", "检查数据质量", "page_home", "editor", clock),
-      verification: {
-        attempt: 2,
-        status: "passed",
-        checks: [{
-          id: "planned_steps",
-          label: "计划完成度",
-          status: "passed",
-          detail: "Planner 要求的工具步骤均有成功观察证据。",
-        }, {
-          id: "formal_app_protection",
-          label: "正式页面保护",
-          status: "passed",
-          detail: "正式 AppSpec 未被执行过程直接修改。",
-        }],
-        issues: [],
-        evidenceToolCallIds: ["call_dataset"],
-        visualEvidence: {
-          required: true,
-          status: "passed",
-          source: "playwright-multimodal",
-          summary: "桌面与窄屏均无重叠。",
-          model: "vision-test",
-          capturedAt: "2026-09-06T00:00:00.000Z",
-          screenshots: [{
-            viewport: { width: 1440, height: 1000 },
-            pageUrl: "http://127.0.0.1:3102/",
-            mimeType: "image/jpeg",
-            byteLength: 1024,
-            sha256: "a".repeat(64),
-          }],
-          checks: [],
-          issues: [],
-        },
-      },
-    };
-    const html = render("success", verifiedTask, null, true);
-
-    expect(html).toContain('aria-label="任务级 Verifier"');
-    expect(html).toContain("验收通过 · 第 2 次");
-    expect(html).toContain("计划完成度");
-    expect(html).toContain("正式页面保护");
-    expect(html).toContain('aria-label="Playwright 视觉证据"');
-    expect(html).toContain("视觉通过 · 1 张截图");
-  });
 
   it("EDS 上下文显示数据分析、看板预览能力和隐私边界", () => {
     const html = render("success", task("completed"), null, true);
@@ -275,8 +195,8 @@ describe("AI 助手 Harness 状态", () => {
     expect(html).toContain("已回复 · Harness");
     expect(html).toContain("已回复 · 本地回复");
     expect(html).toContain("清除上下文");
-    expect(html).toContain("运行详情");
-    expect(html).not.toContain('class="assistant-diagnostics" open');
+    expect(html).not.toContain("运行详情");
+    expect(html).not.toContain("assistant-diagnostics");
     expect(html).not.toContain("测试指令</div>");
   });
 

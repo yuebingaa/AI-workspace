@@ -211,7 +211,7 @@ describe("CSV 服务端流式解析", () => {
       ["创建时间", (candidate) => { candidate.dataset.source.updatedAt = "2026-09-02T06:00:01.000Z"; }],
       ["到期时间", (candidate) => { candidate.dataset.source.expiresAt = "2026-09-02T06:31:00.000Z"; }],
       ["AI 策略", (candidate) => { candidate.dataset.aiAccessPolicy = "masked"; }],
-      ["保留分钟", (candidate) => { candidate.dataset.retentionMinutes += 1; }],
+      ["保留分钟", (candidate) => { candidate.dataset.retentionMinutes = (candidate.dataset.retentionMinutes ?? 0) + 1; }],
       ["字段映射", (candidate) => { candidate.dataset.fieldMappings[0].normalizedName = "other"; }],
       ["敏感目录", (candidate) => { candidate.dataset.sensitiveFields[0].categories = ["phone"]; }],
       ["隐藏行字段", (candidate) => { candidate.rows[0].hidden_secret = "不可接受"; }],

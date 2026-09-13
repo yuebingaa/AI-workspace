@@ -10,7 +10,7 @@ import {
   type HarnessVisualVerificationEvidence,
   type HarnessVerificationCheck,
 } from "./contracts";
-import { plannedHarnessToolSequence } from "./context-selector";
+import { plannedHarnessToolSequence, resolveHarnessIntent } from "./context-selector";
 import { sanitizeHarnessText } from "./security";
 
 export type HarnessVerificationOutcome = "completed" | "awaitingConfirmation";
@@ -55,6 +55,18 @@ export function requiresHarnessVisualVerification(
   return !semanticIntent && visualTaskFallbackPattern.test(fallbackInstruction);
 }
 
+export function harnessVisualVerificationMode(
+  request: HarnessRequest,
+  semanticIntent?: HarnessSemanticIntentDecision,
+): "inspection" | "acceptance" {
+  const intent = resolveHarnessIntent(request, semanticIntent);
+  const readOnlyVisualInspection = semanticIntent?.mode === "readOnlyTask"
+    && semanticIntent.requiresVisualVerification === true;
+  return !intent.wantsChange && (intent.wantsAppInspection || readOnlyVisualInspection)
+    ? "inspection"
+    : "acceptance";
+}
+
 function check(
   id: string,
   label: string,
@@ -94,8 +106,10 @@ export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskV
     || toolName === "updateEdsTablePreview");
   const explicitChartChangeGoal = explicitChartChangeGoalPattern.test(input.request.instruction)
     && !/不要(?:修改|创建|新增|增加|添加|生成)[^，。；]*/u.test(input.request.instruction);
-  const requiresChangeSet = plannedChangeSet || explicitChartChangeGoal;
+  const requiresChangeSet = !requiredTools.includes("createNotebookDraft") && (plannedChangeSet || explicitChartChangeGoal);
   const requiresExport = requiredTools.includes("exportDataRecipeToExcel");
+  const requiresAnalysisPlan = requiredTools.includes("createAnalysisPlan");
+  const requiresNotebook = requiredTools.includes("createNotebookDraft");
   const message = sanitizeHarnessText(input.candidate.message).trim();
   const responseIsSpecific = message.length > 0
     && (input.candidate.outcome === "awaitingConfirmation"
@@ -106,11 +120,56 @@ export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskV
     && Boolean(input.candidate.pendingChangeSet?.operations.length)
   );
   const exportReady = !requiresExport || Boolean(input.candidate.exportArtifact);
+  const analysisPlanObservation = input.observations.find((observation) => observation.toolName === "createAnalysisPlan");
+  const analysisPlanData = analysisPlanObservation?.data && typeof analysisPlanObservation.data === "object"
+    ? analysisPlanObservation.data as Record<string, unknown>
+    : undefined;
+  const analysisPlanId = typeof analysisPlanData?.analysisPlanArtifactId === "string" ? analysisPlanData.analysisPlanArtifactId : undefined;
+  const analysisPlanReady = !requiresAnalysisPlan || Boolean(
+    analysisPlanId
+    && analysisPlanData?.status === "planned"
+    && Array.isArray(analysisPlanData.steps)
+    && analysisPlanData.steps.length > 0,
+  );
+  const notebookReady = !requiresNotebook || input.observations.some((observation) => {
+    if (observation.toolName !== "createNotebookDraft" || !observation.data || typeof observation.data !== "object") return false;
+    const data = observation.data as Record<string, unknown>;
+    return typeof data.notebookArtifactId === "string"
+      && data.status === "draft"
+      && typeof data.cellCount === "number"
+      && data.cellCount > 0
+      && (!requiresAnalysisPlan || data.analysisPlanId === analysisPlanId)
+      && (!input.request.notebookContext || (data.execution !== null && typeof data.execution === "object" && "status" in data.execution && data.execution.status === "success"));
+  });
   const requiresVisualEvidence = requiresHarnessVisualVerification(input.request, input.semanticIntent);
   const visualReady = !requiresVisualEvidence
     || input.visualEvidence?.status === "passed"
     || (input.candidate.outcome === "awaitingConfirmation" && input.visualEvidence?.status === "deferred");
   const checks = [
+    ...(requiredTools.includes("querySemanticModel") ? [check(
+      "semantic_model", "语义模型口径",
+      input.observations.some((observation) => {
+        const data = observation.data;
+        return observation.toolName === "querySemanticModel" && data !== null && typeof data === "object"
+          && "modelId" in data && data.modelId === input.request.semanticModel?.id
+          && "modelVersion" in data && data.modelVersion === input.request.semanticModel?.version
+          && "sourceDataSourceId" in data && data.sourceDataSourceId === input.request.semanticModel?.sourceDatasetId;
+      }),
+      "查询结果引用了本次选中的语义模型版本和数据源。",
+      "缺少与本次选中模型版本及数据源一致的查询证据。",
+    )] : []),
+    ...(requiresNotebook ? [check(
+      "notebook_draft", "Notebook 草稿",
+      notebookReady,
+      "Notebook 草稿包含已校验的单元和依赖关系。",
+      "缺少经过 createNotebookDraft 校验的 Notebook 草稿证据。",
+    )] : []),
+    ...(requiresAnalysisPlan ? [check(
+      "analysis_plan", "Analysis Plan",
+      analysisPlanReady,
+      "Analysis Plan 包含经过校验的目标、步骤和交付物。",
+      "缺少经过 createAnalysisPlan 校验的分析计划证据。",
+    )] : []),
     check(
       "goal_output",
       "目标与输出",
@@ -135,9 +194,9 @@ export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskV
     check(
       "deliverable",
       "交付物",
-      changeSetReady && exportReady,
-      requiresChangeSet ? "ChangeSet 已生成并停在人工确认。" : requiresExport ? "Excel 导出物已生成。" : "当前任务不要求额外交付物。",
-      requiresChangeSet ? "缺少待确认 ChangeSet。" : "缺少要求的 Excel 导出物。",
+      changeSetReady && exportReady && analysisPlanReady && notebookReady,
+      requiresChangeSet ? "ChangeSet 已生成并停在人工确认。" : requiresExport ? "Excel 导出物已生成。" : requiresNotebook ? "Analysis Plan 和 Notebook 草稿已生成。" : requiresAnalysisPlan ? "Analysis Plan 已生成。" : "当前任务不要求额外交付物。",
+      requiresChangeSet ? "缺少待确认 ChangeSet。" : requiresExport ? "缺少要求的 Excel 导出物。" : requiresNotebook ? "缺少要求的 Analysis Plan 或 Notebook 草稿。" : "缺少要求的 Analysis Plan。",
     ),
     check(
       "formal_app_protection",

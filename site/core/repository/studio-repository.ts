@@ -54,7 +54,7 @@ const auditRecordSchema: z.ZodType<ChangeSetAuditRecord> = z.object({
       stage: z.enum(["json_parse", "draft_schema", "compile", "changeset_validation"]),
       path: z.string().min(1).max(240),
       code: z.string().min(1).max(120),
-      operationType: z.enum(["addNode", "updateNodeProps", "removeNode", "moveNode", "updatePage"]).optional(),
+      operationType: z.enum(["addPage", "deletePage", "addNode", "updateNodeProps", "removeNode", "moveNode", "updatePage"]).optional(),
     }).strict()).max(12).optional(),
     usage: z.object({
       promptTokens: z.number().int().nonnegative(),

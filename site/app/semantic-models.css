@@ -1,0 +1,50 @@
+.semantic-section { margin: 18px 0; min-width: 0; }
+.semantic-section .section-label { margin-bottom: 6px; }
+.semantic-hint,.semantic-empty { color: var(--studio-secondary); font-size: 11px; line-height: 1.7; margin: 6px 0; }
+.semantic-model-list { display: grid; gap: 7px; max-height: 240px; overflow-y: auto; }
+.semantic-model-row { display: flex; border: 1px solid var(--studio-border); border-radius: 10px; min-width: 0; background: var(--studio-surface); }
+.semantic-model-row.selected { border-color: var(--studio-border-strong); background: var(--studio-paper); }
+.semantic-model-row button { background: none; border: 0; color: var(--studio-ink); padding: 9px; cursor: pointer; }
+.semantic-model-row > button:first-child { display: flex; align-items: center; text-align: left; gap: 8px; flex: 1; min-width: 0; }
+.semantic-model-row b,.semantic-model-row small { display: block; overflow-wrap: anywhere; }
+.semantic-model-row b { font-size: 12px; }.semantic-model-row small { font-size: 10px; color: var(--studio-secondary); margin-top: 3px; }
+.semantic-section button:disabled,.semantic-dialog button:disabled { opacity: .45; cursor: not-allowed; }
+.semantic-dialog { width: min(1080px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 40px); margin: auto; padding: 0; border: 1px solid var(--studio-border); border-radius: 18px; color: var(--studio-ink); background: var(--studio-surface); box-shadow: 0 22px 80px color-mix(in srgb, var(--studio-ink) 21.96%, transparent); }
+.semantic-dialog::backdrop { background: color-mix(in srgb, var(--studio-ink) 34.9%, transparent); backdrop-filter: blur(3px); }
+.semantic-dialog[open] { display: flex; flex-direction: column; }
+.semantic-dialog header { display: flex; flex-shrink: 0; justify-content: space-between; align-items: flex-start; padding: 22px 26px 18px; border-bottom: 1px solid var(--studio-border); }
+.semantic-dialog header small { color: var(--studio-secondary); letter-spacing: .1em; font-size: 10px; font-weight: 700; }
+.semantic-dialog h2 { font-size: 22px; margin: 5px 0; }.semantic-dialog header p { font-size: 12px; margin: 0; color: var(--studio-secondary); }
+.semantic-dialog button { cursor: pointer; font-size: 12px; padding: 8px 12px; color: var(--studio-secondary); background: var(--studio-paper); border: 1px solid var(--studio-border); border-radius: 7px; }
+.semantic-dialog header > button { font-size: 20px; padding: 2px 10px; background: transparent; border: 0; }
+.semantic-manager-body { display: grid; grid-template-columns: 190px minmax(0, 1fr); min-height: 0; overflow-y: auto; }
+.semantic-manager-body > aside { padding: 18px 12px; border-right: 1px solid var(--studio-border); background: var(--studio-surface); }
+.semantic-manager-body > aside button { display: block; width: 100%; text-align: left; margin-bottom: 8px; overflow-wrap: anywhere; }
+.semantic-manager-body > aside button.active { border-color: var(--studio-border-strong); background: var(--studio-paper); }
+.semantic-manager-body > aside small { display: block; margin-top: 4px; color: var(--studio-secondary); }.semantic-manager-body > aside p { color: var(--studio-secondary); font-size: 12px; line-height: 1.7; }
+.semantic-manager-body form { min-width: 0; padding: 22px; }
+.semantic-dialog fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.semantic-dialog label { display: grid; gap: 6px; font-size: 11px; color: var(--studio-secondary); min-width: 0; }
+.semantic-dialog input,.semantic-dialog select,.semantic-dialog textarea { width: 100%; min-width: 0; border: 1px solid var(--studio-border); border-radius: 7px; background: var(--studio-surface); padding: 9px; color: var(--studio-ink); font: inherit; font-size: 12px; }
+.semantic-dialog textarea { resize: vertical; }.semantic-dialog :focus-visible { outline: 2px solid var(--studio-border-strong); outline-offset: 2px; }
+.semantic-basics { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.semantic-members { margin-top: 22px; }.semantic-subheading { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
+.semantic-subheading h3 { margin: 0; font-size: 14px; }.semantic-subheading h3 small { display: block; font-size: 11px; font-weight: 400; color: var(--studio-secondary); margin-top: 4px; }
+.semantic-member { position: relative; display: grid; grid-template-columns: 1fr 1fr 1.35fr; gap: 10px; padding: 14px 40px 14px 14px; margin-top: 10px; background: var(--studio-surface); border: 1px solid var(--studio-border); border-radius: 10px; }
+.semantic-member-description { grid-column: 1/-1; }.semantic-dialog .semantic-remove { position: absolute; right: 9px; top: 13px; border: 0; background: none; color: #b94e46; padding: 2px 6px; font-size: 18px; }
+.semantic-note { color: var(--studio-secondary); font-size: 11px; line-height: 1.8; margin-top: 18px; }.semantic-error { white-space: pre-wrap; overflow-wrap: anywhere; color: #ab372a; background: #fff3ef; border-radius: 8px; padding: 10px; font-size: 12px; }
+.semantic-preview { margin-top: 14px; font-size: 12px; }.semantic-preview > div { margin-top: 10px; overflow: auto; border: 1px solid var(--studio-border); border-radius: 8px; max-height: 260px; }.semantic-preview table { border-collapse: collapse; width: 100%; }.semantic-preview th,.semantic-preview td { padding: 10px; border-bottom: 1px solid var(--studio-border); text-align: left; white-space: nowrap; }.semantic-preview th { background: var(--studio-paper); }
+.semantic-dialog footer { flex-shrink: 0; border-top: 1px solid var(--studio-border); padding: 14px 24px; display: flex; justify-content: space-between; gap: 12px; }.semantic-dialog footer > div { display: flex; gap: 8px; }
+.semantic-dialog .semantic-save { background: var(--studio-ink); color: white; border-color: var(--studio-ink); }.semantic-dialog .semantic-delete { background: #fff8f6; color: #aa473b; border-color: #ecd0c7; }
+.semantic-context { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--studio-secondary); padding: 8px 12px; margin-bottom: 8px; background: var(--studio-paper); border: 1px solid var(--studio-border); border-radius: 8px; }
+.semantic-context > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }.semantic-context button { background: transparent; border: 0; color: inherit; cursor: pointer; }.semantic-context button:disabled { opacity: .4; }
+.agent-workspace-panel > .semantic-context { flex: 0 0 auto; width: min(780px, calc(100% - 48px)); margin: 0 auto 8px; }
+@media (max-width: 600px) { .agent-workspace-panel > .semantic-context { width: calc(100% - 28px); } }
+@media (max-width: 640px) {
+  .semantic-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; }
+  .semantic-dialog header { padding: 14px; }.semantic-dialog h2 { font-size: 19px; }
+  .semantic-manager-body { display: block; }.semantic-manager-body > aside { border-right: 0; border-bottom: 1px solid var(--studio-border); display: flex; gap: 8px; overflow-x: auto; padding: 10px; }
+  .semantic-manager-body > aside button { min-width: 130px; width: auto; margin: 0; }.semantic-manager-body > aside p { min-width: 160px; }
+  .semantic-manager-body form { padding: 14px; }.semantic-basics { grid-template-columns: 1fr; }.semantic-member { grid-template-columns: minmax(0, 1fr); }
+  .semantic-dialog footer { padding: 12px; flex-wrap: wrap; }.semantic-dialog footer > div:last-child { margin-left: auto; }.semantic-dialog footer button { padding: 8px 10px; }
+}

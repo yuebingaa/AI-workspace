@@ -144,6 +144,15 @@ const evaluationMemoryExcelExporter: HarnessExcelExporter = async ({ recipeId, f
 
 function normalizeOperation(operation: ChangeOperation | HarnessExpectedOperation): HarnessExpectedOperation {
   switch (operation.type) {
+    case "addPage":
+      return {
+        type: operation.type,
+        pageId: operation.pageId,
+        page: structuredClone(operation.page),
+        navigationItem: structuredClone(operation.navigationItem),
+      };
+    case "deletePage":
+      return { type: operation.type, pageId: operation.pageId };
     case "addNode":
       return {
         type: operation.type,

@@ -23,15 +23,17 @@ function withDataSource(appSpec: AppSpec, descriptor: UploadedDatasetDescriptor)
   };
 }
 
-function datasetReference(descriptor: UploadedDatasetDescriptor) {
+function datasetReference(descriptor: UploadedDatasetDescriptor, workspaceId?: string) {
   return {
     id: descriptor.datasetId,
     name: descriptor.source.name,
+    ...(workspaceId ? { workspaceId } : {}),
     rowCount: descriptor.source.rowCount,
     columnCount: descriptor.source.columnCount,
     qualityScore: descriptor.source.qualityScore,
     expiresAt: descriptor.expiresAt,
-    ephemeral: true,
+    ephemeral: descriptor.storageMode !== "project",
+    ...(descriptor.storageMode === "project" ? { shared: true } : {}),
     sensitiveFieldCount: descriptor.sensitiveFields.length,
     aiAccessPolicy: descriptor.aiAccessPolicy,
   };
@@ -58,16 +60,18 @@ export function synchronizeUploadedDatasetProduct(
   current: DataProduct,
   descriptor: UploadedDatasetDescriptor,
 ): DataProduct {
-  const reference = datasetReference(descriptor);
+  const previous = current.datasets.find((item) => item.id === descriptor.datasetId);
+  const reference = datasetReference(descriptor, previous?.workspaceId);
   return {
     ...current,
     datasets: current.datasets.some((item) => item.id === descriptor.datasetId)
       ? current.datasets.map((item) => item.id === descriptor.datasetId ? reference : item)
       : [...current.datasets, reference],
-    recipes: [
-      ...current.recipes.filter((recipe) => recipe.id !== descriptor.recipe.id && recipe.sourceDatasetId !== descriptor.datasetId),
-      descriptor.recipe,
-    ],
+    // Rehydrating authoritative data metadata must not reset a user's saved
+    // edits to the imported preview recipe, or remove other recipes on this table.
+    recipes: current.recipes.some((recipe) => recipe.id === descriptor.recipe.id)
+      ? current.recipes
+      : [...current.recipes, descriptor.recipe],
     appSpec: withDataSource(current.appSpec, descriptor),
   };
 }

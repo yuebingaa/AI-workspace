@@ -4,6 +4,7 @@ import { BarChart, DataHealth, DataTable, MetricCard } from "@/components/data-c
 import { executeRecordedBinding } from "@/core/data";
 import type { AppNode, AppNodeType, ComponentPropsMap, DataBinding, DataSourceDefinition, LocalDataRuntime, QueryComponentKind, QueryExecutionRecord } from "@/core/models";
 import { componentPropsSchemas } from "@/core/schemas";
+import { componentTypographyStyle } from "@/components/data-components/typography";
 
 export interface ComponentRenderContext {
   dataSources: DataSourceDefinition[];
@@ -11,6 +12,8 @@ export interface ComponentRenderContext {
   pageId: string;
   queryRevision: string;
   onQueryExecuted?: (record: QueryExecutionRecord) => void;
+  highlightedNodeIds?: string[];
+  changeFeedback?: "preview" | "applied";
 }
 
 interface ComponentDefinition<TType extends AppNodeType> {
@@ -36,6 +39,35 @@ const defaultBinding: DataBinding = {
   format: { style: "number", decimals: 0 },
 };
 
+const typographyFields = {
+  fontFamily: { type: "select", label: "字体", options: [
+    { label: "系统默认", value: "system" },
+    { label: "微软雅黑", value: "yahei" },
+    { label: "Arial", value: "arial" },
+    { label: "宋体", value: "serif" },
+    { label: "等宽字体", value: "monospace" },
+  ] },
+  fontSize: { type: "number", label: "字号", min: 8, max: 72 },
+  fontColor: { type: "text", label: "字体颜色（#RRGGBB）" },
+  fontWeight: { type: "select", label: "字重", options: [
+    { label: "常规", value: "regular" },
+    { label: "中等", value: "medium" },
+    { label: "半粗", value: "semibold" },
+    { label: "加粗", value: "bold" },
+  ] },
+  fontStyle: { type: "select", label: "字形", options: [{ label: "正常", value: "normal" }, { label: "斜体", value: "italic" }] },
+  textDecoration: { type: "select", label: "文字装饰", options: [{ label: "无", value: "none" }, { label: "下划线", value: "underline" }] },
+} as const;
+
+const defaultTypography = {
+  fontFamily: "system",
+  fontSize: 16,
+  fontColor: "#10211d",
+  fontWeight: "semibold",
+  fontStyle: "normal",
+  textDecoration: "none",
+} as const;
+
 function bindingError(nodeId: string, error: unknown) {
   return (
     <article className="data-binding-error" data-node-id={nodeId} role="alert">
@@ -43,6 +75,10 @@ function bindingError(nodeId: string, error: unknown) {
       <p>{error instanceof Error ? error.message : "无法计算当前组件的数据"}</p>
     </article>
   );
+}
+
+function nodeChangeFeedback(nodeId: string, context: ComponentRenderContext) {
+  return context.highlightedNodeIds?.includes(nodeId) ? context.changeFeedback : undefined;
 }
 
 function useRecordedBinding<TKind extends QueryComponentKind>(
@@ -70,19 +106,19 @@ function useRecordedBinding<TKind extends QueryComponentKind>(
 function BoundMetricCard({ props, nodeId, context }: { props: ComponentPropsMap["MetricCard"]; nodeId: string; context: ComponentRenderContext }) {
   const execution = useRecordedBinding("metric", props.binding, nodeId, context);
   if (!execution.success) return bindingError(nodeId, execution.error);
-  return <MetricCard label={props.label} trend={props.trend} isNew={props.isNew} value={execution.result.value} />;
+  return <MetricCard {...props} value={execution.result.value} nodeId={nodeId} changeFeedback={nodeChangeFeedback(nodeId, context)} />;
 }
 
 function BoundBarChart({ props, nodeId, context }: { props: ComponentPropsMap["BarChart"]; nodeId: string; context: ComponentRenderContext }) {
   const execution = useRecordedBinding("chart", props.binding, nodeId, context);
   if (!execution.success) return bindingError(nodeId, execution.error);
-  return <BarChart {...props} {...execution.result} />;
+  return <BarChart {...props} {...execution.result} nodeId={nodeId} changeFeedback={nodeChangeFeedback(nodeId, context)} />;
 }
 
 function BoundDataTable({ props, nodeId, context }: { props: ComponentPropsMap["DataTable"]; nodeId: string; context: ComponentRenderContext }) {
   const execution = useRecordedBinding("table", props.binding, nodeId, context);
   if (!execution.success) return bindingError(nodeId, execution.error);
-  return <DataTable {...props} {...execution.result} />;
+  return <DataTable {...props} {...execution.result} nodeId={nodeId} changeFeedback={nodeChangeFeedback(nodeId, context)} />;
 }
 
 type ComponentRegistry = {
@@ -102,16 +138,17 @@ export const componentRegistry: ComponentRegistry = {
     propsSchema: componentPropsSchemas.PageHeader,
     editor: {
       fields: {
+        ...typographyFields,
         eyebrow: { type: "text", label: "页面标签" },
         title: { type: "text", label: "标题" },
         description: { type: "textarea", label: "页面说明" },
         dateRange: { type: "text", label: "日期范围" },
       },
-      defaultProps: { eyebrow: "新页面", title: "数据分析", description: "输入页面说明", dateRange: "过去 12 个月" },
+      defaultProps: { eyebrow: "新页面", title: "数据分析", description: "输入页面说明", dateRange: "过去 12 个月", ...defaultTypography, fontSize: 38, fontWeight: "regular" },
     },
-    render: (props, _children, nodeId) => (
-      <div className="dash-head" data-node-id={nodeId}>
-        <div><span className="eyebrow">{props.eyebrow}</span><h1>{props.title}</h1><p>{props.description}</p></div>
+    render: (props, _children, nodeId, context) => (
+      <div className="dash-head" data-node-id={nodeId} data-change-feedback={nodeChangeFeedback(nodeId, context)}>
+        <div><span className="eyebrow">{props.eyebrow}</span><h1 style={componentTypographyStyle(props)}>{props.title}</h1><p>{props.description}</p></div>
         <div className="date-chip">{props.dateRange}　⌄</div>
       </div>
     ),
@@ -122,16 +159,17 @@ export const componentRegistry: ComponentRegistry = {
     propsSchema: componentPropsSchemas.InsightBanner,
     editor: {
       fields: {
+        ...typographyFields,
         title: { type: "text", label: "洞察标题" },
         description: { type: "textarea", label: "洞察内容" },
         actionLabel: { type: "text", label: "按钮文字" },
       },
-      defaultProps: { title: "AI 洞察", description: "输入洞察内容", actionLabel: "查看分析" },
+      defaultProps: { title: "AI 洞察", description: "输入洞察内容", actionLabel: "查看分析", ...defaultTypography },
     },
-    render: (props, _children, nodeId) => (
-      <div className="ai-insight" data-node-id={nodeId}>
+    render: (props, _children, nodeId, context) => (
+      <div className="ai-insight" data-node-id={nodeId} data-change-feedback={nodeChangeFeedback(nodeId, context)}>
         <span className="spark">✦</span>
-        <div><b>{props.title}</b><p>{props.description}</p></div>
+        <div><b style={componentTypographyStyle(props)}>{props.title}</b><p>{props.description}</p></div>
         <button type="button">{props.actionLabel}</button>
       </div>
     ),
@@ -144,9 +182,9 @@ export const componentRegistry: ComponentRegistry = {
       fields: { columns: { type: "number", label: "默认列数", min: 1, max: 4 } },
       defaultProps: { columns: 3 },
     },
-    render: (props, children, nodeId) => {
+    render: (props, children, nodeId, context) => {
       const columnCount = Math.max(props.columns, Children.count(children));
-      return <div className={`metrics columns-${Math.min(columnCount, 4)}`} data-node-id={nodeId}>{children}</div>;
+      return <div className={`metrics columns-${Math.min(columnCount, 4)}`} data-node-id={nodeId} data-change-feedback={nodeChangeFeedback(nodeId, context)}>{children}</div>;
     },
   },
   MetricCard: {
@@ -156,6 +194,7 @@ export const componentRegistry: ComponentRegistry = {
     propsSchema: componentPropsSchemas.MetricCard,
     editor: {
       fields: {
+        ...typographyFields,
         label: { type: "text", label: "指标名称" },
         trend: { type: "text", label: "趋势" },
         isNew: {
@@ -164,7 +203,7 @@ export const componentRegistry: ComponentRegistry = {
           options: [{ label: "否", value: false }, { label: "是", value: true }],
         },
       },
-      defaultProps: { label: "新指标", trend: "—", isNew: true, binding: structuredClone(defaultBinding) },
+      defaultProps: { label: "新指标", trend: "—", isNew: true, binding: structuredClone(defaultBinding), ...defaultTypography, fontSize: 13 },
     },
     render: (props, _children, nodeId, context) => <BoundMetricCard props={props} nodeId={nodeId} context={context} />,
   },
@@ -173,7 +212,7 @@ export const componentRegistry: ComponentRegistry = {
     icon: "▦",
     propsSchema: componentPropsSchemas.DashboardGrid,
     editor: { fields: {}, defaultProps: {} },
-    render: (_props, children, nodeId) => <div className="dash-grid" data-node-id={nodeId}>{children}</div>,
+    render: (_props, children, nodeId, context) => <div className="dash-grid" data-node-id={nodeId} data-change-feedback={nodeChangeFeedback(nodeId, context)}>{children}</div>,
   },
   BarChart: {
     label: "数据图表",
@@ -182,6 +221,7 @@ export const componentRegistry: ComponentRegistry = {
     propsSchema: componentPropsSchemas.BarChart,
     editor: {
       fields: {
+        ...typographyFields,
         title: { type: "text", label: "图表标题" },
         subtitle: { type: "text", label: "图表说明" },
         chartType: {
@@ -219,6 +259,7 @@ export const componentRegistry: ComponentRegistry = {
         chartType: "bar",
         color: "green",
         showValues: false,
+        ...defaultTypography,
         binding: { ...structuredClone(defaultBinding), groupBy: "month" },
       },
     },
@@ -230,6 +271,7 @@ export const componentRegistry: ComponentRegistry = {
     propsSchema: componentPropsSchemas.DataHealth,
     editor: {
       fields: {
+        ...typographyFields,
         title: { type: "text", label: "组件标题" },
         subtitle: { type: "text", label: "刷新说明" },
         score: { type: "number", label: "健康分", min: 0, max: 100 },
@@ -242,9 +284,10 @@ export const componentRegistry: ComponentRegistry = {
           { label: "完整性", value: "95%", status: "ok" },
           { label: "时效性", value: "88%", status: "warn" },
         ],
+        ...defaultTypography,
       },
     },
-    render: (props) => <DataHealth {...props} />,
+    render: (props, _children, nodeId, context) => <DataHealth {...props} nodeId={nodeId} changeFeedback={nodeChangeFeedback(nodeId, context)} />,
   },
   DataTable: {
     label: "区域表现表",
@@ -253,6 +296,7 @@ export const componentRegistry: ComponentRegistry = {
     propsSchema: componentPropsSchemas.DataTable,
     editor: {
       fields: {
+        ...typographyFields,
         title: { type: "text", label: "表格标题" },
         subtitle: { type: "text", label: "表格说明" },
         actionLabel: { type: "text", label: "操作按钮" },
@@ -274,6 +318,7 @@ export const componentRegistry: ComponentRegistry = {
         density: "comfortable",
         stripedRows: false,
         accentColor: "green",
+        ...defaultTypography,
         binding: {
           ...structuredClone(defaultBinding),
           groupBy: "region",

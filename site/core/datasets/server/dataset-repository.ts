@@ -47,6 +47,9 @@ const datasetRepositorySnapshotSchema: z.ZodType<DatasetRepositorySnapshot> = z.
     payload: datasetUploadResponseSchema,
   }).strict()).max(CSV_UPLOAD_LIMITS.maxDatasets),
 }).strict().superRefine((snapshot, context) => {
+  if (snapshot.datasets.some(({ payload }) => payload.dataset.storageMode === "project")) {
+    context.addIssue({ code: "custom", message: "临时数据仓库不能保存本地项目数据" });
+  }
   const keys = snapshot.datasets.map(({ ownership, payload }) => (
     `${ownershipNamespace(ownership)}:${payload.dataset.datasetId}`
   ));
@@ -109,7 +112,7 @@ export class MemoryDatasetRepository implements DatasetRepository {
   private withoutExpired(operationTime: number): Map<string, StoredDataset> {
     const next = new Map(this.datasets);
     for (const [id, dataset] of this.datasets) {
-      if (Date.parse(dataset.descriptor.expiresAt) <= operationTime) next.delete(id);
+      if (Date.parse(dataset.descriptor.expiresAt ?? "") <= operationTime) next.delete(id);
     }
     return next;
   }
@@ -157,6 +160,7 @@ export class MemoryDatasetRepository implements DatasetRepository {
     this.purgeAndPersist(operationTime);
     const parsed = datasetUploadResponseSchema.parse(dataset);
     const key = this.key(ownership, parsed.dataset.datasetId);
+    if (parsed.dataset.storageMode === "project") throw new Error("项目数据只能保存在项目仓库中");
     if (this.datasets.has(key)) {
       throw new StudioValidationError("上传数据集标识冲突", ["拒绝覆盖当前所有者已有的临时数据集"]);
     }

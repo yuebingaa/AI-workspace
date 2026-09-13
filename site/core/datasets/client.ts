@@ -6,6 +6,7 @@ import {
   type UploadedDatasetDescriptor,
 } from "./contracts";
 import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { projectHeaders } from "@/core/projects/client";
 
 export type CsvUploadPhase = "uploading" | "parsing" | "validating";
 
@@ -41,7 +42,7 @@ async function fetchDatasetText(
     controller.abort();
   }, DATASET_REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(input, { ...init, signal: controller.signal });
+    const response = await fetch(input, { ...init, headers: { ...projectHeaders(), ...Object.fromEntries(new Headers(init.headers)) }, signal: controller.signal });
     const text = await readBoundedUtf8Body(response, MAX_DATASET_RESPONSE_BYTES);
     return { ok: response.ok, status: response.status, text };
   } catch (error) {
@@ -79,6 +80,7 @@ export function uploadCsvDataset(
   let responseTooLarge = false;
   const promise = new Promise<DatasetUploadResponse>((resolve, reject) => {
     xhr.open("POST", "/api/datasets");
+    Object.entries(projectHeaders()).forEach(([key, value]) => xhr.setRequestHeader(key, value));
     xhr.setRequestHeader("content-type", file.type || "text/csv");
     xhr.setRequestHeader("x-file-name", encodeURIComponent(file.name));
     xhr.responseType = "text";

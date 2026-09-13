@@ -9,30 +9,43 @@ import type {
   ComponentPropsMap,
   DataProduct,
 } from "@/core/models";
-import { BAR_CHART_COLORS, CHART_TYPES } from "@/core/models";
+import { BAR_CHART_COLORS, CHART_TYPES, FONT_FAMILIES, FONT_WEIGHTS } from "@/core/models";
 import { dataBindingSchema, dataSourceDefinitionSchema } from "./data-binding";
 import { dataRecipeSchema } from "./data-recipe";
+import { semanticLayerSchema } from "@/core/semantic/contracts";
+import { notebookLayerSchema } from "@/core/notebook/contracts";
 
 const idSchema = z.string().trim().min(1);
 const textSchema = z.string();
+const typographySchemaShape = {
+  fontFamily: z.enum(FONT_FAMILIES).optional(),
+  fontSize: z.number().int().min(8).max(72).optional(),
+  fontColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/u, "字体颜色必须是六位十六进制颜色").optional(),
+  fontWeight: z.enum(FONT_WEIGHTS).optional(),
+  fontStyle: z.enum(["normal", "italic"]).optional(),
+  textDecoration: z.enum(["none", "underline"]).optional(),
+} as const;
 
 export const componentPropsSchemas: {
   [TType in AppNodeType]: z.ZodType<ComponentPropsMap[TType]>;
 } = {
   PageRoot: z.object({}).strict(),
   PageHeader: z.object({
+    ...typographySchemaShape,
     eyebrow: textSchema,
     title: textSchema,
     description: textSchema,
     dateRange: textSchema,
   }).strict(),
   InsightBanner: z.object({
+    ...typographySchemaShape,
     title: textSchema,
     description: textSchema,
     actionLabel: textSchema,
   }).strict(),
   MetricGrid: z.object({ columns: z.number().int().min(1).max(4) }).strict(),
   MetricCard: z.object({
+    ...typographySchemaShape,
     label: textSchema,
     trend: textSchema,
     isNew: z.boolean().optional(),
@@ -40,6 +53,7 @@ export const componentPropsSchemas: {
   }).strict(),
   DashboardGrid: z.object({}).strict(),
   BarChart: z.object({
+    ...typographySchemaShape,
     title: textSchema,
     subtitle: textSchema,
     color: z.enum(BAR_CHART_COLORS).optional(),
@@ -48,6 +62,7 @@ export const componentPropsSchemas: {
     binding: dataBindingSchema,
   }).strict(),
   DataHealth: z.object({
+    ...typographySchemaShape,
     title: textSchema,
     subtitle: textSchema,
     score: z.number().min(0).max(100),
@@ -58,6 +73,7 @@ export const componentPropsSchemas: {
     }).strict()),
   }).strict(),
   DataTable: z.object({
+    ...typographySchemaShape,
     title: textSchema,
     subtitle: textSchema,
     actionLabel: textSchema,
@@ -100,12 +116,30 @@ export const appSpecSchema: z.ZodType<AppSpec> = z.object({
   id: idSchema,
   siteId: idSchema,
   schemaVersion: z.literal("1.0"),
-  dataSources: z.array(dataSourceDefinitionSchema).min(1),
+  // A new local project is genuinely empty. Bound components are still checked
+  // by assertValidAppSpecDataBindings, so missing referenced sources remain invalid.
+  dataSources: z.array(dataSourceDefinitionSchema),
   navigation: z.array(z.object({ id: idSchema, title: textSchema, pageId: idSchema }).strict()),
   pages: z.array(appPageSchema).min(1),
 }).strict();
 
 export const changeOperationSchema: z.ZodType<ChangeOperation> = z.discriminatedUnion("type", [
+  z.object({
+    id: idSchema,
+    type: z.literal("addPage"),
+    label: textSchema,
+    description: textSchema,
+    pageId: idSchema,
+    page: appPageSchema,
+    navigationItem: z.object({ id: idSchema, title: textSchema, pageId: idSchema }).strict(),
+  }).strict(),
+  z.object({
+    id: idSchema,
+    type: z.literal("deletePage"),
+    label: textSchema,
+    description: textSchema,
+    pageId: idSchema,
+  }).strict(),
   z.object({
     id: idSchema,
     type: z.literal("addNode"),
@@ -168,6 +202,8 @@ export const dataProductSchema: z.ZodType<DataProduct> = z.object({
   datasets: z.array(z.object({
     id: idSchema,
     name: textSchema,
+    workspaceId: idSchema.optional(),
+    shared: z.boolean().optional(),
     rowCount: z.number().int().nonnegative(),
     columnCount: z.number().int().nonnegative(),
     qualityScore: z.number().min(0).max(100),
@@ -177,6 +213,8 @@ export const dataProductSchema: z.ZodType<DataProduct> = z.object({
     aiAccessPolicy: z.enum(["not-required", "pending", "masked", "exclude-sensitive-samples"]).optional(),
   }).strict()),
   recipes: z.array(dataRecipeSchema),
+  semanticLayer: semanticLayerSchema.optional(),
+  notebooks: notebookLayerSchema.optional(),
   appSpec: appSpecSchema,
 }).strict();
 

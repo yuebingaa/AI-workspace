@@ -40,7 +40,7 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
@@ -51,17 +51,26 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    // The Node Excel entry points load graceful-fs (CommonJS), which must receive
+    // the mutable native fs object, not Vite's immutable ESM namespace proxy.
+    ...(command === 'serve' && process.env.AGENTCANVAS_LOCAL_NODE_DEV === '1'
+      ? { ssr: { external: ['read-excel-file', 'write-excel-file'] } }
+      : {}),
     css: { postcss: { plugins: [tailwindcss()] } },
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      host: '127.0.0.1',
+      strictPort: true,
+      ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
+    },
     plugins: [
       vinext(),
       sites(),
-      cloudflare({
+      // Managed Windows development uses Node so host-file persistence and env
+      // match the standalone stable server. Cloudflare builds keep their adapter.
+      ...(command === 'serve' && process.env.AGENTCANVAS_LOCAL_NODE_DEV === '1' ? [] : [cloudflare({
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
         config: localBindingConfig,
-      }),
+      })]),
     ],
   };
 });

@@ -264,15 +264,15 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
       "revenue-title-change-preview",
     ]);
     expect(liveHarnessSmokeCases.map((item) => [item.limits.maxModelCalls, item.limits.maxToolCalls])).toEqual([
+      [4, 1],
+      [6, 3],
       [3, 1],
-      [5, 3],
-      [2, 1],
     ]);
     expect(LIVE_HARNESS_GLOBAL_BUDGET).toMatchObject({
-      maxModelCalls: 10,
-      maxPromptTokens: 15_000,
-      maxCompletionTokens: 4_000,
-      maxActiveElapsedMs: 180_000,
+      maxModelCalls: 13,
+      maxPromptTokens: 20_000,
+      maxCompletionTokens: 5_000,
+      maxActiveElapsedMs: 255_000,
       maxRetriesPerCase: 0,
     });
   });
@@ -425,10 +425,10 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
   });
 
   it.each([
-    ["模型调用", { maxModelCalls: 3 }, "model_budget"],
-    ["prompt", { maxPromptTokens: 3_300 }, "prompt_budget"],
-    ["completion", { maxCompletionTokens: 1_200 }, "completion_budget"],
-    ["主动时间", { maxActiveElapsedMs: 45_100 }, "time_budget"],
+    ["模型调用", { maxModelCalls: 4 }, "model_budget"],
+    ["prompt", { maxPromptTokens: 4_500 }, "prompt_budget"],
+    ["completion", { maxCompletionTokens: 1_600 }, "completion_budget"],
+    ["主动时间", { maxActiveElapsedMs: 70_100 }, "time_budget"],
   ])("%s 全局预算不足时不发送下一个用例", async (_label, budget, code) => {
     const server = fakeServer();
     const fetchImpl = successfulHttpFetch();
@@ -557,7 +557,7 @@ describe("Live Harness HTTP Runner 安全基础设施", () => {
       ["awaitingConfirmation", ["createChangeSetPreview"]],
     ]);
     expect(report.cases.every((item) => item.hardGates.passed)).toBe(true);
-    expect(report.budget.used).toMatchObject({ modelCalls: 10, promptTokens: 300, completionTokens: 60, totalTokens: 360 });
+    expect(report.budget.used).toMatchObject({ modelCalls: 13, promptTokens: 300, completionTokens: 60, totalTokens: 360 });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(server.stop).toHaveBeenCalledTimes(1);
     expect(localStorageWrite).toHaveBeenCalledTimes(0);

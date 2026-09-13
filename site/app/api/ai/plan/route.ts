@@ -3,6 +3,7 @@ import { aiPlanPublicRequestSchema, aiPlanRequestSchema, MAX_AI_REQUEST_BYTES } 
 import { AiPlannerError, planChangeSetWithDeepSeek } from "@/core/ai/server/deepseek-planner";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { resolveDeepSeekApiKey, resolveDeepSeekModel } from "@/core/ai/server/runtime-credentials";
 
 export const runtime = "nodejs";
 const REQUEST_BODY_TIMEOUT_MS = 15_000;
@@ -54,8 +55,8 @@ export async function POST(request: Request) {
     const identity = resolveDemoRequestIdentity();
     const serverRequest = aiPlanRequestSchema.parse({ ...publicRequest.data, role: identity.role });
     const result = await planChangeSetWithDeepSeek(serverRequest, {
-      apiKey: process.env.DEEPSEEK_API_KEY,
-      model: process.env.DEEPSEEK_MODEL,
+      apiKey: resolveDeepSeekApiKey(),
+      model: resolveDeepSeekModel(),
       signal: request.signal,
     });
     return NextResponse.json(result, { status: 200, headers: noStoreHeaders });

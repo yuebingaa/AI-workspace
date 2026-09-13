@@ -97,6 +97,44 @@ describe("Harness 最小上下文选择器", () => {
       .toMatchObject({ taskMode: "readOnly" });
   });
 
+  it("模型语义路由把工作界面管理映射为页面 ChangeSet，并提供名称到 ID 的上下文", () => {
+    const input = request("把空白工作界面改名为质量分析");
+    input.appSpec.pages.push({
+      id: "page_workspace_start",
+      title: "空白工作界面",
+      route: "/workspace/start",
+      root: { id: "root_page_workspace_start", type: "PageRoot", props: {}, children: [] },
+    });
+    input.appSpec.navigation.push({ id: "nav_workspace_start", title: "空白工作界面", pageId: "page_workspace_start" });
+    const intent = semanticDecision({
+      mode: "changePreview",
+      wantsData: false,
+      changeAction: "update",
+      changeTarget: "workspace",
+      componentKind: "generic",
+      skillIds: ["dashboard-editing"],
+      rationale: "用户要求重命名左侧工作界面。",
+    });
+
+    const selection = buildHarnessContextSelection(input, [], 1, false, undefined, undefined, [], [], intent);
+    const [changeTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: input.instruction,
+      request: input,
+      semanticIntent: intent,
+    });
+    const parameters = JSON.stringify(changeTool.parameters);
+
+    expect(selection.toolNames).toEqual(["createChangeSetPreview"]);
+    expect(selection.context).toMatchObject({
+      workspaceInterfaces: expect.arrayContaining([{ id: "page_workspace_start", title: "空白工作界面", active: false }]),
+    });
+    expect(parameters).toContain('"updatePage"');
+    expect(parameters).toContain("page_workspace_start");
+    expect(parameters).not.toContain('"updateNodeProps"');
+  });
+
   it("创建分析并导出 Excel 不误判为页面 ChangeSet", () => {
     const tools = plannedHarnessToolSequence(request("整理华东异常订单，创建复购分析，并提供 Excel 下载。"));
 
@@ -107,6 +145,17 @@ describe("Harness 最小上下文选择器", () => {
       "exportDataRecipeToExcel",
     ]);
     expect(tools).not.toContain("createChangeSetPreview");
+  });
+
+  it("普通表格处理请求会生成可展示的 AI 表格结果", () => {
+    const input = request("筛选华东数据并按收入降序排列，把处理后的表格放到表格工作区。");
+    input.dataSourceId = "dataset_retail_orders";
+
+    expect(plannedHarnessToolSequence(input)).toEqual([
+      "inspectDataset",
+      "inspectFields",
+      "transformSpreadsheetData",
+    ]);
   });
 
   it("把‘帮我做面积图吗’识别为明确的 EDS 图表变更请求", () => {
@@ -376,7 +425,7 @@ describe("Harness 最小上下文选择器", () => {
   });
 
   it("上下文预算只能收紧而不能放宽硬上限", () => {
-    expect(() => resolveHarnessContextBudget({ maxTotalPromptTokens: 8_001 }))
+    expect(() => resolveHarnessContextBudget({ maxTotalPromptTokens: 96_001 }))
       .toThrow(/上下文预算无效/);
     expect(() => resolveHarnessContextBudget({ maxToolResultEntries: Number.MAX_SAFE_INTEGER + 1 }))
       .toThrow(/上下文预算无效/);
@@ -387,8 +436,22 @@ describe("Harness 最小上下文选择器", () => {
     expect(classifyHarnessTask(input)).toEqual({ complexity: "simpleReadOnly", maxModelCalls: 3, maxToolCalls: 2 });
   });
 
+  it("模型要求视觉验证的只读任务使用多步骤上下文预算", () => {
+    const input = request("你看下网站的页面设计有没有缺陷，不要修改页面。");
+    const intent = semanticDecision({
+      mode: "readOnlyTask",
+      requiresVisualVerification: true,
+      wantsData: false,
+      wantsAppInspection: false,
+      skillIds: ["dashboard-editing"],
+      rationale: "页面设计检查依赖最终渲染截图。",
+    });
+
+    expect(classifyHarnessTask(input, intent)).toEqual({ complexity: "multiStep", maxModelCalls: 5, maxToolCalls: 6 });
+  });
+
   it("把能力询问识别为对话，不误当成组件修改任务", () => {
-    for (const instruction of ["你能控制这个网页的组件了吗？", "可以增加组件吗", "能不能修改图表？"]) {
+    for (const instruction of ["你能控制这个网页的组件了吗？", "可以增加组件吗", "能不能修改图表？", "能改字体吗", "能改什么字体", "支持哪些字体"]) {
       const questionSelection = buildHarnessContextSelection(request(instruction), [], 1);
 
       expect(questionSelection.toolNames).toEqual([]);

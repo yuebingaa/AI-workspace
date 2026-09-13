@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HarnessRequest } from "./contracts";
+import type { HarnessRequest, HarnessSemanticIntentDecision } from "./contracts";
 import { compactHarnessToolResult, executeHarnessTool, harnessToolCatalog, MAX_HARNESS_TOOL_RESULT_BYTES } from "./tool-registry";
 import { buildHarnessContextSelection } from "./context-selector";
 import { jsonByteLength } from "./security";
@@ -62,7 +62,68 @@ function edsContext() {
 }
 
 describe("Harness 类型化工具注册表", () => {
-  it("暴露包含 EDS 派生分析、原始全表扫描查询、专用图表/表格预览和 Excel 导出的十五个类型化工具及其参数 Schema", () => {
+  it("AI 可以把工作界面新增请求编译为待确认 addPage ChangeSet", async () => {
+    const toolContext = context();
+    const result = await executeHarnessTool("createChangeSetPreview", {
+      message: "已准备新增工作界面。",
+      operations: [{ type: "addPage", title: "质量分析" }],
+    }, toolContext);
+
+    expect(result.pendingChangeSet?.operations[0]).toMatchObject({
+      type: "addPage",
+      page: { title: "质量分析", root: { type: "PageRoot" } },
+      navigationItem: { title: "质量分析" },
+    });
+  });
+
+  it("用户明确要求删除工作界面时会纠正语义目标误判，并只开放点名界面", () => {
+    const toolContext = context();
+    toolContext.request.instruction = "帮我把空白工作界面删除";
+    toolContext.request.appSpec.navigation.push(
+      { id: "nav_workspace_blank", pageId: "page_workspace_blank", title: "空白工作界面" },
+      { id: "nav_workspace_blank_2", pageId: "page_workspace_blank_2", title: "空白工作界面 2" },
+    );
+    toolContext.request.appSpec.pages.push(
+      { id: "page_workspace_blank", title: "空白工作界面", route: "/workspace/blank", root: { id: "root_workspace_blank", type: "PageRoot", props: {}, children: [] } },
+      { id: "page_workspace_blank_2", title: "空白工作界面 2", route: "/workspace/blank-2", root: { id: "root_workspace_blank_2", type: "PageRoot", props: {}, children: [] } },
+    );
+    const mistakenSemanticIntent: HarnessSemanticIntentDecision = {
+      mode: "changePreview",
+      wantsData: false,
+      wantsEdsAnalysis: false,
+      wantsRawWorkbook: false,
+      wantsFields: false,
+      wantsRecipe: false,
+      wantsAppInspection: false,
+      wantsExcel: false,
+      changeAction: "remove",
+      changeTarget: "genericComponent",
+      componentKind: "generic",
+      chartType: "auto",
+      skillIds: ["dashboard-editing"],
+      confidence: 0.8,
+      rationale: "模型误把工作界面识别成了普通组件。",
+    };
+    const selection = buildHarnessContextSelection(
+      toolContext.request, [], 1, false, undefined, undefined, [], [], mistakenSemanticIntent,
+    );
+    const [changeTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: toolContext.request.instruction,
+      request: toolContext.request,
+      semanticIntent: mistakenSemanticIntent,
+    });
+    const parameters = JSON.stringify(changeTool.parameters);
+
+    expect(selection.toolNames).toEqual(["createChangeSetPreview"]);
+    expect(parameters).toContain('"deletePage"');
+    expect(parameters).toContain('"page_workspace_blank"');
+    expect(parameters).not.toContain('"page_workspace_blank_2"');
+    expect(parameters).not.toContain('"updateNodeProps"');
+  });
+
+  it("暴露 EDS、通用表格处理、图表预览和 Excel 导出工具及其参数 Schema", () => {
     const catalog = harnessToolCatalog();
     expect(catalog.map((tool) => tool.name)).toEqual([
       "analyzeEdsReports",
@@ -71,7 +132,10 @@ describe("Harness 类型化工具注册表", () => {
       "inspectEdsRawWorkbook",
       "readEdsRawRows",
       "inspectDataset",
+      "createAnalysisPlan",
+      "createNotebookDraft",
       "inspectFields",
+      "transformSpreadsheetData",
       "previewDataRecipe",
       "validateDataRecipe",
       "exportDataRecipeToExcel",
@@ -353,6 +417,28 @@ describe("Harness 类型化工具注册表", () => {
     expect(parameters).not.toContain('"binding"');
   });
 
+  it("页面文字调整只开放受控字体属性", () => {
+    const toolContext = context();
+    toolContext.request.instruction = "把月度收入趋势标题改成蓝色微软雅黑 20 号加粗斜体";
+    const selection = buildHarnessContextSelection(toolContext.request, [], 1);
+    const [changeTool] = harnessToolCatalog({
+      names: selection.toolNames,
+      editableNodes: selection.editableNodes,
+      instruction: toolContext.request.instruction,
+      request: toolContext.request,
+    });
+    const parameters = JSON.stringify(changeTool.parameters);
+
+    expect(parameters).toContain('"fontFamily"');
+    expect(parameters).toContain('"fontSize"');
+    expect(parameters).toContain('"fontColor"');
+    expect(parameters).toContain('"fontWeight"');
+    expect(parameters).toContain('"fontStyle"');
+    expect(parameters).toContain('"textDecoration"');
+    expect(parameters).toContain('"yahei"');
+    expect(parameters).toContain('"bold"');
+  });
+
   it("复用字段分析与 AppSpec 检查并限制结果大小", async () => {
     const fields = await executeHarnessTool("inspectFields", {
       dataSourceId: "dataset_retail_orders",
@@ -364,6 +450,27 @@ describe("Harness 类型化工具注册表", () => {
     const appSpec = await executeHarnessTool("inspectAppSpec", { pageId: "page_home" }, context());
     expect(appSpec.summary).toContain("1 个页面");
     expect(jsonByteLength(appSpec.data)).toBeLessThan(MAX_HARNESS_TOOL_RESULT_BYTES);
+  });
+
+  it("用确定性表格工具筛选、排序并生成可展示的处理结果", async () => {
+    const toolContext = context();
+    const result = await executeHarnessTool("transformSpreadsheetData", {
+      dataSourceId: "dataset_retail_orders",
+      resultName: "华东订单处理结果",
+      selectFields: ["region", "order_id", "revenue"],
+      filters: [{ field: "region", operator: "equals", value: "华东" }],
+      sort: [{ field: "revenue", direction: "desc" }],
+      limit: 20,
+    }, toolContext);
+
+    expect(result.tableArtifact).toMatchObject({
+      name: "华东订单处理结果",
+      sourceDataSourceId: "dataset_retail_orders",
+      fields: [{ name: "region" }, { name: "order_id" }, { name: "revenue" }],
+    });
+    expect(result.tableArtifact?.rows.every((row) => row.region === "华东")).toBe(true);
+    expect(result.tableArtifact?.totalRowCount).toBeLessThanOrEqual(20);
+    expect(toolContext.request.appSpec).toEqual(context().request.appSpec);
   });
 
   it("inspectDataset 不返回原始行，超大工具结果会截断并保留摘要", async () => {

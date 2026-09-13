@@ -43,6 +43,7 @@ next-env.d.ts
 /.studio-data/
 /evidence/
 /.runtime/
+/mcp.config.json
 
 # Tencent Cloud EdgeOne
 .env

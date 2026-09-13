@@ -30,7 +30,7 @@ export interface AiChangeSetAuditMetadata {
     stage: "json_parse" | "draft_schema" | "compile" | "changeset_validation";
     path: string;
     code: string;
-    operationType?: "addNode" | "updateNodeProps" | "removeNode" | "moveNode" | "updatePage";
+    operationType?: "addPage" | "deletePage" | "addNode" | "updateNodeProps" | "removeNode" | "moveNode" | "updatePage";
   }>;
   usage: {
     promptTokens: number;

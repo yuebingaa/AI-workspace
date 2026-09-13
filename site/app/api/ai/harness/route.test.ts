@@ -15,7 +15,7 @@ import {
   LIVE_EVALUATION_SESSION_VALUE,
 } from "@/core/evaluation/live/protocol";
 import { findLiveHarnessCase } from "@/core/evaluation/live/manifest";
-import type { HarnessSemanticIntentDecision } from "@/core/harness";
+import type { HarnessSemanticIntentDecision, HarnessToolName } from "@/core/harness";
 import { runLiveHarnessEvaluation } from "@/core/evaluation/live/harness-live-runner";
 import {
   EDS_OVERVIEW_DATA_SOURCE_ID,
@@ -26,6 +26,7 @@ import {
   type EdsWorkspaceSnapshot,
 } from "@/core/eds";
 import { POST } from "./route";
+import { semanticFixture } from "@/core/semantic/test-fixture";
 
 function stream(text: string) {
   return new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } });
@@ -52,6 +53,20 @@ function semanticIntent(overrides: Partial<HarnessSemanticIntentDecision> = {}):
   };
 }
 
+function dynamicPlan(toolNames: HarnessToolName[]) {
+  return {
+    goal: "完成用户目标并提供可追溯证据。",
+    rationale: "根据语义路由和 Evidence Bus 安排必要步骤。",
+    steps: toolNames.map((toolName) => ({
+      objective: `执行 ${toolName} 并验证结果`,
+      toolName,
+      requiredEvidence: [`${toolName} 的结构化工具结果`],
+      completionCriteria: [`${toolName} 成功且结果通过 Schema 校验`],
+    })),
+    finalResponseCriteria: ["关键声明引用 Evidence Bus 中的证据"],
+  };
+}
+
 describe("Harness 上传数据隐私门", () => {
   beforeEach(() => {
     datasetRepository.clear();
@@ -61,6 +76,23 @@ describe("Harness 上传数据隐私门", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it("语义模型数据源错配、失效字段和任意 SQL 在调用模型前被拒绝", async () => {
+    const modelFetch = vi.fn<typeof fetch>(); vi.stubGlobal("fetch", modelFetch);
+    const { product, model } = semanticFixture();
+    const payload = { idempotencyKey: "semantic_invalid_model_request", instruction: "按模型计算销售额", pageId: "page_home",
+      dataSourceId: model.sourceDatasetId, appSpec: product.appSpec, recipes: product.recipes };
+    for (const definition of [
+      { ...model, sourceDatasetId: "other_source" },
+      { ...model, measures: [{ ...model.measures[0], field: "missing_field" }] },
+      { ...model, sql: "SELECT * FROM internal" },
+    ]) {
+      const response = await POST(new Request("http://localhost/api/ai/harness", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...payload, semanticModel: definition }) }));
+      expect(response.status).toBe(400);
+    }
+    expect(modelFetch).not.toHaveBeenCalled();
   });
 
   it("returns 408, cancels a stalled request body once, and skips the model", async () => {
@@ -125,6 +157,7 @@ describe("Harness 上传数据隐私门", () => {
     }));
     const turns = [
       semanticIntent({ wantsRawWorkbook: true, skillIds: ["workbook-analysis"] }),
+      dynamicPlan(["scanEdsRawWorkbook", "queryEdsRawWorkbook"]),
       { type: "callTool", message: "完整扫描原始工作簿。", toolCallId: "raw_scan", name: "scanEdsRawWorkbook", arguments: {} },
       { type: "callTool", message: "查询目标行。", toolCallId: "raw_query", name: "queryEdsRawWorkbook", arguments: { mode: "rows", sheetName: "白班明细", select: ["线体", "异常类型", "次数"], filters: [{ column: "$row", operator: "equals", value: 2 }], limit: 1 } },
       { type: "complete", message: "原始第 2 行为 A5FNL01、飞达工位超时、3 次。" },
@@ -172,6 +205,7 @@ describe("Harness 上传数据隐私门", () => {
     vi.stubEnv("DEEPSEEK_MODEL", "deepseek-chat");
     const turns = [
       semanticIntent({ mode: "conversation", wantsData: false, requiresVisualVerification: false }),
+      dynamicPlan([]),
       { type: "complete", message: "图片显示右侧面板遮挡了数据健康度卡片。" },
     ];
     let harnessCall = 0;
@@ -325,6 +359,7 @@ describe("Harness 上传数据隐私门", () => {
   it("Live 路由使用服务端模型配置和单用例上限，不把完整数据行发送给模型", async () => {
     const turns = [
       semanticIntent(),
+      dynamicPlan(["inspectDataset"]),
       { type: "callTool", message: "检查数据集。", toolCallId: "live_dataset_call", name: "inspectDataset", arguments: { dataSourceId: "dataset_retail_orders" } },
       { type: "complete", message: "数据集摘要完成。" },
     ];
@@ -349,9 +384,9 @@ describe("Harness 上传数据隐私门", () => {
     expect(body.task).toMatchObject({
       state: "completed",
       model: "mock-deepseek-chat",
-      counters: { modelCallCount: 3, toolCallCount: 1 },
+      counters: { modelCallCount: 4, toolCallCount: 1 },
     });
-    expect(modelFetch).toHaveBeenCalledTimes(3);
+    expect(modelFetch).toHaveBeenCalledTimes(4);
     for (const invocation of modelFetch.mock.calls) {
       const outbound = JSON.parse(String(invocation[1]?.body)) as { max_tokens: number; model: string; messages: Array<{ content: string }> };
       expect(outbound.max_tokens).toBe(400);
@@ -366,9 +401,11 @@ describe("Harness 上传数据隐私门", () => {
     const formalBefore = structuredClone(demoFixtureResult.data.dataProduct.appSpec);
     const turns = [
       semanticIntent(),
+      dynamicPlan(["inspectDataset"]),
       { type: "callTool", message: "检查数据集。", toolCallId: "live_summary_dataset", name: "inspectDataset", arguments: { dataSourceId: "dataset_retail_orders" } },
       { type: "complete", message: "数据集摘要检查完成。" },
       semanticIntent({ wantsFields: true, wantsRecipe: true }),
+      dynamicPlan(["inspectDataset", "inspectFields", "previewDataRecipe"]),
       { type: "callTool", message: "检查数据集。", toolCallId: "live_recipe_dataset", name: "inspectDataset", arguments: { dataSourceId: "dataset_retail_orders" } },
       {
         type: "callTool",
@@ -390,6 +427,7 @@ describe("Harness 上传数据隐私门", () => {
         componentKind: "metric",
         skillIds: ["dashboard-editing"],
       }),
+      dynamicPlan(["createChangeSetPreview"]),
       {
         type: "callTool",
         message: "生成待确认标题变更。",
@@ -438,8 +476,8 @@ describe("Harness 上传数据隐私门", () => {
       ["completed", ["inspectDataset", "inspectFields", "previewDataRecipe"]],
       ["awaitingConfirmation", ["createChangeSetPreview"]],
     ]);
-    expect(report.budget.used).toMatchObject({ modelCalls: 10, promptTokens: 1000, completionTokens: 200 });
-    expect(modelFetch).toHaveBeenCalledTimes(10);
+    expect(report.budget.used).toMatchObject({ modelCalls: 13, promptTokens: 1300, completionTokens: 260 });
+    expect(modelFetch).toHaveBeenCalledTimes(13);
     expect(localHttpFetch).toHaveBeenCalledTimes(3);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(demoFixtureResult.data.dataProduct.appSpec).toEqual(formalBefore);
@@ -508,6 +546,74 @@ describe("Harness 上传数据隐私门", () => {
     }));
     expect(response.status).toBe(403);
     expect(JSON.stringify(await response.json())).toContain("敏感字段");
+  });
+
+  it("纯字体变更不因工作区里残留的过期上传数据集而失败", async () => {
+    if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
+    let sequence = 0;
+    const expired = await parseCsvUpload({
+      stream: stream("region,value\n华东,1"),
+      originalFileName: "expired-font-context.csv",
+      mimeType: "text/csv",
+      id: () => `f${String(++sequence).padStart(31, "0")}`,
+    });
+    const fixture = demoFixtureResult.data.dataProduct;
+    const turns = [
+      semanticIntent({
+        mode: "changePreview",
+        wantsData: false,
+        changeAction: "update",
+        changeTarget: "genericComponent",
+        componentKind: "metric",
+        skillIds: ["dashboard-editing"],
+      }),
+      dynamicPlan(["createChangeSetPreview"]),
+      {
+        type: "callTool",
+        message: "生成字体修改预览。",
+        toolCallId: "font_preview",
+        name: "createChangeSetPreview",
+        arguments: {
+          message: "将本月收入标题改为微软雅黑、24 号、蓝色并加粗。",
+          operations: [{
+            type: "updateNodeProps",
+            pageId: "page_home",
+            nodeId: "page_home_revenue",
+            props: { fontFamily: "yahei", fontSize: 24, fontColor: "#0000FF", fontWeight: "bold" },
+          }],
+        },
+      },
+    ];
+    let call = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "mock-deepseek-chat",
+      choices: [{ message: { content: JSON.stringify(turns[call++]) } }],
+      usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    vi.stubEnv("DEEPSEEK_API_KEY", "fixed-fake-key-for-font-change-test");
+    vi.stubEnv("DEEPSEEK_MODEL", "mock-deepseek-chat");
+
+    const response = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        idempotencyKey: "request_expired_dataset_font_001",
+        instruction: "把本月收入标题字体改成微软雅黑，字号 24，颜色改成蓝色并加粗。",
+        pageId: "page_home",
+        dataSourceId: expired.dataset.datasetId,
+        appSpec: { ...fixture.appSpec, dataSources: [...fixture.appSpec.dataSources, expired.dataset.source] },
+        recipes: [...fixture.recipes, expired.dataset.recipe],
+      }),
+    }));
+    const body = await response.json() as { task: { state: string; pendingChangeSet?: { operations: unknown[] } } };
+
+    expect(response.status).toBe(200);
+    expect(body.task.state).toBe("awaitingConfirmation");
+    expect(body.task.pendingChangeSet?.operations).toEqual([expect.objectContaining({
+      type: "updateNodeProps",
+      nodeId: "page_home_revenue",
+      props: expect.objectContaining({ fontFamily: "yahei", fontSize: 24, fontColor: "#0000FF", fontWeight: "bold" }),
+    })]);
   });
 
   it("拒绝读取其他所有者的数据集", async () => {
@@ -582,6 +688,7 @@ describe("Harness 上传数据隐私门", () => {
 
     const turns = [
       semanticIntent({ wantsEdsAnalysis: true, wantsFields: true, skillIds: ["eds-analysis"] }),
+      dynamicPlan(["analyzeEdsReports", "inspectFields"]),
       { type: "callTool", message: "读取 EDS 派生报告。", toolCallId: "eds_reports", name: "analyzeEdsReports", arguments: {} },
       { type: "callTool", message: "检查最高异常字段。", toolCallId: "eds_fields", name: "inspectFields", arguments: { dataSourceId: EDS_OVERVIEW_DATA_SOURCE_ID, fields: ["top_line", "top_line_occurrences", "top_issue", "top_issue_minutes"] } },
       { type: "complete", message: "EDS 派生汇总检查完成。" },
@@ -604,7 +711,7 @@ describe("Harness 上传数据隐私门", () => {
 
     expect(accepted.status).toBe(200);
     expect(body.task, JSON.stringify(body)).toMatchObject({ state: "completed", counters: { toolCallCount: 2 } });
-    expect(modelFetch).toHaveBeenCalledTimes(4);
+    expect(modelFetch).toHaveBeenCalledTimes(5);
     const outbound = modelFetch.mock.calls.map((invocation) => String(invocation[1]?.body)).join("\n");
     expect(outbound).toContain("A5FNL01");
     expect(outbound).toContain("飞达工位飞达报警中");

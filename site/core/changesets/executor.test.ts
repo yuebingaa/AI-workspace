@@ -51,6 +51,38 @@ describe("ChangeSet 执行器", () => {
     expect(next.appliedChangeSetIds).toEqual([repurchaseChangeSet.id]);
   });
 
+  it("编辑者可以通过 ChangeSet 新增和删除工作界面", () => {
+    const { dataProduct } = fixtures();
+    const pageId = "page_workspace_quality";
+    const addPage: ChangeSet = {
+      id: "changeset_add_page",
+      title: "新增质量分析界面",
+      status: "ready",
+      operations: [{
+        id: "operation_add_page",
+        type: "addPage",
+        label: "新增工作界面",
+        description: "新增质量分析界面",
+        pageId,
+        page: { id: pageId, title: "质量分析", route: "/workspace/quality", root: { id: "root_page_workspace_quality", type: "PageRoot", props: {}, children: [] } },
+        navigationItem: { id: "nav_workspace_quality", title: "质量分析", pageId },
+      }],
+    };
+    const added = applyChangeSet(createExecutionState(dataProduct.appSpec), addPage, "editor");
+    expect(added.present.pages.find((page) => page.id === pageId)?.title).toBe("质量分析");
+    expect(added.present.navigation.some((item) => item.pageId === pageId)).toBe(true);
+
+    const removePage: ChangeSet = {
+      id: "changeset_delete_page",
+      title: "删除质量分析界面",
+      status: "ready",
+      operations: [{ id: "operation_delete_page", type: "deletePage", label: "删除工作界面", description: "删除质量分析界面", pageId }],
+    };
+    const removed = applyChangeSet(added, removePage, "editor");
+    expect(removed.present.pages.some((page) => page.id === pageId)).toBe(false);
+    expect(removed.present.navigation.some((item) => item.pageId === pageId)).toBe(false);
+  });
+
   it("取消预览时恢复正式 AppSpec", () => {
     const { dataProduct, repurchaseChangeSet } = fixtures();
     const original = createExecutionState(dataProduct.appSpec);

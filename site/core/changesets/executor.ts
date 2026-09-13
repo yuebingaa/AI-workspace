@@ -140,6 +140,20 @@ function updatePage(appSpec: AppSpec, pageId: string, updater: (page: AppPage) =
 }
 
 function applyOperationUnchecked(appSpec: AppSpec, operation: ChangeOperation): AppSpec {
+  if (operation.type === "addPage") {
+    return {
+      ...appSpec,
+      pages: [...appSpec.pages, structuredClone(operation.page)],
+      navigation: [...appSpec.navigation, structuredClone(operation.navigationItem)],
+    };
+  }
+  if (operation.type === "deletePage") {
+    return {
+      ...appSpec,
+      pages: appSpec.pages.filter((page) => page.id !== operation.pageId),
+      navigation: appSpec.navigation.filter((item) => item.pageId !== operation.pageId),
+    };
+  }
   if (operation.type === "updatePage") {
     return {
       ...appSpec,
@@ -186,11 +200,30 @@ function applyOperationUnchecked(appSpec: AppSpec, operation: ChangeOperation): 
 }
 
 function validateOperationTarget(appSpec: AppSpec, operation: ChangeOperation) {
+  if (operation.type === "addPage") {
+    if (operation.pageId !== operation.page.id || operation.navigationItem.pageId !== operation.page.id) {
+      throw new StudioValidationError("ChangeSet 页面校验失败", ["新增页面的 pageId、页面 ID 与导航目标必须一致"]);
+    }
+    if (appSpec.pages.some((page) => page.id === operation.page.id)) {
+      throw new StudioValidationError("ChangeSet 页面校验失败", [`页面 ID 已存在：${operation.page.id}`]);
+    }
+    if (appSpec.navigation.some((item) => item.id === operation.navigationItem.id)) {
+      throw new StudioValidationError("ChangeSet 页面校验失败", [`导航 ID 已存在：${operation.navigationItem.id}`]);
+    }
+    return;
+  }
   const page = appSpec.pages.find((candidate) => candidate.id === operation.pageId);
   if (!page) {
     throw new StudioValidationError("ChangeSet 目标校验失败", [
       `操作“${operation.label}”引用了不存在的页面：${operation.pageId}`,
     ]);
+  }
+
+  if (operation.type === "deletePage") {
+    if (appSpec.pages.length <= 1) {
+      throw new StudioValidationError("ChangeSet 页面校验失败", ["至少需要保留一个工作界面"]);
+    }
+    return;
   }
 
   if (operation.type === "updatePage") {
@@ -348,7 +381,7 @@ export function applyChangeSet(
     history: [...state.history, {
       appSpec: state.present,
       changeSetId: changeSet.id,
-      requiredRole: changeSet.operations.some((operation) => operation.type === "removeNode" || operation.type === "updatePage")
+      requiredRole: changeSet.operations.some((operation) => operation.type === "removeNode")
         ? "admin" as const
         : "editor" as const,
     }].slice(-MAX_CHANGESET_HISTORY),

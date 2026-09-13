@@ -1,4 +1,5 @@
-import { datasetRepository } from "@/core/datasets/server/dataset-repository";
+import { requestDatasetRepository, projectErrorResponse } from "@/core/projects/server/request";
+import { ProjectError } from "@/core/projects/server/store";
 import { DatasetResponseTooLargeError, serializeDatasetResponse } from "@/core/datasets/server/dataset-response";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 
@@ -23,12 +24,13 @@ export async function GET(request: Request) {
   const datasetId = datasetIdFrom(request);
   if (!datasetIdPattern.test(datasetId)) return invalidId();
   try {
-    const stored = await datasetRepository.get(resolveDemoRequestIdentity(), datasetId);
+    const stored = await requestDatasetRepository(request).get(resolveDemoRequestIdentity(), datasetId);
     if (!stored) return Response.json({ error: { message: "上传数据集不存在或已过期。" } }, { status: 404, headers: noStoreHeaders });
     return new Response(serializeDatasetResponse({ dataset: stored.descriptor, rows: stored.rows }), {
       headers: { ...noStoreHeaders, "content-type": "application/json; charset=utf-8" },
     });
   } catch (error) {
+    if (error instanceof ProjectError) return projectErrorResponse(error);
     if (error instanceof DatasetResponseTooLargeError) {
       return Response.json({ error: { message: error.message } }, { status: 413, headers: noStoreHeaders });
     }
@@ -40,9 +42,10 @@ export async function DELETE(request: Request) {
   const datasetId = datasetIdFrom(request);
   if (!datasetIdPattern.test(datasetId)) return invalidId();
   try {
-    const deleted = await datasetRepository.delete(resolveDemoRequestIdentity(), datasetId);
+    const deleted = await requestDatasetRepository(request).delete(resolveDemoRequestIdentity(), datasetId);
     return new Response(null, { status: deleted ? 204 : 404, headers: noStoreHeaders });
-  } catch {
+  } catch (error) {
+    if (error instanceof ProjectError) return projectErrorResponse(error);
     return Response.json({ error: { message: "删除上传数据集失败。" } }, { status: 500, headers: noStoreHeaders });
   }
 }

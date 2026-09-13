@@ -11,6 +11,8 @@ export const studioRoleLabels: Record<StudioRole, string> = {
 
 export interface StudioCapabilities {
   preview: boolean;
+  addPage: boolean;
+  deletePage: boolean;
   addNode: boolean;
   moveNode: boolean;
   updateNodeProps: boolean;
@@ -19,14 +21,16 @@ export interface StudioCapabilities {
 }
 
 export const studioCapabilities: Record<StudioRole, StudioCapabilities> = {
-  viewer: { preview: true, addNode: false, moveNode: false, updateNodeProps: false, removeNode: false, updatePage: false },
-  editor: { preview: true, addNode: true, moveNode: true, updateNodeProps: true, removeNode: false, updatePage: false },
-  admin: { preview: true, addNode: true, moveNode: true, updateNodeProps: true, removeNode: true, updatePage: true },
+  viewer: { preview: true, addPage: false, deletePage: false, addNode: false, moveNode: false, updateNodeProps: false, removeNode: false, updatePage: false },
+  editor: { preview: true, addPage: true, deletePage: true, addNode: true, moveNode: true, updateNodeProps: true, removeNode: false, updatePage: true },
+  admin: { preview: true, addPage: true, deletePage: true, addNode: true, moveNode: true, updateNodeProps: true, removeNode: true, updatePage: true },
 };
 
 export function assertOperationPermission(role: StudioRole, operation: ChangeOperation): void {
   if (studioCapabilities[role][operation.type]) return;
   const actionLabels: Record<ChangeOperation["type"], string> = {
+    addPage: "添加工作界面",
+    deletePage: "删除工作界面",
     addNode: "添加组件",
     moveNode: "调整组件顺序",
     updateNodeProps: "修改组件属性",

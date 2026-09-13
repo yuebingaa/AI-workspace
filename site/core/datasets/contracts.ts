@@ -48,9 +48,11 @@ export interface UploadedDatasetDescriptor {
   sensitiveFields: SensitiveFieldSummary[];
   aiAccessPolicy: DatasetAiAccessPolicy;
   createdAt: string;
-  expiresAt: string;
-  retentionMinutes: number;
+  expiresAt?: string;
+  retentionMinutes?: number;
+  storageMode?: "project";
   persistenceNotice: string;
+  provenance?: { kind: "notebook"; runId: string; resultId: string; cellId: string; revision: number; connectionIds: string[] };
 }
 
 const dataValueSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()]);
@@ -73,9 +75,13 @@ export const uploadedDatasetDescriptorSchema: z.ZodType<UploadedDatasetDescripto
   }).strict()).max(CSV_UPLOAD_LIMITS.maxColumns),
   aiAccessPolicy: datasetAiAccessPolicySchema,
   createdAt: z.iso.datetime(),
-  expiresAt: z.iso.datetime(),
-  retentionMinutes: z.number().int().positive(),
+  expiresAt: z.iso.datetime().optional(),
+  retentionMinutes: z.number().int().positive().optional(),
+  storageMode: z.literal("project").optional(),
   persistenceNotice: z.string().min(1).max(500),
+  provenance: z.object({ kind: z.literal("notebook"), runId: z.string().max(160), resultId: z.string().max(240),
+    cellId: z.string().max(120), revision: z.number().int().nonnegative(), connectionIds: z.array(z.string().max(100)).max(20),
+  }).strict().optional(),
 }).strict();
 
 function validateDatasetConsistency(
@@ -97,8 +103,14 @@ function validateDatasetConsistency(
   if (source.expiresAt !== dataset.expiresAt) addIssue(["dataset", "source", "expiresAt"], "数据源到期时间必须与数据集到期时间一致");
   if (source.aiAccessPolicy !== dataset.aiAccessPolicy) addIssue(["dataset", "source", "aiAccessPolicy"], "数据源 AI 策略必须与数据集策略一致");
 
-  const retentionMinutes = Math.round((Date.parse(dataset.expiresAt) - Date.parse(dataset.createdAt)) / 60_000);
-  if (retentionMinutes !== dataset.retentionMinutes) addIssue(["dataset", "retentionMinutes"], "保留分钟数必须与创建/到期时间一致");
+  if (dataset.storageMode === "project") {
+    if (dataset.expiresAt !== undefined || dataset.retentionMinutes !== undefined || source.ephemeral !== false) {
+      addIssue(["dataset", "storageMode"], "项目数据不得声明临时保留期");
+    }
+  } else {
+    const retentionMinutes = Math.round((Date.parse(dataset.expiresAt ?? "") - Date.parse(dataset.createdAt)) / 60_000);
+    if (!dataset.expiresAt || retentionMinutes !== dataset.retentionMinutes) addIssue(["dataset", "retentionMinutes"], "临时数据的保留分钟数必须与创建/到期时间一致");
+  }
 
   const fieldNames = source.fields.map((field) => field.name);
   if (dataset.fieldMappings.length !== fieldNames.length) {

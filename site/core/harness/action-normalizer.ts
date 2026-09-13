@@ -9,7 +9,7 @@ export interface HarnessActionNormalizationOptions {
 export interface HarnessActionNormalizationResult {
   turn: HarnessModelTurn;
   normalized: boolean;
-  normalizedFrom?: "completedAlias" | "legacyEnvelope" | "readonlyTextSummary" | "readonlyCompleteWithPageId";
+  normalizedFrom?: "completedAlias" | "legacyEnvelope" | "readonlyTextSummary" | "readonlyCompleteWithPageId" | "readonlyCompleteWithIgnoredToolFields";
 }
 
 export class HarnessActionProtocolError extends Error {
@@ -55,6 +55,19 @@ function readonlyAlias(
   options: HarnessActionNormalizationOptions,
 ): HarnessActionNormalizationResult | undefined {
   if (!isRecord(value)) return undefined;
+
+  if (
+    hasOnlyKeys(value, ["type", "message", "toolCallId", "name", "arguments"])
+    && value.type === "complete"
+    && nonEmptyMessage(value.message)
+    && ("toolCallId" in value || "name" in value || "arguments" in value)
+  ) {
+    return {
+      turn: { type: "complete", message: value.message },
+      normalized: true,
+      normalizedFrom: "readonlyCompleteWithIgnoredToolFields",
+    };
+  }
 
   if (
     hasOnlyKeys(value, ["type", "message", "pageId"])

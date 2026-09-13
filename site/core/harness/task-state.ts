@@ -9,6 +9,7 @@ import {
   type HarnessState,
   type HarnessTaskSummary,
 } from "./contracts";
+import { sanitizeHarnessText } from "./security";
 
 export interface HarnessTaskClock {
   now(): Date;
@@ -77,12 +78,17 @@ export function settleHarnessConfirmation(
   clock: HarnessTaskClock,
 ): HarnessTaskSummary {
   if (task.state !== "awaitingConfirmation") return task;
+  const changeDetails = task.resultMessage?.trim();
+  const notebookOnly = Boolean(task.notebookArtifact && !task.pendingChangeSet);
+  const confirmationResult = accepted
+    ? notebookOnly ? "状态更新：用户已采用 Notebook 草稿；正式看板未修改，Notebook 结果需在本地运行查看。" : "状态更新：以上变更已由用户确认并正式应用。"
+    : "状态更新：用户已拒绝以上变更，正式 AppSpec 未修改。";
   return appendHarnessEvent(task, {
     type: "confirmation",
     state: accepted ? "completed" : "cancelled",
-    message: accepted ? "用户确认并应用了待确认 ChangeSet。" : "用户拒绝了待确认 ChangeSet，正式 AppSpec 未修改。",
+    message: notebookOnly ? accepted ? "用户采用了 Notebook 草稿，正式看板未修改。" : "用户未采用 Notebook 草稿。" : accepted ? "用户确认并应用了待确认 ChangeSet。" : "用户拒绝了待确认 ChangeSet，正式 AppSpec 未修改。",
   }, clock, {
-    resultMessage: accepted ? "待确认变更已由用户正式应用。" : "用户已拒绝本次变更。",
+    resultMessage: sanitizeHarnessText(changeDetails ? `${changeDetails.slice(0, 1_700)}\n\n${confirmationResult}` : confirmationResult).slice(0, 2_000),
     terminationCode: accepted ? "completed" : "cancelled",
     ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, accepted ? "completed" : "cancelled") } : {}),
     ...(accepted ? {} : { pendingChangeSet: undefined }),

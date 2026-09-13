@@ -8,7 +8,7 @@ import {
   type HarnessTerminationCode,
   type HarnessToolName,
 } from "@/core/harness/contracts";
-import { appNodeSchema } from "@/core/schemas";
+import { appNodeSchema, appPageSchema } from "@/core/schemas";
 
 export const HARNESS_EVALUATION_SCHEMA_VERSION = 1 as const;
 
@@ -46,6 +46,20 @@ const evaluationRequestSchema = z.object({
 }).strict();
 
 export const operationExpectationSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("addPage"),
+    pageId: z.string().min(1).max(160),
+    page: appPageSchema,
+    navigationItem: z.object({
+      id: z.string().min(1).max(160),
+      title: z.string(),
+      pageId: z.string().min(1).max(160),
+    }).strict(),
+  }).strict(),
+  z.object({
+    type: z.literal("deletePage"),
+    pageId: z.string().min(1).max(160),
+  }).strict(),
   z.object({
     type: z.literal("addNode"),
     pageId: z.string().min(1).max(120),

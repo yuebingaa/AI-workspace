@@ -54,7 +54,9 @@ describe("Harness 客户端", () => {
 
     await requestHarnessTask(request(), { fetchImpl, rawWorkbook: workbook });
     const init = fetchImpl.mock.calls[0][1];
-    expect(init?.headers).toBeUndefined();
+    // Project routing headers are allowed; the browser must set the multipart
+    // boundary instead of receiving a manually specified Content-Type.
+    expect(new Headers(init?.headers).has("content-type")).toBe(false);
     expect(init?.body).toBeInstanceOf(FormData);
     const body = init?.body as FormData;
     expect(body.get("rawWorkbook")).toBe(workbook);

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "example",
+      "enabled": false,
+      "required": false,
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.example.com/mcp",
+        "bearerTokenEnvVar": "EXAMPLE_MCP_TOKEN"
+      },
+      "enabledTools": ["records/list"],
+      "defaultPolicy": "readOnly",
+      "toolPolicies": {},
+      "allowDestructive": false,
+      "allowOpenWorld": false,
+      "startupTimeoutMs": 10000,
+      "toolTimeoutMs": 30000
+    }
+  ]
+}

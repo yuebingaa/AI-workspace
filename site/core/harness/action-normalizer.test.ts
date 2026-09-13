@@ -54,6 +54,30 @@ describe("Harness 动作协议标准化", () => {
     }, options)).toThrow("Schema 校验");
   });
 
+  it("只读工具结果已齐全时忽略 complete 动作遗留的工具字段", () => {
+    expect(normalizeHarnessModelTurn({
+      type: "complete",
+      message: "页面结构检查完成，接下来应由视觉 Verifier 核对窄屏布局。",
+      toolCallId: "stale_call",
+      name: "inspectAppSpec",
+      arguments: { pageId: "page_home" },
+    }, readonlyComplete)).toEqual({
+      turn: {
+        type: "complete",
+        message: "页面结构检查完成，接下来应由视觉 Verifier 核对窄屏布局。",
+      },
+      normalized: true,
+      normalizedFrom: "readonlyCompleteWithIgnoredToolFields",
+    });
+    expect(() => normalizeHarnessModelTurn({
+      type: "complete",
+      message: "已修改页面。",
+      toolCallId: "stale_call",
+      name: "createChangeSetPreview",
+      arguments: {},
+    }, { readonlyTask: false, readonlyResultComplete: true })).toThrow("Schema 校验");
+  });
+
   it("拒绝缺少 message 的 complete", () => {
     expect(() => normalizeHarnessModelTurn({ type: "complete" }, readonlyComplete))
       .toThrow("Schema 校验");

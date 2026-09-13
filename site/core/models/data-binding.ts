@@ -98,7 +98,7 @@ export interface DataSourceDefinition {
   columnCount: number;
   qualityScore: number;
   updatedAt: string;
-  sourceType: "csv" | "json" | "local-fixture";
+  sourceType: "csv" | "json" | "local-fixture" | "bi";
   fields: DataSourceField[];
   expiresAt?: string;
   ephemeral?: boolean;

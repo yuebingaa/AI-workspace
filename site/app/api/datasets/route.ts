@@ -4,6 +4,9 @@ import { datasetRepository } from "@/core/datasets/server/dataset-repository";
 import { DatasetResponseTooLargeError, serializeDatasetResponse } from "@/core/datasets/server/dataset-response";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { StudioValidationError } from "@/core/schemas";
+import { requestDatasetRepository, projectErrorResponse } from "@/core/projects/server/request";
+import { ProjectError } from "@/core/projects/server/store";
+import type { DatasetRepository } from "@/core/datasets/server/dataset-repository";
 
 export const runtime = "nodejs";
 const CSV_UPLOAD_TIMEOUT_MS = 15_000;
@@ -22,17 +25,19 @@ export async function persistDatasetResponse(
   identity: Parameters<typeof datasetRepository.put>[0],
   parsed: Parameters<typeof datasetRepository.put>[1],
   maxResponseBytes?: number,
+  repository: DatasetRepository = datasetRepository,
 ): Promise<string> {
   const serialized = serializeDatasetResponse(parsed, maxResponseBytes);
-  await datasetRepository.put(identity, parsed);
-  return serialized;
+  const stored = await repository.put(identity, parsed);
+  return stored.descriptor.storageMode === "project" ? serializeDatasetResponse({ dataset: stored.descriptor, rows: stored.rows }, maxResponseBytes) : serialized;
 }
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const identity = resolveDemoRequestIdentity();
-    return Response.json({ datasets: await datasetRepository.list(identity) }, { headers: noStoreHeaders });
-  } catch {
+    return Response.json({ datasets: await (request ? requestDatasetRepository(request) : datasetRepository).list(identity) }, { headers: noStoreHeaders });
+  } catch (error) {
+    if (error instanceof ProjectError) return projectErrorResponse(error);
     return jsonError("读取上传数据集列表失败。", 500);
   }
 }
@@ -51,6 +56,7 @@ export async function POST(request: Request) {
   const mimeType = request.headers.get("content-type") ?? "";
   try {
     const identity = resolveDemoRequestIdentity();
+    const repository = requestDatasetRepository(request);
     const parsed = await parseCsvUpload({
       stream: request.body,
       originalFileName,
@@ -58,12 +64,13 @@ export async function POST(request: Request) {
       signal: request.signal,
       timeoutMs: CSV_UPLOAD_TIMEOUT_MS,
     });
-    const serialized = await persistDatasetResponse(identity, parsed);
+    const serialized = await persistDatasetResponse(identity, parsed, undefined, repository);
     return new Response(serialized, {
       status: 201,
       headers: { ...noStoreHeaders, "content-type": "application/json; charset=utf-8" },
     });
   } catch (error) {
+    if (error instanceof ProjectError) return projectErrorResponse(error);
     if (error instanceof CsvDatasetError) return jsonError(error.message, error.status);
     if (error instanceof DatasetResponseTooLargeError) return jsonError(error.message, 413);
     if (error instanceof StudioValidationError) return jsonError(error.message, 409);

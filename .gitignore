@@ -1,0 +1,27 @@
+# Local source data and linked internal folders (never follow them into Git).
+/EDS/
+/EDS.integration-source-link/
+
+# Built portable distributions, extraction checks, and local evidence.
+/AgentCanvas/
+/AgentCanvas-Windows*.zip
+/package-extract-v2/
+/package-short-v2/
+/portable-release/
+/portable-release-model-selector/
+/artifacts/
+/output/
+
+# Local task journals and internal status reports can include private details.
+# Existing tracked history is intentionally not rewritten by these rules.
+/TASK-LOG.md
+/项目阶段汇报-*.md
+
+# Keep credentials and private connection settings local at any depth.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12

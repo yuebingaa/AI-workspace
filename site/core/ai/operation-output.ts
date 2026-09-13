@@ -8,6 +8,14 @@ const safeGeneratedToken = /^[A-Za-z0-9_-]{1,60}$/;
 
 const modelOperationDraftSchema = z.discriminatedUnion("type", [
   z.object({
+    type: z.literal("addPage"),
+    title: z.string().trim().min(1).max(50),
+  }).strict(),
+  z.object({
+    type: z.literal("deletePage"),
+    pageId: z.string().min(1),
+  }).strict(),
+  z.object({
     type: z.literal("addNode"),
     pageId: z.string().min(1),
     parentId: z.string().min(1),
@@ -161,9 +169,25 @@ function updatePageVariants(request: AiPlanRequest): JsonSchema[] {
   }, ["type", "pageId"]));
 }
 
+function addPageVariant(): JsonSchema {
+  return strictObject({
+    type: stringEnum(["addPage"]),
+    title: { type: "string", minLength: 1, maxLength: 50 },
+  }, ["type", "title"]);
+}
+
+function deletePageVariants(request: AiPlanRequest): JsonSchema[] {
+  return request.appSpec.pages.map((page) => strictObject({
+    type: stringEnum(["deletePage"]),
+    pageId: stringEnum([page.id]),
+  }, ["type", "pageId"]));
+}
+
 export function buildModelPlanJsonSchema(request: AiPlanRequest): JsonSchema {
   const capabilities = studioCapabilities[request.role];
   const variants: JsonSchema[] = [];
+  if (capabilities.addPage) variants.push(addPageVariant());
+  if (capabilities.deletePage) variants.push(...deletePageVariants(request));
   if (capabilities.addNode) variants.push(...addNodeVariants(request));
   if (capabilities.updateNodeProps) variants.push(...updatePropsVariants(request));
   if (capabilities.removeNode) variants.push(...pageScopedVariants(request, "removeNode"));
@@ -178,6 +202,8 @@ export function buildModelPlanJsonSchema(request: AiPlanRequest): JsonSchema {
 
 function operationLabel(operation: ModelOperationDraft): string {
   const labels: Record<ModelOperationDraft["type"], string> = {
+    addPage: "新增工作界面",
+    deletePage: "删除工作界面",
     addNode: "添加组件",
     updateNodeProps: "修改组件属性",
     removeNode: "删除组件",
@@ -188,6 +214,8 @@ function operationLabel(operation: ModelOperationDraft): string {
 }
 
 function operationDescription(operation: ModelOperationDraft): string {
+  if (operation.type === "addPage") return `新增工作界面“${operation.title}”`;
+  if (operation.type === "deletePage") return `删除工作界面 ${operation.pageId}`;
   if (operation.type === "updatePage") return `更新页面 ${operation.pageId}`;
   if (operation.type === "addNode") return `向 ${operation.parentId} 添加 ${operation.node.type}`;
   if (operation.type === "moveNode") return `移动 ${operation.nodeId} 到 ${operation.parentId}`;
@@ -195,6 +223,25 @@ function operationDescription(operation: ModelOperationDraft): string {
 }
 
 function compileOperation(operation: ModelOperationDraft, id: string): ChangeOperation {
+  if (operation.type === "addPage") {
+    const suffix = id.replace(/[^A-Za-z0-9_-]/gu, "").slice(0, 90);
+    const pageId = `page_workspace_${suffix}`;
+    const page = {
+      id: pageId,
+      title: operation.title,
+      route: `/workspace/${suffix}`,
+      root: { id: `root_${pageId}`, type: "PageRoot" as const, props: {}, children: [] },
+    };
+    return {
+      id,
+      type: "addPage",
+      label: operationLabel(operation),
+      description: operationDescription(operation),
+      pageId,
+      page,
+      navigationItem: { id: `nav_workspace_${suffix}`, title: operation.title, pageId },
+    };
+  }
   const common = {
     id,
     label: operationLabel(operation),
@@ -202,6 +249,8 @@ function compileOperation(operation: ModelOperationDraft, id: string): ChangeOpe
     pageId: operation.pageId,
   };
   switch (operation.type) {
+    case "deletePage":
+      return { ...common, type: operation.type };
     case "addNode":
       return { ...common, type: operation.type, parentId: operation.parentId, node: operation.node, ...(operation.position === undefined ? {} : { position: operation.position }) };
     case "updateNodeProps":
@@ -262,6 +311,8 @@ export function sanitizedZodIssues(error: z.ZodError, raw: unknown): SanitizedAi
 
 function operationTypeFromUnknown(value: unknown): ChangeOperation["type"] | undefined {
   switch (value) {
+    case "addPage":
+    case "deletePage":
     case "addNode":
     case "updateNodeProps":
     case "removeNode":

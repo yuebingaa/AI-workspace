@@ -21,12 +21,14 @@ describe("DeepSeek 最小规划上下文", () => {
     expect(serialized).not.toContain("order_001");
   });
 
-  it("系统提示明确限制 JSON 和五种 ChangeOperation 字段结构", () => {
+  it("系统提示明确限制 JSON 和七种 ChangeOperation 字段结构", () => {
     expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("只返回");
     expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("updateNodeProps");
     expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("addNode");
     expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("removeNode");
     expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("moveNode");
     expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("updatePage");
+    expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("addPage");
+    expect(DEEPSEEK_CHANGESET_SYSTEM_PROMPT).toContain("deletePage");
   });
 });

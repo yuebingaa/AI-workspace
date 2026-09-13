@@ -18,6 +18,7 @@ import {
   HarnessIdempotencyStore,
   MAX_HARNESS_COMPLETION_TOKENS_PER_CALL,
   appendHarnessEvent,
+  createHarnessExecutionPlan,
   createHarnessTask,
   harnessTaskSummarySchema,
   harnessToolCatalog,
@@ -106,6 +107,20 @@ function semanticDecision(overrides: Partial<HarnessSemanticIntentDecision> = {}
     confidence: 0.96,
     rationale: "用户要求只读分析。",
     ...overrides,
+  };
+}
+
+function dynamicPlan(toolNames: Array<"analyzeEdsReports" | "createChangeSetPreview">) {
+  return {
+    goal: "完成已验证的用户任务",
+    rationale: "根据语义路由和 Evidence Bus 安排必要工具。",
+    steps: toolNames.map((toolName) => ({
+      objective: `执行 ${toolName}`,
+      toolName,
+      requiredEvidence: [`${toolName} 的结构化结果`],
+      completionCriteria: [`${toolName} 成功返回`],
+    })),
+    finalResponseCriteria: ["关键声明引用 Evidence Bus 证据"],
   };
 }
 
@@ -324,14 +339,14 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.resultMessage).toContain("夜班异常 173 次");
   });
 
-  it("指定 EDS 线体的异常类型分析使用多步骤预算，读完汇总后仍能返回答案", async () => {
+  it("指定 EDS 线体的异常类型分析允许累计输入超过旧版 14000 token 后返回答案", async () => {
     const input = edsAnalysisRequest("A5FNL01 的异常类型");
     const model = new ScriptedModel([
       tool("analyzeEdsReports", {}, "call_eds_line_issue_types"),
       complete("A5FNL01 的主要异常类型包括飞达工位超时和贴膜定位异常。"),
     ], [
-      { promptTokens: 2_600, completionTokens: 10, totalTokens: 2_610 },
-      { promptTokens: 1_800, completionTokens: 10, totalTokens: 1_810 },
+      { promptTokens: 8_000, completionTokens: 10, totalTokens: 8_010 },
+      { promptTokens: 8_000, completionTokens: 10, totalTokens: 8_010 },
     ]);
 
     const task = await new DeepSeekHarness().run(input.request, {
@@ -345,8 +360,8 @@ describe("DeepSeekHarness 服务端状态机", () => {
       resultMessage: expect.stringContaining("A5FNL01"),
       contextUsage: {
         complexity: "multiStep",
-        totalPromptTokens: 4_400,
-        limits: { maxTotalPromptTokens: 8_000 },
+        totalPromptTokens: 16_000,
+        limits: { maxTotalPromptTokens: 48_000 },
       },
     });
     expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["analyzeEdsReports"]);
@@ -976,6 +991,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const input = edsAnalysisRequest("比较当前 EDS 班次与其他班次的异常次数、异常时间和主要异常类别。不要修改页面。");
     const turns: Array<HarnessModelTurn | string> = [
       JSON.stringify(semanticDecision({ wantsEdsAnalysis: true, skillIds: ["eds-analysis"] })),
+      JSON.stringify(dynamicPlan(["analyzeEdsReports"])),
       tool("analyzeEdsReports", {}, "call_eds_shift_compare"),
       "说明：已经完成班次对比",
       complete("当前白班与夜班均为 293 次异常、231.78 分钟；两班主要异常类别一致，应继续核对实际导入班次数据。"),
@@ -997,12 +1013,12 @@ describe("DeepSeekHarness 服务端状态机", () => {
     });
 
     expect(task.state).toBe("completed");
-    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 4, toolCallCount: 1 });
-    expect(task.usage).toEqual({ promptTokens: 400, completionTokens: 80, totalTokens: 480 });
+    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 5, toolCallCount: 1 });
+    expect(task.usage).toEqual({ promptTokens: 500, completionTokens: 100, totalTokens: 600 });
     expect(task.semanticIntent).toMatchObject({ mode: "readOnlyTask", wantsEdsAnalysis: true });
     expect(task.resultMessage).toContain("白班与夜班");
     expect(task.events.some((event) => event.message.includes("模型动作格式未通过校验") && event.state === "planning")).toBe(true);
-    const repairedRequest = JSON.parse(String(fetchImpl.mock.calls[3][1]?.body)) as { messages: Array<{ content: string }> };
+    const repairedRequest = JSON.parse(String(fetchImpl.mock.calls[4][1]?.body)) as { messages: Array<{ content: string }> };
     expect(repairedRequest.messages[1].content).toContain('"phase":"repairMalformedAction"');
     expect(repairedRequest.messages[1].content).toContain("只返回一个符合系统示例");
     expect(task.verification).toMatchObject({ status: "passed", attempt: 1 });
@@ -1273,7 +1289,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
       expect(task.pendingChangeSet).toBeUndefined();
       expect(input.appSpec).toEqual(formal);
       expect(globalThis.localStorage.getItem(storageKey)).toBe(storageValue);
-      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
       expect(task.events.some((event) => event.message.includes("模型动作格式未通过校验"))).toBe(true);
     } finally {
       if (originalLocalStorage) Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
@@ -1362,6 +1378,10 @@ describe("DeepSeekHarness 服务端状态机", () => {
       nodeId: "page_home_revenue",
       props: { label: "月度总收入" },
     })]);
+    expect(task.resultMessage).toContain("已生成 1 项待确认变更");
+    expect(task.resultMessage).toContain("本月收入");
+    expect(task.resultMessage).toContain("月度总收入");
+    expect(task.resultMessage).toContain("正式页面尚未修改");
     expect(data.dataProduct.appSpec).toEqual(formal);
     expect(model.calls).toBe(1);
   });
@@ -1377,6 +1397,8 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const initial = createExecutionState(data.dataProduct.appSpec);
     const rejected = settleHarnessConfirmation(task, false, { now: () => new Date(), id: () => "reject_event" });
     expect(rejected.state).toBe("cancelled");
+    expect(rejected.resultMessage).toContain("本月收入");
+    expect(rejected.resultMessage).toContain("用户已拒绝以上变更");
     expect(initial.present).toEqual(data.dataProduct.appSpec);
 
     const previewed = previewChangeSet(initial, task.pendingChangeSet, "editor");
@@ -1385,6 +1407,8 @@ describe("DeepSeekHarness 服务端状态机", () => {
     const confirmed = settleHarnessConfirmation(task, true, { now: () => new Date(), id: () => "confirm_event" });
     expect(confirmed.state).toBe("completed");
     expect(confirmed.terminationCode).toBe("completed");
+    expect(confirmed.resultMessage).toContain("月度总收入");
+    expect(confirmed.resultMessage).toContain("以上变更已由用户确认并正式应用");
     expect(applied.present).not.toEqual(initial.present);
   });
 
@@ -1520,13 +1544,14 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.events.some((event) => event.message.includes("Verifier 未通过任务验收"))).toBe(true);
   });
 
-  it("Verifier 二次验收仍不通过时禁止任务伪装成完成", async () => {
+  it("Verifier 三次验收仍不通过时禁止任务伪装成完成", async () => {
     const data = fixtures();
     const model = new ScriptedModel([
       tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_verifier_fail_dataset"),
       tool("inspectFields", { dataSourceId: "dataset_retail_orders" }, "call_verifier_fail_fields"),
       complete("已完成。"),
       complete("任务已完成。"),
+      complete("检查完成。"),
     ]);
 
     const task = await new DeepSeekHarness().run(request(
@@ -1539,9 +1564,142 @@ describe("DeepSeekHarness 服务端状态机", () => {
 
     expect(task.state).toBe("failed");
     expect(task.terminationCode).toBe("verificationFailed");
-    expect(task.verification).toMatchObject({ status: "failed", attempt: 2 });
+    expect(task.verification).toMatchObject({ status: "failed", attempt: 3 });
     expect(task.error).toContain("Verifier 未通过任务验收");
     expect(task.resultMessage).not.toContain("任务已完成");
+  });
+
+  it("视觉证据由 Harness 自动生成，模型不得把它误作用户前置条件", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([
+      blocked("受阻", ["visualVerification截图结果"]),
+      complete("当前页面未发现整页横向溢出；窄屏看板通过局部横向滚动访问完整内容。"),
+    ]);
+    const visualVerifier: HarnessVisualVerifier = {
+      verify: vi.fn(async () => ({
+        required: true,
+        status: "passed" as const,
+        source: "playwright-multimodal" as const,
+        summary: "截图与布局测量支持候选结论。",
+        model: "vision-test",
+        capturedAt: "2026-09-06T00:00:00.000Z",
+        screenshots: [{
+          viewport: { width: 900, height: 1000 },
+          capturePosition: "horizontalEnd" as const,
+          pageUrl: "http://127.0.0.1:3102/",
+          mimeType: "image/jpeg" as const,
+          byteLength: 1024,
+          sha256: "c".repeat(64),
+        }],
+        checks: [{ id: "responsive_layout", label: "响应式判断", status: "passed" as const, detail: "局部滚动可访问完整内容。" }],
+        issues: [],
+      })),
+    };
+
+    const task = await new DeepSeekHarness().run(request(
+      "request_visual_internal_prerequisite",
+      "检查当前页面设计是否有缺陷，不要修改页面。",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      visualVerifier,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(task.terminationCode).toBe("completed");
+    expect(model.inputs[1]?.context).toMatchObject({
+      modelCorrection: {
+        issueSummary: expect.stringContaining("不是用户需提供的前置条件"),
+      },
+    });
+    expect(task.events.some((event) => event.message.includes("误作用户前置条件"))).toBe(true);
+    expect(visualVerifier.verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("视觉任务先感知页面，再由模型规划，并通过 Evidence Bus 共享到 Executor 与 Verifier", async () => {
+    const data = fixtures();
+    const executor = new ScriptedModel([
+      tool("inspectAppSpec", { pageId: "page_home" }, "call_after_preflight"),
+      complete("根据 evidence_1_screenshot 与 DOM 证据，页面未发现遮挡。"),
+    ]);
+    const plan = vi.fn<NonNullable<HarnessModel["plan"]>>(async () => ({
+      plan: {
+        ...createHarnessExecutionPlan(request("request_preflight_plan", "检查页面是否有遮挡，不要修改页面。")),
+        source: "model" as const,
+        rationale: "前置截图和 DOM 证据已就绪，继续检查 AppSpec。",
+      },
+      model: "planner-test",
+      usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+      inputChars: 800,
+    }));
+    const model: HarnessModel = {
+      plan,
+      next: (input) => executor.next(input),
+    };
+    const bytes = Buffer.from("preflight-jpeg");
+    const preflight = {
+      summary: "页面主体和助手面板均可见。",
+      findings: ["控件命中检测正常。"],
+      uncertainties: [],
+      model: "vision-test",
+      capturedAt: "2026-09-06T00:00:00.000Z",
+      captures: [{
+        bytes,
+        evidence: {
+          viewport: { width: 900, height: 1000 },
+          capturePosition: "initial" as const,
+          pageUrl: "http://127.0.0.1:3102/",
+          mimeType: "image/jpeg" as const,
+          byteLength: bytes.byteLength,
+          sha256: "d".repeat(64),
+        },
+      }],
+      browserObservations: [{
+        viewport: { width: 900, height: 1000 },
+        pageTitle: "DataCanvas AI",
+        pageUrl: "http://127.0.0.1:3102/",
+        dom: { visibleText: "看板 AI 助手", landmarkCount: 1, landmarks: [] },
+        console: { errors: [], warnings: [], failedRequests: [] },
+        interactions: { checked: 1, reachable: 1, disabled: 0, occluded: 0, samples: [] },
+      }],
+    };
+    const visualVerifier: HarnessVisualVerifier = {
+      perceive: vi.fn(async () => preflight),
+      verify: vi.fn(async (input) => {
+        expect(input.preflightEvidence).toBe(preflight);
+        return {
+          required: true,
+          status: "passed" as const,
+          source: "playwright-multimodal" as const,
+          summary: "候选答案与前置截图一致。",
+          model: "vision-test",
+          capturedAt: "2026-09-06T00:00:00.000Z",
+          screenshots: preflight.captures.map(({ evidence }) => evidence),
+          checks: [{ id: "layout_integrity", label: "布局", status: "passed" as const, detail: "未发现遮挡。" }],
+          issues: [],
+        };
+      }),
+    };
+
+    const task = await new DeepSeekHarness().run(request(
+      "request_preflight_plan",
+      "检查页面是否有遮挡，不要修改页面。",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      visualVerifier,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(plan).toHaveBeenCalledTimes(1);
+    expect(plan.mock.calls[0][0].evidence.map((item) => item.kind)).toEqual(expect.arrayContaining([
+      "screenshot", "domSnapshot", "console", "interaction", "visualAnalysis",
+    ]));
+    expect(executor.inputs[0].context).toHaveProperty("evidenceBus.records");
+    expect(task.executionPlan?.source).toBe("model");
+    expect(task.evidence?.records.map((item) => item.kind)).toEqual(expect.arrayContaining([
+      "screenshot", "toolObservation", "visualAnalysis",
+    ]));
   });
 
   it("视觉任务在 Playwright 多模态证据通过后才允许 completed", async () => {
@@ -1582,13 +1740,82 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.state).toBe("completed");
     expect(visualVerifier.verify).toHaveBeenCalledTimes(1);
     expect(model.inputs[0]?.context).toMatchObject({
-      visualVerification: { required: true, available: true },
+      visualVerification: { required: true, available: true, mode: "inspection" },
     });
+    expect(visualVerifier.verify).toHaveBeenCalledWith(expect.objectContaining({ verificationMode: "inspection" }));
     expect(task.verification).toMatchObject({
       status: "passed",
       visualEvidence: { status: "passed", source: "playwright-multimodal" },
     });
     expect(task.executionPlan?.steps.at(-1)?.objective).toContain("多模态模型完成视觉验收");
+  });
+
+  it("视觉检查重规划时把截图事实交回 Executor 并纠正误报", async () => {
+    const data = fixtures();
+    const model = new ScriptedModel([
+      tool("inspectAppSpec", { pageId: "page_home" }, "call_visual_replan_appspec"),
+      complete("窄屏下存在整页横向溢出，右侧内容被裁切。"),
+      complete("窄屏使用局部横向滚动访问完整看板，整页没有横向溢出，也未发现内容裁切。"),
+    ]);
+    const visualVerifier: HarnessVisualVerifier = {
+      verify: vi.fn(async (input) => {
+        const corrected = input.candidateMessage.includes("局部横向滚动");
+        return {
+          required: true,
+          status: corrected ? "passed" as const : "failed" as const,
+          source: "playwright-multimodal" as const,
+          summary: corrected ? "候选答案与左右两端截图一致。" : "候选答案误报整页横向溢出。",
+          model: "vision-test",
+          capturedAt: "2026-09-06T00:00:00.000Z",
+          screenshots: [{
+            viewport: { width: 900, height: 1000 },
+            capturePosition: "horizontalEnd" as const,
+            layout: {
+              documentClientWidth: 900,
+              documentScrollWidth: 900,
+              canvasClientWidth: 885,
+              canvasScrollWidth: 1104,
+              canvasScrollLeft: 219,
+            },
+            pageUrl: "http://127.0.0.1:3102/",
+            mimeType: "image/jpeg" as const,
+            byteLength: 1024,
+            sha256: "b".repeat(64),
+          }],
+          checks: [{
+            id: "responsive_layout",
+            label: "响应式判断",
+            status: corrected ? "passed" as const : "failed" as const,
+            detail: "documentScrollWidth 与 documentClientWidth 相等；看板使用局部横向滚动。",
+          }],
+          issues: corrected ? [] : ["候选答案必须撤回整页横向溢出的误报，并说明看板采用局部横向滚动。"],
+        };
+      }),
+    };
+
+    const task = await new DeepSeekHarness().run(request(
+      "request_visual_verifier_replan",
+      "检查页面布局在窄屏下是否有裁切，不要修改页面。",
+    ), {
+      dataRuntime: data.dataRuntime,
+      modelClient: model,
+      visualVerifier,
+    });
+
+    expect(task.state).toBe("completed");
+    expect(visualVerifier.verify).toHaveBeenCalledTimes(2);
+    expect(model.inputs[2].context).toMatchObject({
+      verifier: {
+        phase: "repairAfterTaskVerification",
+        visualEvidence: {
+          status: "failed",
+          summary: "候选答案误报整页横向溢出。",
+          checks: [expect.objectContaining({ id: "responsive_layout" })],
+        },
+      },
+    });
+    expect(task.resultMessage).toContain("局部横向滚动");
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 2 });
   });
 
   it("图片能力问答会收到上传图片与当前页面截图能力，不再误报完全不能看图", async () => {
@@ -1655,15 +1882,17 @@ describe("DeepSeekHarness 服务端状态机", () => {
       "检查 retail_orders 数据集概况，并将页面标题改为新的经营概览",
     ), {
       dataRuntime: data.dataRuntime,
-      modelClient: new ScriptedModel([repeatedTool, repeatedTool, repeatedTool]),
+      modelClient: new ScriptedModel([repeatedTool, repeatedTool, repeatedTool,
+        { type: "complete", message: "这次暂时无法完成数据检查，你可以缩小分析范围后重新尝试。" }]),
       toolExecutor: executor,
     });
 
     expect(task.state).toBe("failed");
     expect(task.terminationCode).toBe("toolExecutionFailed");
     expect(task.error).toContain("使用相同参数在本任务中已经失败 2 次");
+    expect(task.resultMessage).toContain("暂时无法完成数据检查");
     expect(executor).toHaveBeenCalledTimes(2);
-    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 3, toolCallCount: 2 });
+    expect(task.counters).toEqual({ loopCount: 3, modelCallCount: 4, toolCallCount: 2 }); // Includes the explanation call, without executing another tool.
     expect(task.events.filter((event) => event.toolCall?.status === "failure")).toHaveLength(2);
     expect(task.workingMemory?.failedAttempts.every((attempt) => attempt.status === "exhausted")).toBe(true);
   });

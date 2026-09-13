@@ -1,8 +1,14 @@
 import { z } from "zod";
+import { agentDelegationSchema, agentIdentitySchema } from "./agents/contracts";
 import type { ChangeSet, DataRecipe } from "@/core/models";
 import { excelExportArtifactSchema, type ExcelExportArtifact } from "@/core/exports/contracts";
 import { appSpecSchema, changeSetSchema, dataRecipeSchema } from "@/core/schemas";
 import { edsWorkspaceSnapshotSchema } from "@/core/eds";
+import { semanticModelSchema, type SemanticModel } from "@/core/semantic/contracts";
+import { harnessMcpToolSummarySchema, type HarnessMcpToolSummary } from "./mcp/contracts";
+import { harnessNotebookArtifactSchema, type HarnessNotebookArtifact } from "./notebook-contracts";
+import { notebookDocumentSchema } from "@/core/notebook/contracts";
+import { harnessAnalysisPlanArtifactSchema, type HarnessAnalysisPlanArtifact } from "./analysis-plan-contracts";
 
 export const MAX_HARNESS_INSTRUCTION_LENGTH = 1_000;
 export const MAX_HARNESS_REQUEST_BYTES = 180_000;
@@ -14,7 +20,7 @@ export const MAX_HARNESS_TASKS = 20;
 
 export const DEFAULT_HARNESS_LIMITS = {
   maxLoops: 8,
-  maxModelCalls: 6,
+  maxModelCalls: 8,
   maxToolCalls: 6,
   modelRequestTimeoutMs: 25_000,
   toolCallTimeoutMs: 10_000,
@@ -58,7 +64,12 @@ export const harnessToolNameSchema = z.enum([
   "inspectEdsRawWorkbook",
   "readEdsRawRows",
   "inspectDataset",
+  "querySemanticModel",
+  "createAnalysisPlan",
+  "createNotebookDraft",
+  "inspectConnectionSchema",
   "inspectFields",
+  "transformSpreadsheetData",
   "previewDataRecipe",
   "validateDataRecipe",
   "exportDataRecipeToExcel",
@@ -67,6 +78,7 @@ export const harnessToolNameSchema = z.enum([
   "createEdsLineIssueChartPreview",
   "updateEdsTablePreview",
   "createChangeSetPreview",
+  "callMcpTool",
 ]);
 export type HarnessToolName = z.infer<typeof harnessToolNameSchema>;
 
@@ -142,8 +154,11 @@ export const harnessSemanticIntentDecisionSchema = z.object({
   wantsRecipe: z.boolean(),
   wantsAppInspection: z.boolean(),
   wantsExcel: z.boolean(),
+  wantsMcpTool: z.boolean().optional(),
+  wantsNotebook: z.boolean().optional(),
+  wantsAnalysisPlan: z.boolean().optional(),
   changeAction: z.enum(["none", "add", "update", "remove", "move"]),
-  changeTarget: z.enum(["none", "genericComponent", "chart", "edsBreakdownChart", "edsLineIssueChart", "edsTable"]),
+  changeTarget: z.enum(["none", "workspace", "genericComponent", "chart", "edsBreakdownChart", "edsLineIssueChart", "edsTable"]),
   componentKind: z.enum(["none", "chart", "metric", "table", "text", "generic"]),
   chartType: z.enum(["auto", "bar", "line", "area", "pie", "donut"]),
   targetLine: z.string().trim().min(1).max(120).optional(),
@@ -163,6 +178,9 @@ export type HarnessSemanticIntentDecision = z.infer<typeof harnessSemanticIntent
 
 export interface HarnessSemanticIntentInput {
   instruction: string;
+  hasNotebookContext?: boolean;
+  semanticModel?: Pick<SemanticModel, "id" | "name" | "sourceDatasetId" | "dimensions" | "measures">;
+  conversationBrief?: HarnessConversationBrief;
   previousInstruction?: string;
   previousAssistantMessage?: string;
   page: {
@@ -174,6 +192,7 @@ export interface HarnessSemanticIntentInput {
   hasEdsWorkspace: boolean;
   hasRawWorkbookAccess: boolean;
   hasVisualVerification: boolean;
+  mcpTools?: Array<Pick<HarnessMcpToolSummary, "serverId" | "name" | "description" | "annotations">>;
   userImageEvidence?: {
     summary: string;
     visibleText: string[];
@@ -214,7 +233,7 @@ export const harnessContextUsageSchema = z.object({
   limitReached: harnessContextLimitSchema.optional(),
   requests: z.array(z.object({
     iteration: z.number().int().positive(),
-    phase: z.enum(["semanticRouting", "execution"]).optional(),
+    phase: z.enum(["semanticRouting", "dynamicPlanning", "execution", "failureExplanation"]).optional(),
     inputChars: z.number().int().nonnegative(),
     estimatedPromptTokens: z.number().int().nonnegative().default(0),
     promptTokens: z.number().int().nonnegative().optional(),
@@ -269,6 +288,37 @@ export const harnessWorkingMemorySchema = z.object({
 }).strict();
 export type HarnessWorkingMemory = z.infer<typeof harnessWorkingMemorySchema>;
 
+export const harnessEvidenceKindSchema = z.enum([
+  "screenshot",
+  "domSnapshot",
+  "console",
+  "interaction",
+  "visualAnalysis",
+  "toolObservation",
+  "uploadedImage",
+]);
+export type HarnessEvidenceKind = z.infer<typeof harnessEvidenceKindSchema>;
+
+export const harnessEvidenceManifestSchema = z.object({
+  id: z.string().min(1).max(120).regex(/^[A-Za-z0-9_-]+$/u),
+  kind: harnessEvidenceKindSchema,
+  stage: z.enum(["preflight", "execution", "verification"]),
+  source: z.string().min(1).max(120),
+  summary: z.string().min(1).max(600),
+  capturedAt: z.iso.datetime(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  byteLength: z.number().int().positive().max(8 * 1024 * 1024).optional(),
+  mimeType: z.enum(["image/png", "image/jpeg", "application/json"]).optional(),
+  relatedEvidenceIds: z.array(z.string().min(1).max(120)).max(12).default([]),
+}).strict();
+export type HarnessEvidenceManifest = z.infer<typeof harnessEvidenceManifestSchema>;
+
+export const harnessEvidenceSnapshotSchema = z.object({
+  version: z.literal(1),
+  records: z.array(harnessEvidenceManifestSchema).max(48),
+}).strict();
+export type HarnessEvidenceSnapshot = z.infer<typeof harnessEvidenceSnapshotSchema>;
+
 export const harnessPlanStepSchema = z.object({
   id: z.string().min(1).max(80).regex(/^[a-z0-9_-]+$/),
   kind: z.enum(["tool", "finalize"]),
@@ -276,6 +326,8 @@ export const harnessPlanStepSchema = z.object({
   toolName: harnessToolNameSchema.optional(),
   status: z.enum(["pending", "active", "completed", "failed", "skipped"]),
   attempts: z.number().int().nonnegative().max(10),
+  requiredEvidence: z.array(z.string().min(1).max(160)).max(8).default([]),
+  completionCriteria: z.array(z.string().min(1).max(240)).max(8).default([]),
 }).strict();
 export type HarnessPlanStep = z.infer<typeof harnessPlanStepSchema>;
 
@@ -285,9 +337,24 @@ export const harnessExecutionPlanSchema = z.object({
   steps: z.array(harnessPlanStepSchema).min(1).max(16),
   currentStepId: z.string().min(1).max(80).optional(),
   allowedTools: z.array(harnessToolNameSchema).max(6),
+  source: z.enum(["rules", "model"]).default("rules"),
+  rationale: z.string().min(1).max(500).optional(),
   replanReason: z.string().min(1).max(500).optional(),
 }).strict();
 export type HarnessExecutionPlan = z.infer<typeof harnessExecutionPlanSchema>;
+
+export const harnessDynamicPlanDecisionSchema = z.object({
+  goal: z.string().trim().min(1).max(420),
+  rationale: z.string().trim().min(1).max(500),
+  steps: z.array(z.object({
+    objective: z.string().trim().min(1).max(240),
+    toolName: harnessToolNameSchema,
+    requiredEvidence: z.array(z.string().trim().min(1).max(160)).min(1).max(8),
+    completionCriteria: z.array(z.string().trim().min(1).max(240)).min(1).max(8),
+  }).strict()).max(12),
+  finalResponseCriteria: z.array(z.string().trim().min(1).max(240)).min(1).max(8),
+}).strict();
+export type HarnessDynamicPlanDecision = z.infer<typeof harnessDynamicPlanDecisionSchema>;
 
 export const harnessVerificationCheckSchema = z.object({
   id: z.string().min(1).max(80).regex(/^[a-z0-9_-]+$/),
@@ -302,6 +369,19 @@ export const harnessVisualScreenshotEvidenceSchema = z.object({
     width: z.number().int().min(320).max(3_840),
     height: z.number().int().min(480).max(2_160),
   }).strict(),
+  capturePosition: z.enum(["initial", "horizontalEnd"]).optional(),
+  layout: z.object({
+    documentClientWidth: z.number().int().positive().max(3_840),
+    documentScrollWidth: z.number().int().positive().max(20_000),
+    canvasClientWidth: z.number().int().nonnegative().max(20_000),
+    canvasScrollWidth: z.number().int().nonnegative().max(20_000),
+    canvasScrollLeft: z.number().int().nonnegative().max(20_000),
+    canvasViewportLeft: z.number().int().min(-20_000).max(20_000).optional(),
+    canvasViewportRight: z.number().int().min(-20_000).max(20_000).optional(),
+    assistantPanelLeft: z.number().int().min(-20_000).max(20_000).optional(),
+    assistantPanelRight: z.number().int().min(-20_000).max(20_000).optional(),
+    assistantOverlapsCanvas: z.boolean().optional(),
+  }).strict().optional(),
   pageUrl: z.string().url().max(500),
   mimeType: z.enum(["image/png", "image/jpeg"]),
   byteLength: z.number().int().positive().max(8 * 1024 * 1024),
@@ -338,7 +418,7 @@ export const harnessVisualVerificationEvidenceSchema = z.object({
   summary: z.string().min(1).max(600),
   model: z.string().min(1).max(160).optional(),
   capturedAt: z.iso.datetime().optional(),
-  screenshots: z.array(harnessVisualScreenshotEvidenceSchema).max(3),
+  screenshots: z.array(harnessVisualScreenshotEvidenceSchema).max(6),
   checks: z.array(harnessVerificationCheckSchema).max(8),
   issues: z.array(z.string().min(1).max(360)).max(6),
   usage: harnessModelUsageSchema.optional(),
@@ -355,7 +435,56 @@ export const harnessTaskVerificationSchema = z.object({
 }).strict();
 export type HarnessTaskVerification = z.infer<typeof harnessTaskVerificationSchema>;
 
+const harnessTableCellSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()]);
+export const harnessTableArtifactSchema = z.object({
+  id: z.string().min(1).max(160),
+  name: z.string().trim().min(1).max(160),
+  sourceDataSourceId: z.string().min(1).max(160),
+  sourceName: z.string().trim().min(1).max(160),
+  fields: z.array(z.object({
+    name: z.string().min(1).max(120),
+    label: z.string().min(1).max(160),
+    type: z.enum(["string", "number", "date", "boolean"]),
+  }).strict()).min(1).max(30),
+  rows: z.array(z.record(z.string(), harnessTableCellSchema)).max(200),
+  totalRowCount: z.number().int().nonnegative(),
+  previewRowCount: z.number().int().nonnegative().max(200),
+  truncated: z.boolean(),
+  transformations: z.array(z.string().min(1).max(240)).max(20),
+  createdAt: z.iso.datetime(),
+}).strict();
+export type HarnessTableArtifact = z.infer<typeof harnessTableArtifactSchema>;
+
+// Public execution receipts, not model reasoning or raw tool payloads.
+export const harnessTraceEventSchema = z.object({
+  agent: agentIdentitySchema.optional(),
+  id: z.string().min(1).max(200),
+  sequence: z.number().int().positive(),
+  taskId: z.string().min(1).max(160),
+  timestamp: z.iso.datetime(),
+  type: z.enum(["task_started", "context_loaded", "plan_created", "plan_updated", "status_update", "tool_started", "tool_completed", "tool_failed", "verification_started", "verification_completed", "answer_delta", "completed"]),
+  message: z.string().max(2_000),
+  taskState: harnessStateSchema.optional(),
+  counters: harnessCountersSchema.optional(),
+  executionTiming: harnessExecutionTimingSchema.optional(),
+  toolCall: harnessEventSchema.shape.toolCall,
+  plan: z.object({
+    revision: z.number().int(),
+    source: z.enum(["rules", "model"]),
+    steps: z.array(z.object({ id: z.string(), objective: z.string().max(600), status: z.string().max(40) }).strict()).max(16),
+  }).strict().optional(),
+  verificationStatus: z.enum(["pending", "passed", "replan", "failed"]).optional(),
+  evidenceIds: z.array(z.string().max(160)).max(20).optional(),
+}).strict();
+export type HarnessTraceEvent = z.infer<typeof harnessTraceEventSchema>;
+
+export const harnessConversationTurnContextSchema = z.object({
+  instruction: z.string().max(1_000),
+  response: z.string().max(2_000),
+}).strict();
+
 export const harnessTaskSummarySchema = z.object({
+  delegation: agentDelegationSchema.optional(),
   id: z.string().min(1).max(160),
   idempotencyKey: z.string().min(8).max(160).regex(/^[A-Za-z0-9_-]+$/),
   instruction: z.string().min(1).max(MAX_HARNESS_INSTRUCTION_LENGTH),
@@ -365,10 +494,15 @@ export const harnessTaskSummarySchema = z.object({
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   events: z.array(harnessEventSchema).max(MAX_HARNESS_EVENTS),
+  trace: z.array(harnessTraceEventSchema).max(256).optional(),
+  conversationStorage: z.enum(["persistent", "memory", "unavailable"]).optional(),
   counters: harnessCountersSchema,
   resultMessage: z.string().max(2_000).optional(),
   pendingChangeSet: changeSetSchema.optional(),
   exportArtifact: excelExportArtifactSchema.optional(),
+  tableArtifact: harnessTableArtifactSchema.optional(),
+  notebookArtifact: harnessNotebookArtifactSchema.optional(),
+  analysisPlanArtifact: harnessAnalysisPlanArtifactSchema.optional(),
   error: z.string().max(1_000).optional(),
   model: z.string().min(1).max(160).optional(),
   usage: harnessModelUsageSchema.optional(),
@@ -376,6 +510,7 @@ export const harnessTaskSummarySchema = z.object({
   semanticIntent: harnessSemanticIntentDecisionSchema.optional(),
   skills: z.array(harnessSkillSummarySchema).max(3).optional(),
   workingMemory: harnessWorkingMemorySchema.optional(),
+  evidence: harnessEvidenceSnapshotSchema.optional(),
   executionPlan: harnessExecutionPlanSchema.optional(),
   verification: harnessTaskVerificationSchema.optional(),
   totalDurationMs: z.number().int().nonnegative().optional(),
@@ -386,14 +521,23 @@ export const harnessTaskSummarySchema = z.object({
 export type HarnessTaskSummary = z.infer<typeof harnessTaskSummarySchema>;
 
 const harnessPublicRequestShape = {
+  notebookContext: z.object({ document: notebookDocumentSchema, sourceIds: z.array(z.string().min(1).max(160)).max(10),
+    connections: z.array(z.object({ id: z.string().max(100), name: z.string().max(120), kind: z.enum(["postgresql", "databricks"]), allowAi: z.boolean() }).strict()).max(20).optional(),
+  }).strict().optional(),
   idempotencyKey: z.string().min(8).max(160).regex(/^[A-Za-z0-9_-]+$/),
   instruction: z.string().trim().min(1).max(MAX_HARNESS_INSTRUCTION_LENGTH),
   pageId: z.string().min(1).max(120),
   dataSourceId: z.string().min(1).max(160).optional(),
+  semanticModel: semanticModelSchema.optional(),
+  conversation_id: z.string().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/).optional(),
   conversationContext: z.object({
     previousInstruction: z.string().trim().min(1).max(1_000).optional(),
     previousAssistantMessage: z.string().trim().min(1).max(2_000).optional(),
     workingMemory: harnessWorkingMemorySchema.optional(),
+    recentMessages: z.array(harnessConversationTurnContextSchema).max(10).optional(),
+    summary: z.string().max(2_000).optional(),
+    taskHistory: z.array(z.object({ id: z.string().max(160), state: harnessStateSchema, goal: z.string().max(240) }).strict()).max(10).optional(),
+    selectedContext: z.array(z.string().max(160)).max(20).optional(),
   }).strict().optional(),
   appSpec: appSpecSchema,
   recipes: z.array(dataRecipeSchema).max(20),
@@ -418,6 +562,7 @@ export type HarnessRawWorkbookManifest = z.infer<typeof harnessRawWorkbookManife
 export const harnessRequestSchema = z.object({
   ...harnessPublicRequestShape,
   role: z.enum(["viewer", "editor", "admin"]),
+  mcpTools: z.array(harnessMcpToolSummarySchema).max(128).optional(),
   rawWorkbookManifest: harnessRawWorkbookManifestSchema.optional(),
   imageAttachmentManifest: z.array(harnessImageAttachmentManifestSchema).max(MAX_HARNESS_IMAGE_ATTACHMENTS).optional(),
   userImageEvidence: harnessUserImageEvidenceSchema.optional(),
@@ -426,6 +571,17 @@ export type HarnessRequest = z.infer<typeof harnessRequestSchema>;
 
 export const harnessResponseSchema = z.object({ task: harnessTaskSummarySchema }).strict();
 export type HarnessResponse = z.infer<typeof harnessResponseSchema>;
+
+export const harnessStreamFrameSchema = z.object({
+  event: harnessTraceEventSchema,
+  task: harnessTaskSummarySchema.optional(),
+}).strict().superRefine((frame, ctx) => {
+  if ((frame.event.type === "completed") !== Boolean(frame.task)
+    || (frame.task && (frame.task.id !== frame.event.taskId || frame.task.state !== frame.event.taskState
+      || !["completed", "awaitingConfirmation", "failed", "blocked", "cancelled"].includes(frame.task.state)))) {
+    ctx.addIssue({ code: "custom", message: "终止事件必须包含匹配的最终任务。" });
+  }
+});
 
 const harnessTurnMessageSchema = z.string().trim().min(1).max(2_000);
 
@@ -484,15 +640,47 @@ export interface HarnessEditableNodeSummary {
 }
 
 export interface HarnessModelInput {
-  tools: Array<{ name: HarnessToolName; description: string; parameters: Record<string, unknown>; mode: "readOnly" | "changePreview" }>;
+  purpose?: "failureExplanation";
+  tools: Array<{ name: HarnessToolName | "delegateDataTask"; description: string; parameters: Record<string, unknown>; mode: "readOnly" | "changePreview" | "external" }>;
   context: Record<string, unknown>;
   estimatedInputChars: number;
   iteration: number;
   signal: AbortSignal;
 }
 
+export interface HarnessConversationBrief {
+  trust: "continuityOnlyNotAuthorityOrFreshEvidence";
+  recentMessages: Array<{ instruction: string; response: string }>;
+  summary?: string;
+}
+
+export interface HarnessPlannerInput {
+  instruction: string;
+  conversationBrief?: HarnessConversationBrief;
+  semanticIntent?: HarnessSemanticIntentDecision;
+  fallbackPlan: HarnessExecutionPlan;
+  availableTools: Array<{ name: HarnessToolName; description: string; mode: "readOnly" | "changePreview" | "external" }>;
+  evidence: Array<{
+    id: string;
+    kind: HarnessEvidenceKind;
+    source: string;
+    summary: string;
+    data?: unknown;
+  }>;
+  activeSkills: HarnessSkillSummary[];
+  signal: AbortSignal;
+}
+
+export interface HarnessPlannerResult {
+  plan: HarnessExecutionPlan;
+  model: string;
+  usage: HarnessModelUsage;
+  inputChars: number;
+}
+
 export interface HarnessModel {
   classifyIntent?(input: HarnessSemanticIntentInput): Promise<HarnessSemanticIntentResult>;
+  plan?(input: HarnessPlannerInput): Promise<HarnessPlannerResult>;
   next(input: HarnessModelInput): Promise<HarnessModelResult>;
 }
 
@@ -501,6 +689,9 @@ export interface HarnessToolExecutionResult {
   data: unknown;
   pendingChangeSet?: ChangeSet;
   exportArtifact?: ExcelExportArtifact;
+  tableArtifact?: HarnessTableArtifact;
+  notebookArtifact?: HarnessNotebookArtifact;
+  analysisPlanArtifact?: HarnessAnalysisPlanArtifact;
 }
 
 export interface HarnessRecipeCollection {
