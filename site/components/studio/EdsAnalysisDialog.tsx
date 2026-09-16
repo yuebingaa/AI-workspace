@@ -14,7 +14,7 @@ import { ExcelDownloadButton } from "./ExcelDownloadButton";
 
 interface EdsAnalysisDialogProps {
   onClose: () => void;
-  onCreateWorkspace: (results: EdsAnalysisResponse[], activeResultIndex: number, source: File, allowAiRawAccess: boolean) => void;
+  onCreateWorkspace: (results: EdsAnalysisResponse[], activeResultIndex: number, source: File) => void;
 }
 
 export function canApplyEdsRequestResult(input: {
@@ -170,7 +170,6 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
   const [source, setSource] = useState<File | null>(null);
   const [template, setTemplate] = useState<File | null>(null);
   const [advancedComparison, setAdvancedComparison] = useState(false);
-  const [allowAiRawAccess, setAllowAiRawAccess] = useState(false);
   const [results, setResults] = useState<EdsAnalysisResponse[]>([]);
   const [activeResultIndex, setActiveResultIndex] = useState(0);
   const [selectionOptions, setSelectionOptions] = useState<EdsWorkbookSelection[]>([]);
@@ -353,11 +352,7 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
                 }}
               >{advancedComparison ? "关闭高级验收" : "高级验收"}</button>
             </div>
-            <div className="eds-privacy-note"><b>数据边界</b><span>默认不进入 AI 上下文；原始工作簿仅用于当前浏览器会话，不写入 localStorage、工作区备份或审计正文。下方授权开启后，提问原始数据时会把文件随该次请求发送到服务端：服务端完整扫描全部数据行并执行结构化查询，只把统计结果和少量可溯源记录交给 DeepSeek；解析索引只在服务端内存中短期缓存，30 分钟无访问自动失效。</span></div>
-            <label className="eds-ai-raw-access">
-              <input type="checkbox" checked={allowAiRawAccess} disabled={running} onChange={(event) => setAllowAiRawAccess(event.target.checked)} />
-              <span><b>允许 AI 完整扫描原始数据</b><small>仅当前会话；相关提问会完整检查所有数据行，最多只向模型返回 30 条结果；相同文件会复用短期内存索引。原文件不写入聊天或备份，引用到的单元格和 AI 回答会按普通对话规则保留。</small></span>
-            </label>
+            <div className="eds-privacy-note"><b>原始数据分析</b><span>导入后可直接分析完整工作簿，相关提问会按需查询全部数据行并返回统计和可溯源结果。原件保留在当前浏览器会话，分析回答按普通对话规则保存。</span></div>
             {selectionOptions.length > 0 && (
               <section className="eds-selection-panel" aria-labelledby="eds-selection-title" aria-live="polite">
                 <div><b id="eds-selection-title">检测到多个日期或班次</b><small>请选择一个范围；普通分析也可以按范围分别生成全部报告。</small></div>
@@ -414,11 +409,11 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
             <EdsAnalysisResultView result={result} />
             {error && <EdsErrorMessage message={error} />}
             <div className="eds-workspace-actions">
-              <div><b>在主界面继续分析</b><small>{results.length > 1 ? `把 ${results.length} 份报告一起生成到主看板，并可切换日期和班次；` : "为当前报告生成真实数据绑定看板；"}{allowAiRawAccess ? "AI 原始数据完整扫描已授权，仅在相关请求中使用；" : "仅派生汇总会进入 AI 上下文、localStorage 和审计正文；"}原始文件不进入 localStorage、备份或审计正文。</small></div>
+              <div><b>在主界面继续分析</b><small>{results.length > 1 ? `把 ${results.length} 份报告一起生成到主看板，并可切换日期和班次；` : "为当前报告生成真实数据绑定看板；"}AI 可按需分析完整原始数据。</small></div>
               <button type="button" onClick={() => {
                 try {
                   if (!source) throw new Error("原始工作簿已不可用，请重新选择。");
-                  onCreateWorkspace(results, activeResultIndex, source, allowAiRawAccess);
+                  onCreateWorkspace(results, activeResultIndex, source);
                 } catch (caught) {
                   setError(caught instanceof Error ? caught.message : "EDS 分析看板生成失败。");
                 }
@@ -428,7 +423,6 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
               setSource(null);
               setTemplate(null);
               setAdvancedComparison(false);
-              setAllowAiRawAccess(false);
               setResults([]);
               setActiveResultIndex(0);
               setSelectionOptions([]);

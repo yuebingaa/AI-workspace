@@ -6,9 +6,7 @@ import type { StudioRole } from "@/core/permissions";
 import type { StudioPuckData } from "@/adapters/puck";
 import { AppSpecRenderer } from "./AppSpecRenderer";
 import { PuckEditorBoundary } from "./PuckEditorBoundary";
-import type { PreviewDevice } from "./StudioHeader";
 import { SpreadsheetWorkspace } from "./SpreadsheetWorkspace";
-import { StudioArtwork } from "./StudioArtwork";
 
 export type CanvasMode = "edit" | "preview";
 
@@ -31,7 +29,6 @@ interface DataProductCanvasProps {
   role: StudioRole;
   appSpecRevision: string;
   activePageId: string;
-  device: PreviewDevice;
   isPreviewing: boolean;
   canUndo: boolean;
   mode: CanvasMode;
@@ -46,6 +43,7 @@ interface DataProductCanvasProps {
   spreadsheetRecipe?: DataRecipe;
   spreadsheetAiResult?: HarnessTableArtifact;
   spreadsheetResultFocusRevision?: number;
+  showSpreadsheetResult?: boolean;
   spreadsheetExportArtifact?: ExcelExportArtifact;
   onUndo: () => void;
   onModeChange: (mode: CanvasMode) => void;
@@ -67,7 +65,6 @@ export function DataProductCanvas({
   role,
   appSpecRevision,
   activePageId,
-  device,
   isPreviewing,
   canUndo,
   mode,
@@ -81,7 +78,8 @@ export function DataProductCanvas({
   spreadsheetRows = [],
   spreadsheetRecipe,
   spreadsheetAiResult,
-  spreadsheetResultFocusRevision,
+  spreadsheetResultFocusRevision = 0,
+  showSpreadsheetResult = false,
   spreadsheetExportArtifact,
   onUndo,
   onModeChange,
@@ -97,7 +95,10 @@ export function DataProductCanvas({
 }: DataProductCanvasProps) {
   const page = appSpec.pages.find((candidate) => candidate.id === activePageId) ?? appSpec.pages[0];
   const canEdit = role !== "viewer";
-  const isBlankWorkspace = Boolean(page && (page.root.children?.length ?? 0) === 0 && !spreadsheetSource);
+  const isBlankWorkspace = Boolean(page && (page.root.children?.length ?? 0) === 0);
+  const hasSpreadsheetResult = showSpreadsheetResult
+    && Boolean(spreadsheetSource && spreadsheetAiResult?.sourceDataSourceId === spreadsheetSource.id);
+  const isBlankPreview = mode === "preview" && isBlankWorkspace && !hasSpreadsheetResult;
   const viewportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -152,7 +153,7 @@ export function DataProductCanvas({
           >{edsAnalysisRunning ? "AI 正在分析…" : "AI 分析全部班次"}</button>
         </div>
       )}
-      <div ref={viewportRef} className="canvas-design-viewport" tabIndex={0} aria-label="看板滚动区域">
+      <div ref={viewportRef} className={`canvas-design-viewport${isBlankPreview ? " is-blank" : ""}`} tabIndex={0} aria-label="看板滚动区域">
         {changeFeedback && (
           <div className={`canvas-change-feedback ${changeFeedback.status}`} role="status">
             <i aria-hidden="true">{changeFeedback.status === "applied" ? "✓" : "✦"}</i>
@@ -177,19 +178,8 @@ export function DataProductCanvas({
             ) : <div className="puck-loading">没有可编辑的页面数据</div>}
           </div>
         ) : (
-          <div className={`device-stage ${device} ${isPreviewing ? "previewing" : ""}${isBlankWorkspace ? " is-empty" : ""}`}>
-            {isBlankWorkspace ? (
-              <div className="empty-workspace-canvas">
-                <div className="canvas-empty-copy">
-                  <span className="canvas-empty-eyebrow">从数据到洞察</span>
-                  <h2>{page?.title ?? "空白工作界面"}</h2>
-                  <p>每一个好看板，都从一份数据开始。<br />导入表格，让 AI 帮你把发现变成清晰的图表。</p>
-                  <button type="button" onClick={onImportSpreadsheet}>导入第一份表格 <span aria-hidden="true">↗</span></button>
-                  <small>支持 CSV / XLSX · 可同时导入多份文件</small>
-                </div>
-                <StudioArtwork className="canvas-empty-art" />
-              </div>
-            ) : <div className="dashboard">
+          <div className={`device-stage${isPreviewing ? " previewing" : ""}${isBlankWorkspace ? " is-empty" : ""}`}>
+            {isBlankWorkspace ? <div className="blank-dashboard" role="region" aria-label="空白看板" /> : <div className="dashboard">
               {page ? <AppSpecRenderer node={page.root} context={{
                 dataSources: appSpec.dataSources,
                 dataRuntime,
@@ -202,7 +192,7 @@ export function DataProductCanvas({
                 } : {}),
               }} /> : <div className="empty-canvas">当前没有可渲染页面</div>}
             </div>}
-            <SpreadsheetWorkspace
+            {hasSpreadsheetResult && <SpreadsheetWorkspace
               source={spreadsheetSource}
               rows={spreadsheetRows}
               recipe={spreadsheetRecipe}
@@ -211,7 +201,7 @@ export function DataProductCanvas({
               exportArtifact={spreadsheetExportArtifact}
               onImportSpreadsheet={onImportSpreadsheet}
               onOpenDataSource={onOpenSpreadsheetSource}
-            />
+            />}
           </div>
         )}
       </div>

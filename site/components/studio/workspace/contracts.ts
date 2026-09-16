@@ -4,6 +4,7 @@ import type { ChangeSetExecutionState } from "@/core/changesets";
 import type { EdsWorkspaceSnapshot } from "@/core/eds";
 import type { HarnessTaskSummary } from "@/core/harness/contracts";
 import type { AssistantConversationTurn } from "@/core/harness/conversation";
+import type { AssistantSessions } from "@/core/harness/assistant-sessions";
 import type { AiChangeSetAuditMetadata, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, DataProduct, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
 import type { StudioSaveResult } from "@/core/repository";
 import type { CanvasMode } from "../DataProductCanvas";
@@ -20,6 +21,7 @@ export interface WorkspaceSnapshot {
   queryRecords: QueryExecutionRecord[];
   harnessTasks: HarnessTaskSummary[];
   assistantConversation: AssistantConversationTurn[];
+  assistantSessions?: AssistantSessions;
   edsWorkspace: EdsWorkspaceSnapshot | null;
 }
 export type WorkspaceSnapshotRef = RefObject<WorkspaceSnapshot>;
@@ -31,6 +33,7 @@ export type PersistWorkspace = (
   harnessTasks?: HarnessTaskSummary[],
   edsWorkspace?: EdsWorkspaceSnapshot | null,
   assistantConversation?: AssistantConversationTurn[],
+  assistantSessions?: AssistantSessions,
 ) => StudioSaveResult;
 
 export interface WorkspaceFeedback {

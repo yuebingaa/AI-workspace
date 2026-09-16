@@ -24,8 +24,9 @@ import type {
 } from "@/core/models";
 import { appSpecSchema, dataProductSchema, formatSchemaIssues, StudioValidationError } from "@/core/schemas";
 import { toProjectIsoDateTime } from "@/core/time/project-iso";
+import { activeAssistantSession, assistantSessionsSchema, recoverAssistantSessions, rotateAssistantSessionContexts, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
 
-export const STUDIO_STORAGE_VERSION = 5 as const;
+export const STUDIO_STORAGE_VERSION = 6 as const;
 export const STUDIO_STORAGE_KEY = "datacanvas-ai:studio:v1";
 export const STUDIO_BACKUP_FORMAT = "datacanvas-ai-studio-backup-v1" as const;
 export const STUDIO_BACKUP_MAX_BYTES = 5 * 1024 * 1024;
@@ -98,6 +99,7 @@ export interface StudioPersistedState {
   harnessTasks: HarnessTaskSummary[];
   assistantConversation: AssistantConversationTurn[];
   assistantConversationInitialized: boolean;
+  assistantSessions: AssistantSessions | null;
   edsWorkspace: EdsWorkspaceSnapshot | null;
   savedAt: string;
 }
@@ -113,6 +115,7 @@ const persistedStateSchema: z.ZodType<StudioPersistedState> = z.object({
   harnessTasks: z.array(harnessTaskSummarySchema).max(20),
   assistantConversation: z.array(assistantConversationTurnSchema).max(MAX_ASSISTANT_CONVERSATION_TURNS),
   assistantConversationInitialized: z.boolean(),
+  assistantSessions: assistantSessionsSchema.nullable(),
   edsWorkspace: edsWorkspaceSnapshotSchema.nullable(),
   savedAt: z.iso.datetime(),
 }).strict();
@@ -164,6 +167,7 @@ const migrations: Record<number, (value: Record<string, unknown>) => Record<stri
     version: 5,
     assistantConversationInitialized: value.assistantConversationInitialized ?? true,
   }),
+  5: (value) => ({ ...value, version: 6, assistantSessions: value.assistantSessions ?? null }),
 };
 
 export function migrateStudioState(value: unknown): unknown {
@@ -224,7 +228,9 @@ export function importStudioBackup(serialized: string): StudioPersistedState {
 }
 
 export function restoreStudioBackup(repository: StudioRepository, serialized: string): StudioPersistedState {
-  const state = importStudioBackup(serialized);
+  const imported = importStudioBackup(serialized);
+  // A restored backup must not pick up server context written after that backup.
+  const state = { ...imported, assistantSessions: rotateAssistantSessionContexts(imported.assistantSessions) };
   repository.save(state);
   return state;
 }
@@ -301,6 +307,7 @@ export interface SafeStudioState {
   queryRecords: QueryExecutionRecord[];
   harnessTasks: HarnessTaskSummary[];
   assistantConversation: AssistantConversationTurn[];
+  assistantSessions: AssistantSessions | null;
   edsWorkspace: EdsWorkspaceSnapshot | null;
   notice: string | null;
   restored: boolean;
@@ -318,6 +325,7 @@ export function loadStudioStateSafely(
     queryRecords: [],
     harnessTasks: [],
     assistantConversation: [],
+    assistantSessions: null,
     edsWorkspace: null,
     notice: null,
     restored: false,
@@ -347,13 +355,15 @@ export function loadStudioStateSafely(
       },
     };
     const recoveredHarnessTasks = recoverHarnessTasksAfterRefresh(saved.harnessTasks, recoveryClock);
+    const recoveredSessions = recoverAssistantSessions(saved.assistantSessions, recoveredHarnessTasks);
     return {
       dataProduct: { ...saved.dataProduct, appSpec: execution.present },
       execution,
       auditRecords: saved.auditRecords,
       queryRecords: saved.queryRecords,
       harnessTasks: recoveredHarnessTasks,
-      assistantConversation: saved.assistantConversationInitialized
+      assistantSessions: recoveredSessions,
+      assistantConversation: recoveredSessions ? activeAssistantSession(recoveredSessions).turns : saved.assistantConversationInitialized
         ? saved.assistantConversation
         : assistantConversationFromHarnessTasks(recoveredHarnessTasks),
       edsWorkspace: saved.edsWorkspace,
@@ -377,6 +387,7 @@ export function createStudioSnapshot(
   harnessTasks: HarnessTaskSummary[] = [],
   edsWorkspace: EdsWorkspaceSnapshot | null = null,
   assistantConversation: AssistantConversationTurn[] = [],
+  assistantSessions: AssistantSessions | null = null,
 ): StudioPersistedState {
   return parseStudioPersistedState({
     version: STUDIO_STORAGE_VERSION,
@@ -389,6 +400,8 @@ export function createStudioSnapshot(
     harnessTasks,
     assistantConversation,
     assistantConversationInitialized: true,
+    assistantSessions: assistantSessions && (JSON.stringify(activeAssistantSession(assistantSessions).turns) === JSON.stringify(assistantConversation)
+      ? assistantSessions : updateActiveAssistantSession(assistantSessions, { turns: assistantConversation })),
     edsWorkspace,
     savedAt: new Date().toISOString(),
   });
@@ -408,6 +421,7 @@ export function restoreDemoData(repository: StudioRepository | null, fixture: Da
     queryRecords: [],
     harnessTasks: [],
     assistantConversation: [],
+    assistantSessions: null,
     edsWorkspace: null,
     notice,
     restored: false,

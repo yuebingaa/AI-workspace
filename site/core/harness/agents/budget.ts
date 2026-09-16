@@ -1,12 +1,13 @@
 import { harnessModelUsageSchema, type HarnessModelUsage } from "../contracts";
+import { withinModelLimit, type HarnessModelLimit } from "../model-limits";
 
 export interface AgentBudgetLimits {
-  modelCalls: number;
+  modelCalls: HarnessModelLimit;
   toolCalls: number;
-  inputChars: number;
-  requestChars: number;
-  promptTokens: number;
-  completionTokensPerCall: number;
+  inputChars: HarnessModelLimit;
+  requestChars: HarnessModelLimit;
+  promptTokens: HarnessModelLimit;
+  completionTokensPerCall: HarnessModelLimit;
 }
 
 export class AgentBudgetError extends Error {}
@@ -22,8 +23,9 @@ export class AgentBudget {
   private exhausted = false;
 
   constructor(readonly limits: AgentBudgetLimits) {
-    if (Object.values(limits).some((value) => !Number.isSafeInteger(value) || value < 1)) {
-      throw new AgentBudgetError("Agent 总预算必须为正整数。");
+    if (Object.entries(limits).some(([name, value]) => value === null
+      ? name === "toolCalls" : !Number.isSafeInteger(value) || value < 1)) {
+      throw new AgentBudgetError("Agent 总预算必须为正整数，模型额度可为 null。");
     }
   }
 
@@ -34,13 +36,15 @@ export class AgentBudget {
   reserveModel(chars: number, reserveCalls = 0) {
     this.assertAvailable();
     const prompt = Math.ceil(chars); // Conservative preflight; provider usage settles the reservation.
-    const completion = this.limits.completionTokensPerCall;
-    if (!Number.isSafeInteger(chars) || chars < 1 || chars > this.limits.requestChars
-      || this.inputChars + chars > this.limits.inputChars
-      || this.modelCalls + reserveCalls >= this.limits.modelCalls
-      || this.usage.promptTokens + this.reservedPromptTokens + prompt > this.limits.promptTokens
-      || this.usage.completionTokens + this.reservedCompletionTokens + completion
-        > this.limits.modelCalls * completion) {
+    // With no output quota an unknown failure cannot report a known output size.
+    const completion = this.limits.completionTokensPerCall ?? 0;
+    const totalCompletionLimit = this.limits.modelCalls !== null && this.limits.completionTokensPerCall !== null
+      ? this.limits.modelCalls * this.limits.completionTokensPerCall : null;
+    if (!Number.isSafeInteger(chars) || chars < 1 || !withinModelLimit(chars, this.limits.requestChars)
+      || !withinModelLimit(this.inputChars + chars, this.limits.inputChars)
+      || !withinModelLimit(this.modelCalls + reserveCalls + 1, this.limits.modelCalls)
+      || !withinModelLimit(this.usage.promptTokens + this.reservedPromptTokens + prompt, this.limits.promptTokens)
+      || !withinModelLimit(this.usage.completionTokens + this.reservedCompletionTokens + completion, totalCompletionLimit)) {
       throw new AgentBudgetError("主任务共享模型 / 上下文预算不足，未启动下一次调用。");
     }
     this.modelCalls += 1;
@@ -60,9 +64,10 @@ export class AgentBudget {
         completionTokens: this.usage.completionTokens + usage.completionTokens,
         totalTokens: this.usage.totalTokens + usage.totalTokens,
       };
-      if (this.usage.promptTokens > this.limits.promptTokens
-        || usage.completionTokens > completion || usage.totalTokens !== usage.promptTokens + usage.completionTokens
-        || this.usage.completionTokens > this.limits.modelCalls * completion) {
+      if (!withinModelLimit(this.usage.promptTokens, this.limits.promptTokens)
+        || !withinModelLimit(usage.completionTokens, this.limits.completionTokensPerCall)
+        || usage.totalTokens !== usage.promptTokens + usage.completionTokens
+        || !withinModelLimit(this.usage.completionTokens, totalCompletionLimit)) {
         this.exhausted = true;
         throw new AgentBudgetError("模型实际用量超过主任务共享预算，结果未被接受。");
       }

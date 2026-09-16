@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { HarnessNotebookCell } from "@/core/harness/notebook-contracts";
+import type { NotebookCell } from "@/core/notebook/definition";
 import type { NotebookTable } from "@/core/notebook/contracts";
 
-const colors = ["#167b60", "#7b6cba", "#cf8c40", "#348aa6"];
-export function NotebookResult({ cell, table }: { cell: HarnessNotebookCell; table: NotebookTable }) {
+const colors = ["#343431", "#74716b", "#a4a099", "#c6c2bb"];
+export function NotebookResult({ cell, table }: { cell: NotebookCell; table: NotebookTable }) {
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(table.rows.length / 20));
   const currentPage = Math.min(page, pageCount - 1);
@@ -14,7 +14,7 @@ export function NotebookResult({ cell, table }: { cell: HarnessNotebookCell; tab
   const radial = cell.kind === "chart" && (cell.chartType === "pie" || cell.chartType === "donut");
   const negativePie = radial && cell.valueFields.some((field) => chartRows.some((row) => typeof row[field] === "number" && row[field] < 0));
   const plot = cell.kind === "chart" && chartRows.length > 0 && !negativePie ? (() => {
-    const shared = <><CartesianGrid stroke="#eaf0ec" vertical={false} /><XAxis dataKey={cell.categoryField} tick={{ fontSize: 11 }} minTickGap={16} /><YAxis tick={{ fontSize: 11 }} width={58} /><Tooltip /><Legend /></>;
+    const shared = <><CartesianGrid stroke="var(--studio-hairline, #e8e6e2)" vertical={false} /><XAxis dataKey={cell.categoryField} tick={{ fontSize: 11 }} minTickGap={16} /><YAxis tick={{ fontSize: 11 }} width={58} /><Tooltip /><Legend /></>;
     if (radial) return <div className="notebook-pies">{cell.valueFields.map((field, index) => <div key={field}><b>{field}</b><ResponsiveContainer width="100%" height={240} minWidth={0}><PieChart><Tooltip /><Legend /><Pie data={chartRows} dataKey={field} nameKey={cell.categoryField} innerRadius={cell.chartType === "donut" ? 48 : 0} outerRadius={78} isAnimationActive={false}>{chartRows.map((_, i) => <Cell key={i} fill={colors[(index + i) % colors.length]} />)}</Pie></PieChart></ResponsiveContainer></div>)}</div>;
     return <ResponsiveContainer width="100%" height={280} minWidth={0}>{cell.chartType === "line" ? <LineChart data={chartRows}>{shared}{cell.valueFields.map((field, i) => <Line key={field} dataKey={field} stroke={colors[i]} isAnimationActive={false} connectNulls={false} />)}</LineChart> : cell.chartType === "area" ? <AreaChart data={chartRows}>{shared}{cell.valueFields.map((field, i) => <Area key={field} dataKey={field} stroke={colors[i]} fill={colors[i]} fillOpacity={0.12} isAnimationActive={false} connectNulls={false} />)}</AreaChart> : <BarChart data={chartRows}>{shared}{cell.valueFields.map((field, i) => <Bar key={field} dataKey={field} fill={colors[i]} radius={[3, 3, 0, 0]} isAnimationActive={false} />)}</BarChart>}</ResponsiveContainer>;
   })() : null;

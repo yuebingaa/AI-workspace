@@ -30,10 +30,10 @@ SALES_DB_TOKEN=replace-locally
 
 ## 用户与 Agent 流程
 
-1. 打开开发站 Notebook，展开“数据库连接”，刷新目录，测试连接或浏览字段。
+1. 打开开发站 Notebook，展开“数据库连接”，刷新连接、测试连接或浏览字段。字段目录带数据库、表 / 字段标识、同步版本与时间，可搜索表 / 字段并“同步目录”；新鲜目录复用 15 分钟，手动同步立即读取源结构。截断目录明确提示未加载部分。
 2. 新建“数据库 SQL”单元；它查询所选数据库，可直接作为分析起点。
 3. 添加 DataRecipe 单元处理查询结果，再接本地 SQL、表格或图表。没有保存 Dataset 的前置要求。
-4. “保存为 Dataset”重新执行所选单元及依赖，保存完整结果和运行来源。文件夹项目复用项目数据持久化；非项目模式沿用上传数据的临时保留规则。
+4. “保存为 Dataset”重新执行所选单元及依赖，保存完整结果和运行来源。来源包括本次 SQL / 单元定义、上游步骤、查询 ID、目录引用与结果摘要，可在保存提示和 Data Browser 中查看 / 下载。文件夹项目复用项目数据持久化；非项目模式沿用上传数据的临时保留规则。它是本次回执，不提供历史自动重放。
 5. “生成看板预览”仍创建独立快照及 ChangeSet，确认后加入正式看板。它不是响应式 App 发布。
 6. Agent 请求携带 Notebook 上下文，服务端注入可用连接。Agent 通过 `inspectConnectionSchema → createAnalysisPlan → createNotebookDraft` 生成并试运行相同单元，用户采用前仍检查文档版本。当前数据子 Agent 不执行数据库工具，仍由主 Harness 完成。
 
@@ -41,17 +41,19 @@ SALES_DB_TOKEN=replace-locally
 
 ## 结果与限制
 
-- 每个成功表输出都有 `resultRef`：运行 / 单元 / 文档版本、直接上游结果 ID、行数、完整性、内容指纹及 user / ai 访问模式。引用当前用于证据与血缘，不是持久结果服务地址。
+- 每个成功表输出都有 `resultRef`：运行 / 单元 / 文档版本、直接上游结果 ID、声明的来源 Dataset、行数、完整性、内容指纹及 user / ai 访问模式。数据库单元可附执行前已存在的目录引用；目录版本不证明业务行未变化，也不证明 SQL 使用了目录中哪些表 / 字段。引用当前用于证据与血缘，不是持久结果服务地址。
 - UI 预览与执行结果分开。源数据预览可只显示 100 行，DataRecipe 使用完整源表；数据库 / SQL 结果一旦截断，不能作为 DataRecipe 或下游 SQL 的完整输入。
 - 远端查询最多并发 2 个、12 秒、返回 1000 行、结果 2 MiB；表目录最多 500 列。SQL 外层限制为 1001 行以检测截断，数据库扫描量仍由原 SQL 和数据库优化器决定。
 - Databricks 使用 INLINE JSON，并轮询状态。结果分块尚未自动取全，多块结果明确标记为截断。取消会在已取得 statement ID 时请求远端取消；提交响应丢失、取消接口失败时不能保证远端已停止，需使用数仓资源管理和超时策略。
 - PostgreSQL 数字按类型转换，BIGINT / NUMERIC 保持字符串；Databricks BIGINT / DECIMAL 同样保持字符串。需要绘图时在 SQL 或 DataRecipe 中明确转换并核对精度。重复列名、非有限数字、过大结果报错。
-- Notebook 编辑或上游重跑使相关旧结果失效。远端数据变化不会主动推送到本机，需重新运行。没有自动缓存复用、Query 模式、远端 Chained SQL / 下推、参数单元、Python 内核或 App 发布版本。
+- Notebook 编辑或上游重跑使相关旧结果失效。远端数据变化不会主动推送到本机，需重新运行。没有查询结果缓存复用、Query 模式、远端 Chained SQL / 下推、参数单元、Python 内核或 App 发布版本。
 - 凭据不写进 Notebook、Agent 上下文或导出。数据库原始错误不直接返回界面；PostgreSQL 返回可用的 SQLSTATE 以辅助排查。
 
 实现依据：[node-postgres Client](https://node-postgres.com/apis/client)、[PostgreSQL 只读事务](https://www.postgresql.org/docs/current/sql-set-transaction.html)、[Databricks Statement Execution API](https://docs.databricks.com/api/statement-execution/v1/execute-statement)。
 
 ## 验证
+
+2026-09-14 数据底座切片：新增目录 / 来源实现，全量 991 项应用测试、14 项工具测试通过；类型 / lint / 构建通过，隔离浏览器完成 6 组目录界面与实际 CSV / SQL / 项目来源保存检查。目录界面采用 HTTP 替身，未进行真实外部数据库联调。目录采用现有私有运行目录 JSON 文件适配器，不需要安装新数据库；`STUDIO_LOCAL_STATE_DIR` 未配置时仅在内存保存，并在界面标明。目录按项目、手动 / AI 身份和连接凭据隔离，失败同步不覆盖旧版本；最多 60 个快照 / 8 MiB。源码与验证现状以 [Agent 架构](architecture/agent-architecture.md) 和根任务日志为准。
 
 `core/connections/server/query.test.ts` 使用模拟协议验证连接范围、Agent 授权、只读事务、类型精度、截断、字节上限、轮询和取消。`core/notebook/transform-integration.test.ts` 真实运行本地 DuckDB 并连接 DataRecipe / 图表，验证 Agent 与人工采用同一契约。真实外部数据库账号、权限和网络需单独联调。
 

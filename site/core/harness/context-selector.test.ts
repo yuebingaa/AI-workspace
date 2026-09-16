@@ -225,9 +225,9 @@ describe("Harness 最小上下文选择器", () => {
     });
   });
 
-  it("原始数据请求必须有会话级授权，并按检查工作簿到读取行列的顺序开放工具", () => {
+  it("原始数据请求必须附带可读取的工作簿，并按扫描到查询的顺序开放工具", () => {
     const withoutAccess = request("读取原始工作簿第 2 行");
-    expect(buildHarnessContextSelection(withoutAccess, [], 1).blockingReason).toContain("尚未授权");
+    expect(buildHarnessContextSelection(withoutAccess, [], 1).blockingReason).toContain("没有可读取的原始工作簿");
 
     const input: HarnessRequest = {
       ...withoutAccess,
@@ -240,7 +240,7 @@ describe("Harness 最小上下文选择器", () => {
     const first = buildHarnessContextSelection(input, [], 1);
     expect(first.blockingReason).toBeUndefined();
     expect(first.toolNames).toEqual(["scanEdsRawWorkbook"]);
-    expect(classifyHarnessTask(input)).toEqual({ complexity: "multiStep", maxModelCalls: 5, maxToolCalls: 6 });
+    expect(classifyHarnessTask(input)).toEqual({ complexity: "multiStep", maxToolCalls: 6 });
 
     const second = buildHarnessContextSelection(input, [{
       toolCallId: "raw_scan",
@@ -281,7 +281,7 @@ describe("Harness 最小上下文选择器", () => {
     const serialized = JSON.stringify({ ...selection.context, tools });
 
     expect(resolveHarnessPageDataSourceIds(input)).toEqual(["dataset_retail_orders"]);
-    expect(classifyHarnessTask(input)).toEqual({ complexity: "multiStep", maxModelCalls: 5, maxToolCalls: 6 });
+    expect(classifyHarnessTask(input)).toEqual({ complexity: "multiStep", maxToolCalls: 6 });
     expect(selection.toolNames).toEqual(["inspectDataset"]);
     expect(serialized).toContain("retail_orders");
     expect(serialized).toContain("page_customers_metrics");
@@ -424,16 +424,19 @@ describe("Harness 最小上下文选择器", () => {
     expect(dataSelection.context).not.toHaveProperty("activeSkills");
   });
 
-  it("上下文预算只能收紧而不能放宽硬上限", () => {
-    expect(() => resolveHarnessContextBudget({ maxTotalPromptTokens: 96_001 }))
-      .toThrow(/上下文预算无效/);
+  it("模型上下文默认无配额，显式额度仍校验，工具摘要仍有硬上限", () => {
+    expect(resolveHarnessContextBudget()).toMatchObject({ maxRequestInputChars: null, maxTotalInputChars: null, maxTotalPromptTokens: null });
+    expect(resolveHarnessContextBudget({ maxTotalPromptTokens: 96_001 }).maxTotalPromptTokens).toBe(96_001);
+    expect(() => resolveHarnessContextBudget({ maxRequestInputChars: Number.POSITIVE_INFINITY })).toThrow(/上下文预算无效/);
+    expect(() => resolveHarnessContextBudget({ maxTotalPromptTokens: 0 })).toThrow(/上下文预算无效/);
+    expect(() => resolveHarnessContextBudget({ maxToolResultChars: 4_001 })).toThrow(/上下文预算无效/);
     expect(() => resolveHarnessContextBudget({ maxToolResultEntries: Number.MAX_SAFE_INTEGER + 1 }))
       .toThrow(/上下文预算无效/);
   });
 
-  it("简单只读任务使用较低调用和上下文预算", () => {
+  it("简单只读任务仅保留较低的工具执行预算", () => {
     const input = request("检查 retail_orders 数据集是否可用，返回行数和列数。不要修改页面。");
-    expect(classifyHarnessTask(input)).toEqual({ complexity: "simpleReadOnly", maxModelCalls: 3, maxToolCalls: 2 });
+    expect(classifyHarnessTask(input)).toEqual({ complexity: "simpleReadOnly", maxToolCalls: 2 });
   });
 
   it("模型要求视觉验证的只读任务使用多步骤上下文预算", () => {
@@ -447,7 +450,7 @@ describe("Harness 最小上下文选择器", () => {
       rationale: "页面设计检查依赖最终渲染截图。",
     });
 
-    expect(classifyHarnessTask(input, intent)).toEqual({ complexity: "multiStep", maxModelCalls: 5, maxToolCalls: 6 });
+    expect(classifyHarnessTask(input, intent)).toEqual({ complexity: "multiStep", maxToolCalls: 6 });
   });
 
   it("把能力询问识别为对话，不误当成组件修改任务", () => {

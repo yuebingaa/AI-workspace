@@ -14,6 +14,18 @@ function task(request: HarnessRequest) { return { ...createHarnessTask(request.i
   { now: () => new Date(), id: () => "context_event" }), state: "completed" as const, resultMessage: "已完成分析，结论待下次重新核实。" }; }
 
 describe("server conversation continuity", () => {
+  it("isolates threads within a project and the same thread ID across projects", () => {
+    const store = new HarnessConversationStore(), request = input();
+    const first = store.begin(request, "owner:project:a"); first.commit(task(request)); first.release();
+    const otherThread = { ...request, conversation_id: "another_project_thread" };
+    const second = store.begin(otherThread, "owner:project:a");
+    expect(second.context?.recentMessages).toBeUndefined(); second.commit(task(otherThread)); second.release();
+    const otherProject = store.begin(request, "owner:project:b");
+    expect(otherProject.context?.recentMessages).toBeUndefined(); otherProject.release();
+    store.clear("owner:project:a", otherThread.conversation_id!, request.pageId);
+    const original = store.begin(request, "owner:project:a");
+    expect(original.context?.recentMessages).toHaveLength(1); original.release();
+  });
   it("keeps ten recent turns, rolls older turns into a bounded extract and isolates owner/page", () => {
     const store = new HarnessConversationStore();
     const request = input();

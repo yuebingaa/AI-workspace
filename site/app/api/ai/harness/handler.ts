@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { runNotebook } from "@/core/notebook/server/runtime";
+import { notebookPythonRuntimeInfo } from "@/core/notebook/server/python-runtime";
 import {
   HarnessIdempotencyConflictError,
   HarnessIdempotencyStore,
   HarnessRequestError,
-} from "@/core/harness/deepseek-harness";
+} from "@/core/harness/runtime";
 import { CoordinatedHarness } from "@/core/harness/agents/coordinator";
+import { configureDeepSeekHarness } from "@/core/ai/server/harness-composition";
 import {
   MAX_HARNESS_REQUEST_BYTES,
   MAX_HARNESS_IMAGE_ATTACHMENTS,
@@ -136,7 +138,7 @@ function imageSignatureMatches(bytes: Buffer, mimeType: UploadedHarnessImage["ma
 
 async function parseMultipartHarnessRequest(request: Request, contentType: string): Promise<{
   raw: unknown;
-  rawWorkbook?: { fileName: string; contentHash: string; sheets: EdsWorkbookSheet[] };
+  rawWorkbook?: { fileName: string; contentHash: string; sheets: EdsWorkbookSheet[]; bytes: Uint8Array };
   images: UploadedHarnessImage[];
 }> {
   const bytes = await readBoundedBodyBytes(request, MAX_HARNESS_MULTIPART_BYTES, { signal: request.signal, timeoutMs: REQUEST_BODY_TIMEOUT_MS });
@@ -203,7 +205,7 @@ async function parseMultipartHarnessRequest(request: Request, contentType: strin
       mimeType: workbook.type,
     });
   if (!cached) rememberRawWorkbook(contentHash, sheets);
-  return { raw, rawWorkbook: { fileName: workbook.name, contentHash, sheets }, images };
+  return { raw, rawWorkbook: { fileName: workbook.name, contentHash, sheets, bytes: workbookBuffer }, images };
 }
 
 function liveEvaluationCase(request: Request): LiveHarnessEvaluationCase | NextResponse | null {
@@ -253,7 +255,7 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
     return error("Harness 请求必须使用 application/json；授权原始数据时使用 multipart/form-data。", 415);
   }
   let raw: unknown;
-  let rawWorkbook: { fileName: string; contentHash: string; sheets: EdsWorkbookSheet[] } | undefined;
+  let rawWorkbook: { fileName: string; contentHash: string; sheets: EdsWorkbookSheet[]; bytes: Uint8Array } | undefined;
   let uploadedImages: UploadedHarnessImage[] = [];
   try {
     if (contentType === "multipart/form-data") {
@@ -377,22 +379,15 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
     // The studio capture service opens a fresh workbench, not this candidate.
     // Lab candidates are rendered and assessed in the browser; never attach unrelated screenshot evidence.
     const visualVerifier = visualizationLab ? undefined : configuredVisualVerifier(request);
-    const configuredContextBudget = {
-      ...(process.env.HARNESS_MAX_TOTAL_INPUT_CHARS?.trim()
-        ? { maxTotalInputChars: positiveInteger(process.env.HARNESS_MAX_TOTAL_INPUT_CHARS, 96_000) }
-        : {}),
-      ...(process.env.HARNESS_MAX_TOTAL_PROMPT_TOKENS?.trim()
-        ? { maxTotalPromptTokens: positiveInteger(process.env.HARNESS_MAX_TOTAL_PROMPT_TOKENS, 48_000) }
-        : {}),
-    };
     if (uploadedImages.length && !visualVerifier) {
       throw new HarnessRequestError("图片分析尚未配置，请先启用支持图像输入的视觉模型。", 503);
     }
     const runHarness = async (signal: AbortSignal, onEvent?: (event: HarnessTraceEvent) => void) => {
+      // Keep the early SSE receipt; the Agent decides whether to inspect inputs.
       const preparing: HarnessTraceEvent = {
         id: `harness_${serverRequest.idempotencyKey}:1`, sequence: 1, taskId: `harness_${serverRequest.idempotencyKey}`,
         timestamp: new Date().toISOString(), type: "task_started", taskState: "planning",
-        message: "请求已接受，正在准备授权上下文、图片证据和外部工具。",
+        message: "正在判断本次请求的处理方式。",
       };
       onEvent?.(preparing);
       const sequenceEvent = (event: HarnessTraceEvent): HarnessTraceEvent => ({ ...event,
@@ -418,50 +413,54 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
         });
         const task = await harness.run(effectiveRequest, {
           agentMode: !liveEvaluation && !visualizationLab && process.env.HARNESS_MULTI_AGENT_MODE === "data" ? "data" : "single",
-          dataRuntime,
-          apiKey: resolveDeepSeekApiKey(),
-          model: liveEvaluation ? process.env.DEEPSEEK_MODEL : resolveDeepSeekModel(),
-          signal,
-          onEvent: (event) => onEvent?.(sequenceEvent(event)),
-          excelExporter: createHarnessExcelExporter({ ownership: identity, repository: datasetRepository }),
-          connectionInspector: (connectionId, signal) => inspectConnectionSchema({ connectionId, signal, project: projectHandle, forAi: true }),
-          notebookRunner: async (artifact, context) => runNotebook({ document: { name: artifact.name,
-            revision: context.request.notebookContext?.document.revision ?? 0, cells: artifact.cells },
-            sources: artifact.sourceDataSourceIds.map((id) => {
-              const source = context.request.appSpec.dataSources.find((item) => item.id === id);
-              const rows = context.dataRuntime.rowsByDataSourceId[id];
-              if (!source || !rows) throw new Error("Notebook 源数据不可用");
-              return { source, rows };
-            }), semanticModels: context.request.semanticModel ? [context.request.semanticModel] : [],
-            connectionQuery: (connectionId, sql, signal) => executeConnectionSql({ connectionId, sql, signal, project: projectHandle, forAi: true }),
-            forAi: true, signal: context.signal, userId: identity.ownerId, taskId: `harness_${context.request.idempotencyKey}` }),
-          ...(rawWorkbook ? { rawWorkbook } : {}),
-          ...(mcpRuntime ? { mcpRuntime } : {}),
-          ...(visualVerifier ? {
-            visualVerifier,
-            visualVerificationTimeoutMs: positiveInteger(process.env.HARNESS_VISUAL_VERIFICATION_TIMEOUT_MS, 35_000),
-          } : {}),
-          authorizeModelCall: () => {
-            if (expectedAiAccessPolicies.length > 0) datasetRepository.assertAiAccessPolicies(identity, expectedAiAccessPolicies);
-            const expected = publicRequest.notebookContext?.connections ?? [];
-            if (expected.length && JSON.stringify(listConnections(projectHandle, true)) !== JSON.stringify(expected)) {
-              throw new Error("数据库连接的 Agent 授权已变化，请重新发起任务");
-            }
-          },
-          bounds: {
-            maxModelCalls: liveEvaluation?.limits.maxModelCalls ?? positiveInteger(process.env.HARNESS_MAX_MODEL_CALLS, 8),
-            maxToolCalls: liveEvaluation?.limits.maxToolCalls ?? positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
-            modelRequestTimeoutMs: positiveInteger(process.env.HARNESS_MODEL_REQUEST_TIMEOUT_MS, 25_000),
-            toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 10_000),
-            totalExecutionTimeoutMs: liveEvaluation?.limits.activeElapsedReservationMs
-              ?? positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
-          },
-          ...(liveEvaluation ? {
-            contextBudget: { maxTotalPromptTokens: liveEvaluation.limits.promptTokenReservation },
-            modelMaxCompletionTokens: liveEvaluation.limits.maxCompletionTokensPerCall,
-            requireProviderUsage: true,
-            providerPromptTokenLimit: liveEvaluation.limits.promptTokenReservation,
-          } : Object.keys(configuredContextBudget).length ? { contextBudget: configuredContextBudget } : {}),
+          ...configureDeepSeekHarness({
+            dataRuntime,
+            apiKey: resolveDeepSeekApiKey(),
+            model: liveEvaluation ? process.env.DEEPSEEK_MODEL : resolveDeepSeekModel(),
+            signal,
+            onEvent: (event) => onEvent?.(sequenceEvent(event)),
+            excelExporter: createHarnessExcelExporter({ ownership: identity, repository: datasetRepository }),
+            connectionInspector: (connectionId, signal) => inspectConnectionSchema({ connectionId, signal, project: projectHandle, forAi: true }),
+            notebookRunner: async (artifact, context) => runNotebook({ document: { name: artifact.name,
+              revision: context.request.notebookContext?.document.revision ?? 0, cells: artifact.cells },
+              sources: artifact.sourceDataSourceIds.map((id) => {
+                const source = context.request.appSpec.dataSources.find((item) => item.id === id);
+                const rows = context.dataRuntime.rowsByDataSourceId[id];
+                if (!source || !rows) throw new Error("Notebook 源数据不可用");
+                return { source, rows };
+              }), semanticModels: context.request.semanticModel ? [context.request.semanticModel] : [],
+              pythonFiles: rawWorkbook ? [{ name: rawWorkbook.fileName, bytes: rawWorkbook.bytes }] : [],
+              connectionQuery: (connectionId, sql, signal) => executeConnectionSql({ connectionId, sql, signal, project: projectHandle, forAi: true }),
+              forAi: true, signal: context.signal, userId: identity.ownerId, taskId: `harness_${context.request.idempotencyKey}` }),
+            pythonRuntimeInfo: notebookPythonRuntimeInfo,
+            ...(rawWorkbook ? { rawWorkbook: { fileName: rawWorkbook.fileName, contentHash: rawWorkbook.contentHash, sheets: rawWorkbook.sheets } } : {}),
+            ...(mcpRuntime ? { mcpRuntime } : {}),
+            ...(visualVerifier ? {
+              visualVerifier,
+              visualVerificationTimeoutMs: positiveInteger(process.env.HARNESS_VISUAL_VERIFICATION_TIMEOUT_MS, 35_000),
+            } : {}),
+            authorizeModelCall: () => {
+              if (expectedAiAccessPolicies.length > 0) datasetRepository.assertAiAccessPolicies(identity, expectedAiAccessPolicies);
+              const expected = publicRequest.notebookContext?.connections ?? [];
+              if (expected.length && JSON.stringify(listConnections(projectHandle, true)) !== JSON.stringify(expected)) {
+                throw new Error("数据库连接的 Agent 授权已变化，请重新发起任务");
+              }
+            },
+            bounds: {
+              maxModelCalls: liveEvaluation?.limits.maxModelCalls ?? null,
+              maxToolCalls: liveEvaluation?.limits.maxToolCalls ?? positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
+              modelRequestTimeoutMs: positiveInteger(process.env.HARNESS_MODEL_REQUEST_TIMEOUT_MS, 25_000),
+              toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 10_000),
+              totalExecutionTimeoutMs: liveEvaluation?.limits.activeElapsedReservationMs
+                ?? positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
+            },
+            ...(liveEvaluation ? {
+              contextBudget: { maxTotalPromptTokens: liveEvaluation.limits.promptTokenReservation },
+              modelMaxCompletionTokens: liveEvaluation.limits.maxCompletionTokensPerCall,
+              requireProviderUsage: true,
+              providerPromptTokenLimit: liveEvaluation.limits.promptTokenReservation,
+            } : {}),
+          }),
         });
         task.trace = [preparing, ...(task.trace ?? []).map(sequenceEvent)];
         conversation.commit(task);

@@ -5,6 +5,10 @@ import './globals.css';
 import './semantic-models.css';
 // Shared studio palette follows the feature styles so chrome stays consistent.
 import './studio-theme.css';
+import './studio-layout.css';
+import './notebook-cells.css';
+import './files-panel.css';
+import './conversations.css';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',

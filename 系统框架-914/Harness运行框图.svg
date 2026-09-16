@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1440" viewBox="0 0 2000 1440" role="img" aria-labelledby="title desc">
+<title id="title">AgentCanvas Harness 运行框架 · 2026-09-14</title>
+<desc id="desc">请求经服务端授权与依赖组装进入通用 HarnessRuntime。核心循环为规划、上下文、模型动作、工具门控、工具执行与观察；候选经过证据验证，失败有有限恢复和自然语言解释，最终输出一份任务回执。模型适配、预算、证据和持久化位于各自边界。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#707875"/></marker></defs>
+<style>
+text{font-family:'Microsoft YaHei','Noto Sans SC',sans-serif;fill:#292d2b}
+.title{font-size:35px;font-weight:700}.subtitle{font-size:19px;fill:#69716d}.section{font-size:22px;font-weight:700}
+.card-title{font-size:21px;font-weight:700}.body{font-size:18px;fill:#505a54}.small{font-size:16px;fill:#6d756f}
+.card{fill:#fff;stroke:#cbd0cb;stroke-width:1.3}.support{fill:#f0f1ed;stroke:#cbd0cb;stroke-width:1.3}
+.outcome{fill:#eaf0ec;stroke:#b6c9bd;stroke-width:1.4}.failure{fill:#fbf4f0;stroke:#d6bdb1;stroke-width:1.3}
+.arrow{fill:none;stroke:#707875;stroke-width:2}.dashed{stroke-dasharray:7 5}
+</style><rect width="2000" height="1440" fill="#f8f7f4"/>
+<text x="48" y="60" class="title">AgentCanvas · Harness 运行框架</text>
+<text x="48" y="98" class="subtitle">2026-09-14 工作区实现快照  /  核心执行、依赖边界与交付控制</text>
+<rect x="430" y="140" width="1150" height="1040" rx="20" fill="#efefea" stroke="#bec5be" stroke-width="1.5"/>
+<text x="458" y="178" class="section">HarnessRuntime · 唯一核心执行器</text>
+<text x="458" y="207" class="small">模型提出动作，执行器维护状态、限制与验收；旧 DeepSeekHarness 仅作服务端兼容组装</text>
+<path d="M212 316V346" class="arrow" marker-end="url(#arrow)"/>
+<path d="M212 520V550" class="arrow" marker-end="url(#arrow)"/>
+<path d="M394 636H448V302H468" class="arrow" marker-end="url(#arrow)"/>
+<path d="M792 302H834" class="arrow" marker-end="url(#arrow)"/>
+<path d="M1158 302H1200" class="arrow" marker-end="url(#arrow)"/>
+<path d="M1362 376V424" class="arrow" marker-end="url(#arrow)"/>
+<path d="M1200 495H1158" class="arrow" marker-end="url(#arrow)"/>
+<path d="M834 495H792" class="arrow" marker-end="url(#arrow)"/>
+<path d="M630 570V652" class="arrow" marker-end="url(#arrow)"/>
+<path d="M792 723H834" class="arrow" marker-end="url(#arrow)"/>
+<path d="M1362 570V612H996V652" class="arrow" marker-end="url(#arrow)"/>
+<path d="M1158 723H1200" class="arrow" marker-end="url(#arrow)"/>
+<path d="M996 798V900" class="arrow" marker-end="url(#arrow)"/>
+<path d="M1362 798V900" class="arrow" marker-end="url(#arrow)"/>
+<path d="M630 798V840H1556V302H1524" class="arrow dashed" marker-end="url(#arrow)"/>
+<text x="1230" y="828" class="small">更新记忆 → 下一轮上下文</text>
+<path d="M468 492H450V983H468" class="arrow dashed" marker-end="url(#arrow)"/>
+<text x="488" y="879" class="small">失败按原预算有限恢复</text>
+<path d="M792 980H814V395H996V376" class="arrow dashed" marker-end="url(#arrow)"/>
+<text x="824" y="882" class="small">通过后交付</text>
+<g><rect x="48" y="156" width="346" height="160" rx="14" class="support"/>
+<text x="70" y="192" class="card-title">请求入口</text>
+<text x="70" y="226" class="body">Web 对话 / 选定上下文</text>
+<text x="70" y="254" class="body">JSON 或 SSE / 可选附件</text>
+<text x="70" y="282" class="body">目标不等于授权</text>
+</g>
+<g><rect x="48" y="346" width="346" height="174" rx="14" class="support"/>
+<text x="70" y="382" class="card-title">API 边界 · handler</text>
+<text x="70" y="416" class="body">身份与项目数据授权</text>
+<text x="70" y="444" class="body">会话锁与幂等执行</text>
+<text x="70" y="472" class="body">模型工厂 / 工具依赖组装</text>
+</g>
+<g><rect x="48" y="550" width="346" height="174" rx="14" class="support"/>
+<text x="70" y="586" class="card-title">协调路由</text>
+<text x="70" y="620" class="body">默认：单 Agent</text>
+<text x="70" y="648" class="body">可选：主 Agent + 数据子任务</text>
+<text x="70" y="676" class="body">子任务仍复用相同 Runtime</text>
+</g>
+<g><rect x="48" y="754" width="346" height="174" rx="14" class="support"/>
+<text x="70" y="790" class="card-title">可选数据子 Agent</text>
+<text x="70" y="824" class="body">仅 data 开关且满足条件</text>
+<text x="70" y="852" class="body">最多一个 / 串行 / viewer</text>
+<text x="70" y="880" class="body">独立上下文与证据命名空间</text>
+</g>
+<g><rect x="48" y="958" width="346" height="190" rx="14" class="support"/>
+<text x="70" y="994" class="card-title">当前范围</text>
+<text x="70" y="1028" class="body">分析 / 可视化子角色未实现</text>
+<text x="70" y="1056" class="body">无并发、递归或跨角色 DAG</text>
+<text x="70" y="1084" class="body">Notebook 单元 DAG 已有</text>
+<text x="70" y="1112" class="body">不等于多 Agent 依赖图</text>
+</g>
+<g><rect x="468" y="236" width="324" height="140" rx="14" class="card"/>
+<text x="490" y="272" class="card-title">01 初始化</text>
+<text x="490" y="306" class="body">任务 / Skill / 语义分类</text>
+<text x="490" y="334" class="body">工作记忆与 Evidence Bus</text>
+<text x="490" y="362" class="body">按条件执行视觉预检</text>
+</g>
+<g><rect x="834" y="236" width="324" height="140" rx="14" class="card"/>
+<text x="856" y="272" class="card-title">02 Execution Planner</text>
+<text x="856" y="306" class="body">规则计划 / 可选模型规划</text>
+<text x="856" y="334" class="body">currentStep + allowedTools</text>
+<text x="856" y="362" class="body">步骤、证据要求与完成条件</text>
+</g>
+<g><rect x="1200" y="236" width="324" height="140" rx="14" class="card"/>
+<text x="1222" y="272" class="card-title">03 选择上下文</text>
+<text x="1222" y="306" class="body">相关数据 / 有界观察 / 证据</text>
+<text x="1222" y="334" class="body">估算输入 → 必要时压缩</text>
+<text x="1222" y="362" class="body">超出额度则停止调用</text>
+</g>
+<g><rect x="1200" y="424" width="324" height="146" rx="14" class="card"/>
+<text x="1222" y="460" class="card-title">04 模型动作</text>
+<text x="1222" y="494" class="body">HarnessModel.next</text>
+<text x="1222" y="522" class="body">callTool / complete / blocked</text>
+<text x="1222" y="550" class="body">classifyIntent / plan 可选</text>
+</g>
+<g><rect x="834" y="424" width="324" height="146" rx="14" class="card"/>
+<text x="856" y="460" class="card-title">05 工具门控</text>
+<text x="856" y="494" class="body">当前步骤与白名单</text>
+<text x="856" y="522" class="body">完整参数 Schema 校验</text>
+<text x="856" y="550" class="body">数据权限 / 预算 / 取消</text>
+</g>
+<g><rect x="468" y="424" width="324" height="146" rx="14" class="card"/>
+<text x="490" y="460" class="card-title">06 业务工具</text>
+<text x="490" y="494" class="body">21 个静态工具 / 按轮裁剪</text>
+<text x="490" y="522" class="body">数据、EDS、语义、Notebook</text>
+<text x="490" y="550" class="body">SQL、ChangeSet、导出、MCP</text>
+</g>
+<g><rect x="468" y="652" width="324" height="146" rx="14" class="card"/>
+<text x="490" y="688" class="card-title">07 观察与证据</text>
+<text x="490" y="722" class="body">成功工具 → Observation</text>
+<text x="490" y="750" class="body">工作记忆 / 计划同步</text>
+<text x="490" y="778" class="body">Evidence Bus 登记来源</text>
+</g>
+<g><rect x="834" y="652" width="324" height="146" rx="14" class="card"/>
+<text x="856" y="688" class="card-title">08 Verifier</text>
+<text x="856" y="722" class="body">目标 / 计划 / 实际工具覆盖</text>
+<text x="856" y="750" class="body">产物 / 版本 / AppSpec 保护</text>
+<text x="856" y="778" class="body">按条件使用视觉验证</text>
+</g>
+<g><rect x="1200" y="652" width="324" height="146" rx="14" class="failure"/>
+<text x="1222" y="688" class="card-title">09 失败说明</text>
+<text x="1222" y="722" class="body">保留失败状态与终止原因</text>
+<text x="1222" y="750" class="body">受控事实 → 可选模型解释</text>
+<text x="1222" y="778" class="body">无工具 / ≤5 秒 / 本地回退</text>
+</g>
+<g><rect x="468" y="900" width="324" height="202" rx="14" class="support"/>
+<text x="490" y="936" class="card-title">有界修正与恢复</text>
+<text x="490" y="970" class="body">模型格式、策略、参数修正</text>
+<text x="490" y="998" class="body">工具恢复与验证重规划</text>
+<text x="490" y="1026" class="body">同参数失败 2 次不再执行</text>
+<text x="490" y="1054" class="body">所有修正仍计入原任务预算</text>
+</g>
+<g><rect x="834" y="900" width="690" height="202" rx="14" class="outcome"/>
+<text x="856" y="936" class="card-title">10 统一交付</text>
+<text x="856" y="970" class="body">完成结果 / 待确认预览 / 缺少条件 / 失败或取消</text>
+<text x="856" y="998" class="body">子任务成功：主 Agent 汇总，并按原目标再次验收</text>
+<text x="856" y="1026" class="body">一份 HarnessTaskSummary · 主会话只提交一次</text>
+<text x="856" y="1054" class="body">SSE completed 是请求结束，不能直接当作成功</text>
+</g>
+<text x="797" y="710" class="small">候选</text>
+<text x="1163" y="710" class="small">失败</text>
+<text x="458" y="1144" class="small">实线：主要执行与验收路径   虚线：观察回流 / 有限恢复   图示为逻辑依赖，不代表所有步骤每次必经</text>
+<g><rect x="1620" y="156" width="332" height="226" rx="14" class="support"/>
+<text x="1642" y="192" class="card-title">模型适配 · 服务端</text>
+<text x="1642" y="226" class="body">DeepSeek HTTP / JSON 解析</text>
+<text x="1642" y="254" class="body">模型标识与可信用量校验</text>
+<text x="1642" y="282" class="body">通过 HarnessModel 注入</text>
+<text x="1642" y="310" class="body">Runtime 不持有模型密钥</text>
+<text x="1642" y="338" class="body">其他模型尚未接入验收</text>
+</g>
+<g><rect x="1620" y="412" width="332" height="226" rx="14" class="support"/>
+<text x="1642" y="448" class="card-title">贯穿的执行控制</text>
+<text x="1642" y="482" class="body">默认循环 / 模型 / 工具：8/8/6</text>
+<text x="1642" y="510" class="body">模型 / 工具 / 总时长：25/10/90s</text>
+<text x="1642" y="538" class="body">输入字符、Token 与结果额度</text>
+<text x="1642" y="566" class="body">主子共享预算 / 撤权复查</text>
+<text x="1642" y="594" class="body">取消传播 / 有界等待 / 事件</text>
+</g>
+<g><rect x="1620" y="668" width="332" height="226" rx="14" class="support"/>
+<text x="1642" y="704" class="card-title">证据与判断边界</text>
+<text x="1642" y="738" class="body">工具观察 / 截图 / 布局测量</text>
+<text x="1642" y="766" class="body">有界清单与相关证据 ID</text>
+<text x="1642" y="794" class="body">历史摘要须按本轮事实复核</text>
+<text x="1642" y="822" class="body">验证主要检查结构化条件</text>
+<text x="1642" y="850" class="body">不完整证明自然语言因果</text>
+</g>
+<g><rect x="1620" y="924" width="332" height="224" rx="14" class="support"/>
+<text x="1642" y="960" class="card-title">会话与正式保存</text>
+<text x="1642" y="994" class="body">最近 10 轮 + 滚动历史摘录</text>
+<text x="1642" y="1022" class="body">项目 / 身份 / 页面隔离</text>
+<text x="1642" y="1050" class="body">ChangeSet：预览 → 确认</text>
+<text x="1642" y="1078" class="body">工作区 / 项目仓库负责保存</text>
+<text x="1642" y="1106" class="body">接受快照不等于已写入磁盘</text>
+</g>
+<rect x="48" y="1210" width="1904" height="158" rx="16" fill="#fff" stroke="#cbd0cb"/>
+<text x="72" y="1246" class="section">理解最终状态</text>
+<text x="72" y="1284" class="card-title">completed</text>
+<text x="72" y="1314" class="body">本轮相应交付通过验收</text>
+<text x="488" y="1284" class="card-title">awaitingConfirmation</text>
+<text x="488" y="1314" class="body">候选已准备，正式页面待确认</text>
+<text x="1030" y="1284" class="card-title">blocked</text>
+<text x="1030" y="1314" class="body">缺少必要数据、上下文或能力</text>
+<text x="1520" y="1284" class="card-title">failed / cancelled</text>
+<text x="1520" y="1314" class="body">未完成或停止；解释不改事实</text>
+<text x="72" y="1345" class="small">Analysis Planner 是生成业务分析计划的工具能力；Execution Planner 管执行步骤。两者都不代表已实现独立分析专家。</text>
+<text x="48" y="1410" class="small">来源：当前工作区 Harness / 模型组装 / 架构维护文档  ·  仅文档整理，未发布稳定站  ·  详细接口与边界见 04 / 05 专项说明</text>
+</svg>

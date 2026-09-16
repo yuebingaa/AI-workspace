@@ -72,7 +72,7 @@ async function screenshot(name) {
 try {
   await page.goto(baseUrl, { waitUntil: "networkidle", timeout: 30_000 });
   await agentTab.click();
-  await page.getByRole("heading", { name: "今天想从数据里发现什么？" }).waitFor();
+  await page.getByRole("heading", { name: "今天，想了解什么？" }).waitFor();
   assert.equal(await prompt.count(), 1, "Only one shared composer should exist");
   await screenshot("desktop-empty");
   for (const [name, viewport] of [["tablet-empty", { width: 820, height: 900 }], ["mobile-empty", { width: 390, height: 844 }]]) {

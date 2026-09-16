@@ -10,7 +10,7 @@ import {
 } from "./contracts";
 import { readHarnessStream } from "./stream";
 import { projectHeaders } from "@/core/projects/client";
-import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { readBoundedUtf8Body } from "@/core/http/bounded-body";
 
 export const MAX_HARNESS_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_HARNESS_INVALID_RESPONSE_RETRIES = 1;

@@ -101,6 +101,16 @@ function renderTaskHistory() {
 }
 
 describe("任务与变更历史面板", () => {
+  it("没有模型额度时显示实际消耗和无本地限额，不生成无意义的比例", () => {
+    const task = createHarnessTask("unlimited_history", "合成分析", "page_home", "editor", clock);
+    task.contextUsage = { totalInputChars: 120_000, totalPromptTokens: 50_000, complexity: "multiStep", requests: [],
+      limits: { maxRequestInputChars: null, maxTotalInputChars: null, maxTotalPromptTokens: null, maxToolResultChars: 4_000, maxToolResultEntries: 16 } };
+    const html = renderToStaticMarkup(createElement(ActivityHistoryPanel, { open: true, harnessTasks: [task], auditRecords: [], onRestoreFocus: () => {}, onClose: () => {} }));
+    expect(html).toContain("120,000 / 不设本地限额");
+    expect(html).toContain("50,000 / 不设本地限额");
+    expect(html).not.toContain("history-progress");
+    expect(html).not.toMatch(/NaN|Infinity/u);
+  });
   it("展示 Harness 状态、工具调用、失败原因、预算和耗时", () => {
     const html = renderTaskHistory();
     expect(html).toContain("任务与变更历史");

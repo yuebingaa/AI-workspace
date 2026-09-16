@@ -9,7 +9,6 @@ import { activeProjectHandle, saveProjectOriginal } from "@/core/projects/client
 export interface ImportedWorkbookAttachment {
   file: File;
   sheetNames: string[];
-  aiRawAccess: boolean;
 }
 
 export interface SpreadsheetWorkspaceOption {
@@ -23,6 +22,7 @@ interface CsvUploadDialogProps {
     result: DatasetUploadResponse,
     workbook: ImportedWorkbookAttachment | undefined,
     targetWorkspaceId: string,
+    originalFile?: File,
   ) => void;
   onClose: () => void;
   workspaceOptions?: SpreadsheetWorkspaceOption[];
@@ -86,7 +86,6 @@ export function CsvUploadDialog({
   const [prepared, setPrepared] = useState<PreparedSpreadsheet[]>([]);
   const [progress, setProgress] = useState<CsvUploadProgress | null>(null);
   const [uploadIndex, setUploadIndex] = useState(0);
-  const [aiRawAccess, setAiRawAccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<(() => void) | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -180,9 +179,9 @@ export function CsvUploadDialog({
           item.kind === "xlsx" ? {
             file: item.file,
             sheetNames: item.sheets.map((sheet) => sheet.sheet),
-            aiRawAccess,
           } : undefined,
           item.targetWorkspaceId,
+          item.file,
         );
         await saveProjectOriginal(item.file, result.dataset.datasetId);
       } catch (caught) {
@@ -241,9 +240,6 @@ export function CsvUploadDialog({
                 </article>
               ))}
             </div>
-            {prepared.some((item) => item.kind === "xlsx") && (
-              <label className="spreadsheet-upload-ai-access"><input type="checkbox" checked={aiRawAccess} disabled={busy} onChange={(event) => setAiRawAccess(event.target.checked)} /><span><b>允许 Harness 按需读取完整 XLSX</b><small>仅当前浏览器会话；不会写入 localStorage、备份或审计正文。</small></span></label>
-            )}
             {progress && <div className="spreadsheet-upload-progress"><span>{uploadIndex + 1}/{prepared.length} · {prepared[uploadIndex]?.file.name} · {phaseLabels[progress.phase]} {progress.percent}%</span><div className="csv-progress" aria-label={`${phaseLabels[progress.phase]} ${progress.percent}%`}><i style={{ width: `${progress.percent}%` }} /></div></div>}
             <footer className="spreadsheet-upload-actions"><button type="button" onClick={cancelOrClose}>{progress ? "取消" : "返回"}</button><button type="button" className="primary" disabled={busy} onClick={() => void uploadAll()}>导入 {prepared.length} 份文件</button></footer>
           </div>

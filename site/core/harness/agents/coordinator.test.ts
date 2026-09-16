@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as inputInspector from "../input-inspector";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { harnessTaskSummarySchema, type HarnessModel, type HarnessModelInput, type HarnessModelResult, type HarnessModelTurn, type HarnessRequest, type HarnessTraceEvent } from "../contracts";
 import { createHarnessStreamResponse, readHarnessStream } from "../stream";
@@ -6,6 +7,8 @@ import { executeHarnessTool } from "../tool-registry";
 import { HarnessConversationStore } from "../server/conversation-store";
 import { CoordinatedHarness } from "./coordinator";
 import { canDelegateDataTask } from "./registry";
+
+afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
@@ -31,6 +34,38 @@ const dataTurns = [call("inspectDataset"), call("inspectFields"), complete("已�
 const delegatedTurns = [call("delegateDataTask"), ...dataTurns, complete("根据本轮数据概况和字段检查，建议优先复核缺失字段，再进行业务分析。")];
 
 describe("serial data-agent delegation", () => {
+  it.each([true, false])("waits for a valid parent Agent delegation before inspecting (accepted=%s)", async (accepted) => {
+    const { request, dataRuntime } = fixture();
+    const inspection = vi.spyOn(inputInspector, "inspectHarnessInput");
+    const sequence = scripted(accepted ? delegatedTurns : [complete("本轮不委派")]);
+    const model: HarnessModel = { next: async (input) => {
+      if (sequence.inputs.length === 0) {
+        expect(inspection).not.toHaveBeenCalled();
+        expect(input.context.inputInspection).toBeUndefined();
+      } else expect(inspection).toHaveBeenCalled();
+      return sequence.model.next(input);
+    } };
+    const result = await new CoordinatedHarness().run(request, { agentMode: "data", dataRuntime, modelClient: model,
+      allowFailureExplanation: false });
+    expect(result.state, result.error).toBe(accepted ? "completed" : "failed");
+    if (accepted) expect(inspection).toHaveBeenCalled();
+    else {
+      expect(inspection).not.toHaveBeenCalled();
+      expect(result.counters.toolCallCount).toBe(0);
+      expect(result.trace?.some((event) => event.message.includes("输入检查完成"))).toBe(false);
+    }
+  });
+  it("shares uncapped model accounting without reinstating worker token quotas", async () => {
+    const { request, dataRuntime } = fixture();
+    const { model } = scripted(delegatedTurns);
+    const highUsageModel: HarnessModel = { next: async (input) => ({ ...await model.next(input),
+      usage: { promptTokens: 30_000, completionTokens: 4_000, totalTokens: 34_000 } }) };
+    const result = await new CoordinatedHarness().run(request, { agentMode: "data", dataRuntime, modelClient: highUsageModel });
+    expect(result.state, result.error).toBe("completed");
+    expect(result.delegation?.children[0].verification).toBe("passed");
+    expect(result.usage).toEqual({ promptTokens: 150_000, completionTokens: 20_000, totalTokens: 170_000 });
+    expect(result.contextUsage?.limits).toMatchObject({ maxRequestInputChars: null, maxTotalInputChars: null, maxTotalPromptTokens: null });
+  });
   it("uses two isolated model contexts, real tools and verified evidence, and commits one conversation", async () => {
     const { request, dataRuntime } = fixture();
     expect(canDelegateDataTask(request)).toBe(true);
@@ -159,6 +194,8 @@ describe("serial data-agent delegation", () => {
 
   it("removes unrelated datasets from both child metadata and its data runtime", async () => {
     const { request, dataRuntime } = fixture();
+    request.rawWorkbookManifest = { fileName: "synthetic.xlsx", contentHash: "a".repeat(64),
+      sheets: [{ name: "Sheet1", rowCount: 2, columnCount: 1 }] };
     request.dataSourceId = "dataset_retail_orders";
     const source = structuredClone(request.appSpec.dataSources[0]);
     source.id = "private_unrelated_dataset";
@@ -174,6 +211,9 @@ describe("serial data-agent delegation", () => {
     const result = await new CoordinatedHarness().run(request, { agentMode: "data", dataRuntime, modelClient: model, toolExecutor });
     expect(result.state, result.error).toBe("completed");
     expect(JSON.stringify(inputs)).not.toContain("PRIVATE_UNRELATED_MARKER");
+    expect(inputs[0].context.inputInspection).toBeUndefined();
+    expect(inputs[1].context.inputInspection).toMatchObject({ resources: { datasetCount: 1 }, workbook: { status: "parsedAttachment" } });
+    expect(result.trace?.find((event) => event.type === "context_loaded")?.message).toContain("输入检查完成");
   });
 
   it("enforces the total deadline even when a provider ignores cancellation", async () => {

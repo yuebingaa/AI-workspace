@@ -15,17 +15,15 @@ import type {
   DataRecipeStep,
   DataRow,
   DataSourceDefinition,
-  QueryExecutionRecord,
 } from "@/core/models";
 
-type DataSourceTab = "overview" | "fields" | "preview" | "recipe" | "executions";
+type DataSourceTab = "overview" | "fields" | "preview" | "recipe";
 
 const tabs: Array<{ id: DataSourceTab; label: string }> = [
   { id: "overview", label: "概览" },
   { id: "fields", label: "字段" },
   { id: "preview", label: "数据预览" },
   { id: "recipe", label: "数据配方" },
-  { id: "executions", label: "执行记录" },
 ];
 
 const typeLabels = { string: "文本", number: "数值", date: "日期", boolean: "布尔值" } as const;
@@ -67,7 +65,6 @@ interface DataSourceDetailsPanelProps {
   source: DataSourceDefinition;
   rows: DataRow[];
   recipe?: DataRecipe;
-  queryRecords: QueryExecutionRecord[];
   onPreviewRecipeBinding: (changeSet: ChangeSet) => void;
   onConfirmAiAccess?: (policy: "masked" | "exclude-sensitive-samples") => Promise<void>;
   onDelete?: () => Promise<void>;
@@ -78,7 +75,6 @@ export function DataSourceDetailsPanel({
   source,
   rows,
   recipe,
-  queryRecords,
   onPreviewRecipeBinding,
   onConfirmAiAccess,
   onDelete,
@@ -92,7 +88,6 @@ export function DataSourceDetailsPanel({
   const [datasetActionBusy, setDatasetActionBusy] = useState(false);
   const analyses = useMemo(() => analyzeDataSourceFields(source, rows), [rows, source]);
   const preview = useMemo(() => createDataPreview(source, rows, visibleFields, 20), [rows, source, visibleFields]);
-  const records = queryRecords.filter((record) => record.dataSourceId === source.id);
   const activeRecipe = useMemo(
     () => recipe ? recipeWithStepCount(recipe, activeStepCount) : null,
     [activeStepCount, recipe],
@@ -164,7 +159,6 @@ export function DataSourceDetailsPanel({
             <button key={item.id} type="button" className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>
               {item.label}
               {item.id === "recipe" && recipe && <span>{recipe.steps.length}</span>}
-              {item.id === "executions" && <span>{records.length}</span>}
             </button>
           ))}
         </nav>
@@ -265,19 +259,6 @@ export function DataSourceDetailsPanel({
                 </div>
               </div>
             )
-          )}
-          {tab === "executions" && (
-            <div className="query-record-list">
-              {!records.length && <div className="empty-records">画布完成数据绑定计算后，执行记录会显示在这里。</div>}
-              {records.map((record) => (
-                <article key={record.id} className={record.status}>
-                  <div><b>{record.componentId}</b><span>{record.status === "success" ? "成功" : "失败"}</span></div>
-                  <p>{record.bindingSummary}</p><small>{record.planSummary}</small>
-                  <dl><div><dt>执行编号</dt><dd>{record.id}</dd></div><div><dt>页面</dt><dd>{record.pageId}</dd></div><div><dt>输入 / 输出</dt><dd>{record.inputRowCount} / {record.outputRowCount}</dd></div><div><dt>耗时</dt><dd>{record.durationMs} ms</dd></div><div><dt>开始</dt><dd>{new Date(record.startedAt).toLocaleString("zh-CN")}</dd></div><div><dt>完成</dt><dd>{new Date(record.completedAt).toLocaleString("zh-CN")}</dd></div></dl>
-                  {record.error && <div className="query-error">{record.error}</div>}
-                </article>
-              ))}
-            </div>
           )}
         </div>
       </section>

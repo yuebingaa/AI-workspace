@@ -54,26 +54,24 @@ export function WorkspaceModeBar({ mode, pageTitle, onChange }: {
   );
 }
 
-export function AgentWorkspaceWelcome({ onSuggestion }: { onSuggestion: (instruction: string) => void }) {
+export function AgentWorkspaceWelcome({ onSuggestion, compact = false }: { onSuggestion: (instruction: string) => void; compact?: boolean }) {
   return (
-    <section className="agent-workspace-welcome" aria-labelledby="agent-welcome-title">
+    <section className={`agent-workspace-welcome${compact ? " compact" : ""}`} aria-labelledby="agent-welcome-title">
       <StudioArtwork className="agent-welcome-art" />
-      <p className="agent-welcome-eyebrow">DATACANVAS / 让数据，回答你的问题</p>
-      <h1 id="agent-welcome-title">今天想从数据里发现什么？</h1>
-      <p className="agent-welcome-description">添加表格或图片，描述你想了解的内容。<br />一起分析数据，把发现变成看板。</p>
-      <div className="agent-suggestions">
+      <h1 id="agent-welcome-title">{compact ? "想从数据中了解什么？" : "今天，想了解什么？"}</h1>
+      <p className="agent-welcome-description">提问、分析数据、创建图表。<br />从一个问题，走向新的发现。</p>
+      {!compact && <div className="agent-suggestions">
         {[
           ["了解数据", "读懂字段，找到关键发现", "请检查当前数据的字段、质量和关键统计，告诉我有哪些值得关注的发现。"],
           ["生成可视化", "让趋势与对比一目了然", "请根据当前数据推荐合适的图表，并为当前工作界面生成可视化预览。"],
           ["整理表格", "检查质量，梳理处理步骤", "请检查当前表格的数据质量，建议需要整理的字段和处理步骤，先说明建议。"],
-        ].map(([label, description, instruction], index) => (
+        ].map(([label, description, instruction]) => (
           <button type="button" key={label} aria-label={label} onClick={() => onSuggestion(instruction)}>
-            <span className="agent-suggestion-number" aria-hidden="true">0{index + 1}</span>
-            <span className="agent-suggestion-copy"><b>{label}</b><small>{description}</small></span>
+            <span className="agent-suggestion-copy" title={description}><b>{label}</b></span>
             <span className="agent-suggestion-arrow" aria-hidden="true">↗</span>
           </button>
         ))}
-      </div>
+      </div>}
     </section>
   );
 }

@@ -1,0 +1,254 @@
+{
+  "schemaVersion": "harness-framework-supplement-v1",
+  "snapshotDate": "2026-09-14",
+  "verifiedAt": "2026-09-14T06:54:37.631Z",
+  "timezone": "Asia/Shanghai",
+  "scope": "Harness documentation supplement; current working tree, including uncommitted refactors. No application source, credentials or user data copied.",
+  "git": {
+    "branch": "feature/eds-analysis-dashboard",
+    "head": "15ebdae7b4bc08ee6aeee5b5cfaf0d15a6b9a018",
+    "includesUncommittedWork": true
+  },
+  "canonicalArchitecture": "site/docs/architecture/agent-architecture.md",
+  "sourceFingerprint": "dac1157360cea67eef18f39ae930768c726f2cbe62fce11f729e2b25f634191a",
+  "checks": {
+    "architectureGuard": "npm run docs:agent:check passed; 101 files",
+    "localLinks": {
+      "checked": 144,
+      "missing": []
+    },
+    "strictUtf8": "passed for all Markdown documents",
+    "diagram": {
+      "width": 2000,
+      "height": 1440,
+      "textCount": 112,
+      "outOfCanvas": [],
+      "outOfCard": [],
+      "pngWidth": 2000,
+      "pngHeight": 1440,
+      "visualInspection": "PNG reviewed by assistant; card labels, arrows and terminal-state legend inspected"
+    },
+    "externalRequestsDuringDiagramCheck": 0,
+    "mermaid": "source supplied; reviewed against SVG and runtime flow; Mermaid engine not executed",
+    "applicationTests": "not run: documentation only",
+    "typecheck": "not run: documentation only",
+    "build": "not run: documentation only",
+    "liveModel": "not called",
+    "database": "not connected",
+    "services": "not managed; no current health check in this supplement task"
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "bytes": 3288,
+      "sha256": "3165f59e9f46a5dc67e600205977ccc8f1aef7ff82a6b33b8ea7b3582efc83e6"
+    },
+    {
+      "path": "04-Harness运行框架.md",
+      "bytes": 14543,
+      "sha256": "b7bf214229685d2108f01d5af0e3c2c8a59b4679472afa44c6a0441817d8548f"
+    },
+    {
+      "path": "05-Harness接口与排查索引.md",
+      "bytes": 9502,
+      "sha256": "40ede5fe393c975d956eb37b69f283fee230f1d855b08c942a505216dfc4ffb7"
+    },
+    {
+      "path": "Harness运行框图.mmd",
+      "bytes": 2036,
+      "sha256": "fa4aece11783641c406ea9ed2bd8089704a727b17d73801a3e683c00f9ac896c"
+    },
+    {
+      "path": "Harness运行框图.svg",
+      "bytes": 13039,
+      "sha256": "0043fe3b56df285a0ddc4e9e6496d8f4720ad49dda7a57e70092e2876053e022"
+    },
+    {
+      "path": "Harness运行框图.png",
+      "bytes": 330540,
+      "sha256": "2c7389b7ae8a4a570096e5a877c04dce42dda1017187df30e3d08a058107b859"
+    }
+  ],
+  "sources": [
+    {
+      "path": "site/STABLE-RUNTIME.md",
+      "bytes": 9761,
+      "sha256": "e12e4f74752a637e0b93eea51e45c916c2c1d94d65575c3838dbe0812d59f974"
+    },
+    {
+      "path": "site/app/api/ai/harness/conversation/route.ts",
+      "bytes": 1704,
+      "sha256": "30e646a40d77f1624354f1563fe501436e21d424e080004acff161aa877c9602"
+    },
+    {
+      "path": "site/app/api/ai/harness/handler.ts",
+      "bytes": 28122,
+      "sha256": "af28ae1376399c382a0f43ee8623d5cd6fe486a6b16e6882da2f507b2f244f2e"
+    },
+    {
+      "path": "site/app/api/ai/harness/route.ts",
+      "bytes": 164,
+      "sha256": "a9bd0a2affe5f7b5055f2d59ef19d491014e4a2ff4e9b2ed29bd63b11bd23c69"
+    },
+    {
+      "path": "site/app/api/ai/harness/stream/route.ts",
+      "bytes": 171,
+      "sha256": "662784948e1b4dc0dedb1ffdae5b2dbc8fcbc932a8eee0b90f01338ca6dd62ff"
+    },
+    {
+      "path": "site/app/api/ai/visualization-lab/stream/route.ts",
+      "bytes": 214,
+      "sha256": "7801007211cd13e5352363e7d558b599bcea139e99464927c4edb21e5e19d393"
+    },
+    {
+      "path": "site/components/studio/AiBuilderAssistant.tsx",
+      "bytes": 24272,
+      "sha256": "d579e5f05669088e58309398133fa75a4cf6bb078a6349bcba45b0596fe6e03a"
+    },
+    {
+      "path": "site/components/studio/HarnessTrace.tsx",
+      "bytes": 4011,
+      "sha256": "f39d908ae6a530cbbb707a6f739531fd2224e58d39e3a976d7c74f8e63a97c63"
+    },
+    {
+      "path": "site/components/studio/workspace/assistant.ts",
+      "bytes": 19567,
+      "sha256": "ee9e7eb15014d6ce941a223255b0ca9f3b92eadaa8f6eb1efb92f24e26e13107"
+    },
+    {
+      "path": "site/core/ai/server/deepseek-harness-model.ts",
+      "bytes": 16869,
+      "sha256": "8237a09d13f497d4868f6ea71e5faea81465bd7643554fd5dff9446a962d6b52"
+    },
+    {
+      "path": "site/core/ai/server/harness-composition.ts",
+      "bytes": 1239,
+      "sha256": "3504e1b5a3f096f4997015e210a3ad8f33f59cf2a6b325cc7a49d376ba122d5c"
+    },
+    {
+      "path": "site/core/harness/agents/budget.ts",
+      "bytes": 3265,
+      "sha256": "5ec9b4700ac197b3286a7968d7d31a036fc1fadbde143882fb1011ea86261089"
+    },
+    {
+      "path": "site/core/harness/agents/coordinator.ts",
+      "bytes": 19670,
+      "sha256": "fde3175c5c6333714bfee135ece28fcce1e1a0ca46178e685ff4eb6946fd593f"
+    },
+    {
+      "path": "site/core/harness/agents/registry.ts",
+      "bytes": 1849,
+      "sha256": "cd61d02c3e443dc182b75a0d8766a056d2d0fa8f52e68f06a7008a44efea8b07"
+    },
+    {
+      "path": "site/core/harness/analysis-planner.ts",
+      "bytes": 9550,
+      "sha256": "4f517970446b7dc250d7a45b63020b2b2abf9816861f797c04cfcb1a2a96ee7c"
+    },
+    {
+      "path": "site/core/harness/client.ts",
+      "bytes": 5799,
+      "sha256": "49962a82340d551a14567a31825aaeb94bcdbd636c199a986ce274c5e19df677"
+    },
+    {
+      "path": "site/core/harness/context-selector.ts",
+      "bytes": 60161,
+      "sha256": "a1aff16346baafa7727e59a885a00be9c018049cb61978a0c61062147c66d485"
+    },
+    {
+      "path": "site/core/harness/contracts.ts",
+      "bytes": 29430,
+      "sha256": "fbed9e350a5354cfc8b98fe10c7b18360651485f2657ecf54018d08aabc472ec"
+    },
+    {
+      "path": "site/core/harness/conversation-client.ts",
+      "bytes": 1798,
+      "sha256": "44fd16959cd4fac66ef83fa6564978691f95904ce89585e199a4cb20d2315dd0"
+    },
+    {
+      "path": "site/core/harness/deepseek-harness.ts",
+      "bytes": 1347,
+      "sha256": "440a3d0cc1f802a0595a8e4301d4b1485f0788760377d92e9e23479021518abd"
+    },
+    {
+      "path": "site/core/harness/evidence-bus.ts",
+      "bytes": 5516,
+      "sha256": "87bc60c4a50f714628ab2fcd00c97e84c391f51cb44ca01f66cfb72b2b0bd30f"
+    },
+    {
+      "path": "site/core/harness/execution-planner.ts",
+      "bytes": 13398,
+      "sha256": "56f281f007958ab47253cc522bc9085ee3731d9a14f75d47c00c75eb48aeb7b4"
+    },
+    {
+      "path": "site/core/harness/failure-response.ts",
+      "bytes": 4858,
+      "sha256": "a30b848079bfee155766942813f85dce96ef3f5b158d0cff0be42e832a8ae413"
+    },
+    {
+      "path": "site/core/harness/model-errors.ts",
+      "bytes": 439,
+      "sha256": "5cd6f1effa155e09941b1c2159b530a52be68de48b0c9760640efa62e67968a9"
+    },
+    {
+      "path": "site/core/harness/model-policy.ts",
+      "bytes": 4804,
+      "sha256": "766da8b1aeec57c1a0f78340968dd80f5ec4bd534db89975f646e2c3cec85688"
+    },
+    {
+      "path": "site/core/harness/notebook.ts",
+      "bytes": 7559,
+      "sha256": "cf4b923efe172fa1693e0f2c543fcb0db9126cce014521e6d318b7da00666ebd"
+    },
+    {
+      "path": "site/core/harness/runtime.ts",
+      "bytes": 99252,
+      "sha256": "b64c3012afc3362fd95b6e04bd36b6a79735b0398ad373cb19041088797117b4"
+    },
+    {
+      "path": "site/core/harness/server/conversation-store.ts",
+      "bytes": 5922,
+      "sha256": "e7242c87008f3965e7361fe2e9ecab9c0388dbebd86490fc9a01b8c67f01becd"
+    },
+    {
+      "path": "site/core/harness/skill-registry.ts",
+      "bytes": 6757,
+      "sha256": "681eb577f456df80383b4b27416b809702ff5732d4054e867e1aabb0607585ac"
+    },
+    {
+      "path": "site/core/harness/stream.ts",
+      "bytes": 5659,
+      "sha256": "54ba0eda35895e186088c6bfc9245093d4df7e0d2645b28116da2e0c15123f7c"
+    },
+    {
+      "path": "site/core/harness/task-state.ts",
+      "bytes": 5649,
+      "sha256": "90141eb96e73762ea19d47f4d74bc99526a557c2d3d5873501f2b511127b9155"
+    },
+    {
+      "path": "site/core/harness/task-verifier.ts",
+      "bytes": 11992,
+      "sha256": "c4cabd09dedc730443a3f1df396ca2cf60f331e41b32315c8ec662a872c31e9a"
+    },
+    {
+      "path": "site/core/harness/tool-registry.ts",
+      "bytes": 95019,
+      "sha256": "b119aa7daef8af19459ef87f3df6baf2ea007fde1b092366945cf5521ad6c4c0"
+    },
+    {
+      "path": "site/core/notebook/server/execution.ts",
+      "bytes": 9827,
+      "sha256": "1c8454facc6532497916295fab9e48a019584bb440e0fbaa7393eabbdca4a80d"
+    },
+    {
+      "path": "site/docs/architecture/agent-architecture.md",
+      "bytes": 55317,
+      "sha256": "d79142e88e38d5d9132bd3f7979938cc6444210735f505a097f6cacee76cfecb"
+    },
+    {
+      "path": "site/docs/harness-event-stream.md",
+      "bytes": 6072,
+      "sha256": "ca24d48c0fddee5cd29aa915b5180cd186cee712f99b3fc05369b1f8d2a214e4"
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import { WecomSettings } from "./WecomSettings";
 import { HarnessTrace } from "./HarnessTrace";
 import { AgentWorkspaceWelcome } from "./AgentWorkspace";
 import { ComposerContextMenu, type ComposerDataOption, type ComposerResultOption } from "./ComposerContextMenu";
+import { ConversationSwitcher, type ConversationSwitcherProps } from "./ConversationSwitcher";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
 export type AiRequestUiStatus = "idle" | "loading" | "success" | "blocked" | "error" | "cancelled" | "timeout";
@@ -33,6 +34,7 @@ export function clipboardImageFiles(items: ArrayLike<Pick<DataTransferItem, "kin
 
 interface AiBuilderAssistantProps {
   presentation?: "sidebar" | "workspace";
+  settingsInNavigation?: boolean;
   dataSources?: ComposerDataOption[];
   workspaces?: ComposerDataOption[];
   activeWorkspaceId?: string;
@@ -65,6 +67,7 @@ interface AiBuilderAssistantProps {
   harnessTask: HarnessTaskSummary | null;
   harnessTasks?: HarnessTaskSummary[];
   conversationTurns: AssistantConversationTurn[];
+  conversationSwitcher?: ConversationSwitcherProps;
   pendingInstruction: string;
   dataAnalysisMode: boolean;
   rawDataAccessEnabled?: boolean;
@@ -73,7 +76,6 @@ interface AiBuilderAssistantProps {
   onImageAttachmentsChange: (files: File[]) => void;
   onGenerate: () => void;
   onCancelRequest: () => void;
-  onClearConversation: () => void;
   onRetry: () => void;
   onPreview: () => void;
   onApply: () => void;
@@ -96,6 +98,7 @@ function operationTargets(operation: ChangeOperation): string[] {
 
 export function AiBuilderAssistant({
   presentation = "sidebar",
+  settingsInNavigation = false,
   dataSources = [],
   workspaces = [],
   activeWorkspaceId = "",
@@ -128,6 +131,7 @@ export function AiBuilderAssistant({
   harnessTask,
   harnessTasks = [],
   conversationTurns,
+  conversationSwitcher,
   pendingInstruction,
   dataAnalysisMode,
   rawDataAccessEnabled = false,
@@ -136,7 +140,6 @@ export function AiBuilderAssistant({
   onImageAttachmentsChange,
   onGenerate,
   onCancelRequest,
-  onClearConversation,
   onRetry,
   onPreview,
   onApply,
@@ -150,6 +153,8 @@ export function AiBuilderAssistant({
   const conversationRef = useRef<HTMLDivElement>(null);
   const conversationPinnedToBottomRef = useRef(true);
   const previousPendingInstructionRef = useRef("");
+  const previousSessionIdRef = useRef("");
+  const sessionId = conversationSwitcher?.sessions.activeId;
   const imageInputRef = useRef<HTMLInputElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [contextMenuAnchor, setContextMenuAnchor] = useState<HTMLElement | null>(null);
@@ -159,8 +164,9 @@ export function AiBuilderAssistant({
   const latestTurn = conversationTurns.at(-1);
   const errorShownInConversation = Boolean(requestError && !isLoading && latestTurn?.taskId === harnessTask?.id
     && latestTurn?.state !== "success" && latestTurn?.response === requestError);
-  const isWorkspaceEmpty = isWorkspace && !conversationTurns.length && !pendingInstruction
-    && !isLoading && !requestError && !validationError && !showChangePlan;
+  const isConversationEmpty = !conversationTurns.length && !pendingInstruction
+    && !isLoading && !requestError && !validationError && !showChangePlan && !harnessTask;
+  const isWorkspaceEmpty = isWorkspace && isConversationEmpty;
   const selectedSource = dataSources.find((source) => source.id === activeDataSourceId);
   const closeContextMenu = useCallback((restoreFocus = false) => {
     if (restoreFocus) requestAnimationFrame(() => { if (contextMenuAnchor?.isConnected) contextMenuAnchor.focus(); });
@@ -184,21 +190,21 @@ export function AiBuilderAssistant({
     const conversation = conversationRef.current;
     const requestStarted = Boolean(pendingInstruction)
       && pendingInstruction !== previousPendingInstructionRef.current;
-    if (conversation && (conversationPinnedToBottomRef.current || requestStarted)) {
+    if (conversation && (conversationPinnedToBottomRef.current || requestStarted || previousSessionIdRef.current !== sessionId)) {
       conversation.scrollTop = conversation.scrollHeight;
       conversationPinnedToBottomRef.current = true;
     }
     previousPendingInstructionRef.current = pendingInstruction;
-  }, [conversationTurns.length, isLoading, pendingInstruction, harnessTask?.trace?.length]);
+    previousSessionIdRef.current = sessionId ?? "";
+  }, [conversationTurns.length, isLoading, pendingInstruction, harnessTask?.trace?.length, sessionId]);
 
   return (
-    <aside className={`right-panel panel${isWorkspace ? " agent-workspace-panel" : ""}${isWorkspaceEmpty ? " agent-workspace-empty" : ""}`} aria-label={isWorkspace ? "AI 工作台" : "AI 助手"}>
-      <div className="assistant-head">
-        <div><span className="ai-mark">✦</span><div><b>{isWorkspace ? "AI 工作台" : dataAnalysisMode ? "AI 数据分析与看板助手" : "AI 构建助手"}</b><small>{isWorkspace ? "分析数据 · 创建图表 · 继续追问" : dataAnalysisMode ? (isLoading ? "正在分析已授权的数据" : rawDataAccessEnabled ? "分析汇总与已授权原始数据" : "分析数据 · 看板变更需确认") : (isLoading ? "正在准备看板变更预览" : "先预览，确认后应用")}</small></div></div>
+    <aside className={`right-panel panel${isWorkspace ? " agent-workspace-panel" : ""}${isWorkspaceEmpty ? " agent-workspace-empty" : ""}${isConversationEmpty ? " assistant-empty" : ""}`} aria-label={isWorkspace ? "AI 工作台" : "AI 助手"}>
+      <div className={`assistant-head${conversationSwitcher ? " assistant-session-header" : ""}`}>
+        {conversationSwitcher ? <ConversationSwitcher {...conversationSwitcher} /> : <div><span className="ai-mark">✦</span><div><b>{isWorkspace ? "AI 工作台" : dataAnalysisMode ? "AI 数据分析与看板助手" : "AI 构建助手"}</b><small>{isWorkspace ? "分析数据 · 创建图表 · 继续追问" : dataAnalysisMode ? (isLoading ? "正在分析已授权的数据" : rawDataAccessEnabled ? "分析汇总与已授权原始数据" : "分析数据 · 看板变更需确认") : (isLoading ? "正在准备看板变更预览" : "先预览，确认后应用")}</small></div></div>}
         <div className="assistant-head-actions">
           {!isWorkspace && onOpenWorkspace && <button type="button" className="assistant-expand-button" aria-label="在 AI 工作台中打开" title="在 AI 工作台中打开" onClick={onOpenWorkspace}>⤢</button>}
-          <AiApiSettings />
-          <WecomSettings onSuggestion={onInstructionChange} />
+          {!settingsInNavigation && <><AiApiSettings /><WecomSettings onSuggestion={onInstructionChange} /></>}
         </div>
       </div>
       {!isWorkspace && <div className="context-pill">上下文：{pageTitle} · {datasetName.replace(".csv", "")}</div>}
@@ -212,11 +218,7 @@ export function AiBuilderAssistant({
           conversationPinnedToBottomRef.current = isConversationNearBottom(event.currentTarget);
         }}
       >
-        {!isWorkspaceEmpty && <div className="conversation-heading">
-          <b>对话上下文</b>
-          <div><span>{conversationTurns.length ? `已保留 ${conversationTurns.length} 轮` : "尚无历史对话"}</span><button type="button" disabled={!conversationTurns.length || isLoading} onClick={onClearConversation}>清除上下文</button></div>
-        </div>}
-        {isWorkspaceEmpty && <AgentWorkspaceWelcome onSuggestion={(value) => {
+        {isConversationEmpty && <AgentWorkspaceWelcome compact={!isWorkspace} onSuggestion={(value) => {
           onInstructionChange(value);
           promptRef.current?.focus();
         }} />}
@@ -244,7 +246,7 @@ export function AiBuilderAssistant({
         ))}
         {pendingInstruction && <div className="user-message pending-message"><small>你 · 正在处理</small><span>{pendingInstruction}</span></div>}
         {isLoading && <HarnessTrace task={harnessTask} running />}
-        {!isWorkspaceEmpty && !conversationTurns.length && !pendingInstruction && (
+        {!isConversationEmpty && !conversationTurns.length && !pendingInstruction && (
           <div className="assistant-message conversation-empty">
             <span className="ai-mark small">✦</span>
             <div><p>{aiMessage}</p><small>发送问题后，会在这里保留连续的聊天上下文。</small></div>
@@ -271,7 +273,7 @@ export function AiBuilderAssistant({
             <ExcelDownloadButton artifact={harnessTask.exportArtifact} label="下载 Excel" />
           </div>
         )}
-        {!isWorkspaceEmpty && (!errorShownInConversation || validationError || showChangePlan) && <div className="assistant-message assistant-controls">
+        {!isConversationEmpty && (!errorShownInConversation || validationError || showChangePlan) && <div className="assistant-message assistant-controls">
           <span className="ai-mark small">✦</span>
           <div>
             {requestError && !errorShownInConversation && (
@@ -331,8 +333,8 @@ export function AiBuilderAssistant({
               </div>
             </div>}
             <p className="safe-note">{isWorkspace ? "分析基于当前工作界面的数据；看板变更会先生成预览，确认后应用。" : dataAnalysisMode ? rawDataAccessEnabled
-              ? "原始数据访问仅限当前会话：相关提问会完整扫描全部数据行并执行结构化查询，只向模型返回统计结果和最多 30 条可溯源记录；相同文件复用 30 分钟短期内存索引，不写入磁盘、localStorage、备份或审计正文。AI 回答仍会保留在对话中，看板修改只生成待预览 ChangeSet。"
-              : "AI 当前只读取 EDS 派生汇总，不会获得原始工作簿或逐行明细；重新导入时可单独授权原始行访问。看板修改仍只生成待预览 ChangeSet。"
+              ? "可按需分析完整原始工作簿，并返回统计结果和可溯源明细；看板修改会先生成预览，确认后应用。"
+              : "当前可分析已导入的数据和汇总。若需查询完整原始工作簿，请重新导入 XLSX；看板修改会先生成预览，确认后应用。"
               : "看板修改会先生成预览，由你确认后应用。"}</p>
           </div>
         </div>}

@@ -58,6 +58,15 @@ describe("bounded failure narration", () => {
     expect(task.resultMessage).toBe(failureResponse(task));
   });
 
+  it.each([{ requireProviderUsage: true }, { providerPromptTokenLimit: 1200 }])("preserves strict evaluation's no-extra-explanation policy: %j", async (options) => {
+    const narrate = vi.fn();
+    const { task, inputs } = await run(narrate, options);
+    expect(narrate).not.toHaveBeenCalled();
+    expect(inputs).toHaveLength(3);
+    expect(task.terminationCode).toBe("toolExecutionFailed");
+    expect(task.resultMessage).toBe(failureResponse(task));
+  });
+
   it("cancels during narration without turning a stopped task into a failure reply", async () => {
     const controller = new AbortController();
     const { task } = await run(async () => { controller.abort(); throw new Error("cancelled"); }, { signal: controller.signal });

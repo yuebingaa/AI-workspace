@@ -45,7 +45,6 @@ function renderPanel(withEdsResources: boolean) {
       id: "workbook_eds",
       datasetId: "dataset_eds_overview",
       file: new File(["xlsx"], "input.xlsx"),
-      aiRawAccess: true,
     }] : []}
     originalWorkbookButtonRef={createRef<HTMLButtonElement>()}
     onOpenOriginalWorkbook={() => undefined}

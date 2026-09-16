@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoundedBodyError, readBoundedUtf8Body } from "./bounded-body";
+import { BoundedBodyError as SharedBoundedBodyError, readBoundedUtf8Body as sharedRead } from "../bounded-body";
+
+it("server compatibility exports retain shared function and error identity", () => {
+  expect(BoundedBodyError).toBe(SharedBoundedBodyError);
+  expect(readBoundedUtf8Body).toBe(sharedRead);
+});
 
 function streamedRequest(chunks: Uint8Array[], contentLength?: string) {
   return new Request("http://localhost/test", {

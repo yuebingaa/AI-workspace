@@ -11,6 +11,7 @@
 /portable-release-model-selector/
 /artifacts/
 /output/
+/outputs/
 
 # Local task journals and internal status reports can include private details.
 # Existing tracked history is intentionally not rewritten by these rules.

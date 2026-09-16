@@ -67,7 +67,7 @@ describe("数据导入与选择控制器", () => {
     const first = await upload("first"), second = await upload("second");
     const actions = createStudioDatasetActions(state);
     const secondPage = state.renderedSpec.pages.at(-1)!.id;
-    const workbook = { file: new File(["fixture"], "second.xlsx"), sheetNames: ["Sheet1"], aiRawAccess: false };
+    const workbook = { file: new File(["fixture"], "second.xlsx"), sheetNames: ["Sheet1"] };
     actions.handleCsvUploaded(first, undefined, state.activePageId);
     actions.handleCsvUploaded(second, workbook, secondPage);
     const current = state.latestDatasetWorkspaceRef.current;
@@ -130,17 +130,78 @@ describe("数据导入与选择控制器", () => {
     expect(state.datasets.setIsDataSourceOpen).toHaveBeenCalledTimes(2);
   });
 
-  it("分析使用指定数据源，只有授权工作簿才附带原文件", async () => {
+  it("项目删除等待未完成的保存，归档后使用回收站文案", async () => {
+    const { state } = context(), uploaded = await upload("archive");
+    createStudioDatasetActions(state).handleCsvUploaded(uploaded, undefined, state.activePageId);
+    state.datasets.activeDataSource = { ...uploaded.dataset.source, ephemeral: false };
+    let finish!: () => void;
+    state.flushProject = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const deletion = createStudioDatasetActions(state).handleDeleteDataset();
+    expect(state.flushProject).toHaveBeenCalledOnce();
+    expect(deleteUploadedDataset).not.toHaveBeenCalled();
+    finish(); await deletion;
+    expect(deleteUploadedDataset).toHaveBeenCalledWith(uploaded.dataset.datasetId);
+    expect(state.setSaveLabel).toHaveBeenCalledWith("已保存 · 数据表已移入回收站");
+  });
+
+  it("项目保存失败时不删除数据，也不移除本地文档或原件", async () => {
+    const { state } = context(), uploaded = await upload("keep-after-conflict");
+    createStudioDatasetActions(state).handleCsvUploaded(uploaded, undefined, state.activePageId);
+    state.datasets.activeDataSource = { ...uploaded.dataset.source, ephemeral: false };
+    vi.clearAllMocks();
+    state.flushProject = vi.fn().mockRejectedValue(new Error("项目保存冲突"));
+    await expect(createStudioDatasetActions(state).handleDeleteDataset()).rejects.toThrow("项目保存冲突");
+    expect(deleteUploadedDataset).not.toHaveBeenCalled();
+    expect(state.setDataProduct).not.toHaveBeenCalled();
+    expect(state.datasets.setOriginalWorkbooks).not.toHaveBeenCalled();
+    expect(state.persistExplicitly).not.toHaveBeenCalled();
+  });
+
+  it("Notebook 的数据单元引用不能由详情页删除破坏", async () => {
+    const { state } = context(), uploaded = await upload("notebook-dependency");
+    createStudioDatasetActions(state).handleCsvUploaded(uploaded, undefined, state.activePageId);
+    state.datasets.activeDataSource = uploaded.dataset.source;
+    state.latestDatasetWorkspaceRef.current.dataProduct.notebooks = { page: { name: "分析", revision: 1, cells: [{ id: "source", kind: "data", title: "输入", sourceDataSourceId: uploaded.dataset.datasetId, outputName: "input" }] } };
+    await expect(createStudioDatasetActions(state).handleDeleteDataset()).rejects.toThrow("Notebook 引用");
+    expect(deleteUploadedDataset).not.toHaveBeenCalled();
+  });
+
+  it("待确认预览中的绑定仍保护数据源", async () => {
+    const { state } = context(), uploaded = await upload("preview-dependency");
+    createStudioDatasetActions(state).handleCsvUploaded(uploaded, undefined, state.activePageId);
+    state.datasets.activeDataSource = uploaded.dataset.source;
+    const preview = structuredClone(state.latestDatasetWorkspaceRef.current.execution.present);
+    preview.pages[0].root.children = [{ id: "pending_metric", type: "MetricCard", props: { label: "合计", trend: "", binding: {
+      dataSourceId: uploaded.dataset.datasetId, field: "amount", aggregation: "sum", groupBy: null, filters: [], sort: [], limit: 1, format: { style: "number" },
+    } } }];
+    state.latestDatasetWorkspaceRef.current.execution.preview = { appSpec: preview, changeSetId: "pending", operationIds: [] };
+    await expect(createStudioDatasetActions(state).handleDeleteDataset()).rejects.toThrow("待确认预览引用");
+    expect(deleteUploadedDataset).not.toHaveBeenCalled();
+  });
+
+  it("服务端拒绝删除时保留本地数据及原件，不报告已保存", async () => {
+    const { state } = context(), uploaded = await upload("server-conflict");
+    createStudioDatasetActions(state).handleCsvUploaded(uploaded, undefined, state.activePageId);
+    state.datasets.activeDataSource = uploaded.dataset.source;
+    vi.clearAllMocks();
+    vi.mocked(deleteUploadedDataset).mockRejectedValueOnce(new Error("数据仍被引用，未删除：配方：合成处理"));
+    await expect(createStudioDatasetActions(state).handleDeleteDataset()).rejects.toThrow("合成处理");
+    expect(state.setDataProduct).not.toHaveBeenCalled();
+    expect(state.datasets.setOriginalWorkbooks).not.toHaveBeenCalled();
+    expect(state.setSaveLabel).not.toHaveBeenCalled();
+  });
+
+  it("分析指定数据源时默认附带其原工作簿，原件不可用时仍分析数据集", async () => {
     const { state } = context(), uploaded = await upload("analysis");
     state.renderedSpec = { ...state.renderedSpec, dataSources: [...state.renderedSpec.dataSources, uploaded.dataset.source] };
     const workbook = { id: "workbook", datasetId: uploaded.dataset.datasetId, workspaceId: state.activePageId,
-      file: new File(["fixture"], "analysis.xlsx"), sheetNames: ["Sheet1"], aiRawAccess: false };
+      file: new File(["fixture"], "analysis.xlsx"), sheetNames: ["Sheet1"] };
     state.datasets.originalWorkbooks = [workbook];
     createStudioDatasetActions(state).handleAnalyzeDataSource(uploaded.dataset.datasetId);
-    expect(vi.mocked(state.handleGenerateAiPlan).mock.calls[0][2]).toEqual({ dataSourceId: uploaded.dataset.datasetId });
-    workbook.aiRawAccess = true;
+    expect(vi.mocked(state.handleGenerateAiPlan).mock.calls[0][2]).toEqual({ dataSourceId: uploaded.dataset.datasetId, rawWorkbook: workbook.file });
+    state.datasets.originalWorkbooks = [];
     createStudioDatasetActions(state).handleAnalyzeDataSource(uploaded.dataset.datasetId);
-    expect(vi.mocked(state.handleGenerateAiPlan).mock.calls[1][2]).toEqual({ dataSourceId: uploaded.dataset.datasetId, rawWorkbook: workbook.file });
+    expect(vi.mocked(state.handleGenerateAiPlan).mock.calls[1][2]).toEqual({ dataSourceId: uploaded.dataset.datasetId });
   });
 
   it("保留 EDS 导入行为和查看者边界，原文件仍只挂载于会话", () => {
@@ -155,14 +216,14 @@ describe("数据导入与选择控制器", () => {
       },
     };
     state.role = "viewer";
-    expect(() => createStudioDatasetActions(state).handleCreateEdsWorkspace([result], 0, source, false)).toThrow("查看者无权");
+    expect(() => createStudioDatasetActions(state).handleCreateEdsWorkspace([result], 0, source)).toThrow("查看者无权");
     expect(state.setExecution).not.toHaveBeenCalled();
     state.role = "editor";
-    createStudioDatasetActions(state).handleCreateEdsWorkspace([result], 0, source, false);
+    createStudioDatasetActions(state).handleCreateEdsWorkspace([result], 0, source);
     const execution = vi.mocked(state.setExecution).mock.calls[0][0] as ChangeSetExecutionState;
     expect(execution.present.pages.some((page) => page.id === EDS_WORKSPACE_PAGE_ID)).toBe(true);
     expect(state.setActivePageId).toHaveBeenCalledWith(EDS_WORKSPACE_PAGE_ID);
-    expect(values.originalWorkbooks).toEqual([expect.objectContaining({ file: source, aiRawAccess: false })]);
+    expect(values.originalWorkbooks).toEqual([expect.objectContaining({ file: source })]);
     expect(state.persistExplicitly).toHaveBeenCalledTimes(1);
     expect(state.datasets.handleCloseEdsAnalysis).toHaveBeenCalled();
   });

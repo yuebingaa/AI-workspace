@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { DataRecipe, DataRow, DataSourceDefinition, DatasetAiAccessPolicy } from "@/core/models";
 import { dataRecipeSchema, dataSourceDefinitionSchema } from "@/core/schemas";
+import { notebookDatasetProvenanceSchema, type NotebookDatasetProvenance } from "./provenance";
 
 export interface CsvUploadLimits {
   maxFileBytes: number;
@@ -52,7 +53,7 @@ export interface UploadedDatasetDescriptor {
   retentionMinutes?: number;
   storageMode?: "project";
   persistenceNotice: string;
-  provenance?: { kind: "notebook"; runId: string; resultId: string; cellId: string; revision: number; connectionIds: string[] };
+  provenance?: NotebookDatasetProvenance;
 }
 
 const dataValueSchema = z.union([z.string(), z.number().finite(), z.boolean(), z.null()]);
@@ -79,9 +80,7 @@ export const uploadedDatasetDescriptorSchema: z.ZodType<UploadedDatasetDescripto
   retentionMinutes: z.number().int().positive().optional(),
   storageMode: z.literal("project").optional(),
   persistenceNotice: z.string().min(1).max(500),
-  provenance: z.object({ kind: z.literal("notebook"), runId: z.string().max(160), resultId: z.string().max(240),
-    cellId: z.string().max(120), revision: z.number().int().nonnegative(), connectionIds: z.array(z.string().max(100)).max(20),
-  }).strict().optional(),
+  provenance: notebookDatasetProvenanceSchema.optional(),
 }).strict();
 
 function validateDatasetConsistency(

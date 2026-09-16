@@ -1,13 +1,14 @@
 import { z } from "zod";
-import { harnessNotebookCellSchema } from "@/core/harness/notebook-contracts";
+import { MAX_NOTEBOOK_CELLS, notebookCellSchema } from "./definition";
 import { semanticModelSchema } from "@/core/semantic/contracts";
+import { catalogReferenceSchema } from "@/core/metadata/contracts";
 
 export const NOTEBOOK_LIMITS = { inputBytes: 16 * 1024 * 1024, outputBytes: 2 * 1024 * 1024,
-  rows: 1_000, columns: 30, queryTimeoutMs: 8_000, runTimeoutMs: 30_000, cells: 30 } as const;
+  rows: 1_000, columns: 30, queryTimeoutMs: 8_000, runTimeoutMs: 30_000, cells: MAX_NOTEBOOK_CELLS } as const;
 export const notebookDocumentSchema = z.object({
   name: z.string().trim().min(1).max(160),
   revision: z.number().int().nonnegative(),
-  cells: z.array(harnessNotebookCellSchema).max(NOTEBOOK_LIMITS.cells),
+  cells: z.array(notebookCellSchema).max(NOTEBOOK_LIMITS.cells),
   lastDraftId: z.string().max(160).optional(),
 }).strict().refine((document) => new TextEncoder().encode(JSON.stringify(document)).byteLength <= 80_000,
   "Notebook 步骤定义超过 80 KB，请拆分到不同工作界面");
@@ -34,6 +35,9 @@ export const notebookResultReferenceSchema = z.object({
   dataSignature: z.string().max(160),
   accessMode: z.enum(["user", "ai"]),
   connectionId: z.string().max(100).optional(),
+  catalogRef: catalogReferenceSchema.optional(),
+  sourceDatasetIds: z.array(z.string().max(160)).max(10).optional(),
+  sourceFiles: z.array(z.object({ name: z.string().max(180), sha256: z.string().length(64) }).strict()).max(3).optional(),
 }).strict();
 export type NotebookResultReference = z.infer<typeof notebookResultReferenceSchema>;
 export const notebookCellRunSchema = z.object({
@@ -41,6 +45,7 @@ export const notebookCellRunSchema = z.object({
   durationMs: z.number().nonnegative(), error: z.string().max(1_000).optional(),
   table: notebookTableSchema.optional(), queryId: z.string().max(160).optional(),
   resultRef: notebookResultReferenceSchema.optional(),
+  stdout: z.string().max(2_000).optional(), stderr: z.string().max(2_000).optional(),
 }).strict();
 export type NotebookCellRun = z.infer<typeof notebookCellRunSchema>;
 export const notebookRunSchema = z.object({

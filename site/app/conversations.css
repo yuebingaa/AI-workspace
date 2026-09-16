@@ -1,0 +1,19 @@
+.compact-studio .assistant-head.assistant-session-header { height: 46px; padding: 7px 12px; gap: 4px; border-bottom-color: transparent; position: relative; z-index: 5; }
+.compact-studio .workspace-agent .agent-workspace-panel .assistant-head.assistant-session-header { display: flex; padding: 10px 24px; height: 50px; }
+.compact-studio .assistant-session-header .conversation-switcher { display: flex; align-items: center; flex: 1; min-width: 0; gap: 6px; position: relative; }
+.compact-studio .conversation-switcher button { font: inherit; font-size: 12px; color: var(--studio-ink); cursor: pointer; }
+.compact-studio .conversation-switch-trigger { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: calc(100% - 36px); height: 30px; padding: 4px 7px; border: 0; border-radius: 4px; background: transparent; }
+.compact-studio .conversation-switch-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-studio .conversation-switch-trigger svg { flex: 0 0 auto; color: var(--studio-muted); }
+.compact-studio .conversation-new { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; margin-left: auto; border: 0; border-radius: 4px; background: transparent; color: var(--studio-secondary); flex: 0 0 auto; }
+.compact-studio .conversation-switcher button:hover, .compact-studio .conversation-switch-trigger[aria-expanded="true"] { background: var(--studio-soft); }
+.compact-studio .conversation-switcher button:focus-visible { outline: 1px solid var(--studio-secondary); outline-offset: 2px; }
+.compact-studio .conversation-switcher button:disabled { opacity: .45; cursor: default; }
+.compact-studio .conversation-menu { position: absolute; top: calc(100% + 5px); left: 0; width: min(286px, 100%); padding: 5px; background: var(--studio-surface); border: 1px solid var(--studio-border); border-radius: 5px; box-shadow: 0 5px 20px #27252012, 0 1px 3px #2725200c; }
+.compact-studio .conversation-menu-scope { padding: 7px 8px 9px; border-bottom: 1px solid var(--studio-border); color: var(--studio-secondary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-studio .conversation-menu-scope small { display: block; font-size: 10px; margin-top: 3px; color: var(--studio-muted); }
+.compact-studio .conversation-menu-list { max-height: min(340px, 50dvh); overflow-y: auto; padding-top: 4px; }
+.compact-studio .conversation-menu-list button { display: flex; width: 100%; align-items: center; gap: 12px; text-align: left; padding: 9px 8px; min-height: 34px; border: 0; border-radius: 3px; background: transparent; }
+.compact-studio .conversation-menu-list button[aria-checked="true"] { background: var(--studio-soft); }
+.compact-studio .conversation-menu-list button > span:first-child { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.compact-studio .conversation-selected { flex: 0 0 14px; color: var(--studio-secondary); }

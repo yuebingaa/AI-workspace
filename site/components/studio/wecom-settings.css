@@ -26,4 +26,3 @@
 .wecom-examples { display: grid; gap: 8px; }
 .wecom-examples button { text-align: left; background: var(--studio-surface); }
 .wecom-footer { border-top: 1px solid var(--studio-border); padding-top: 14px; }
-@media (max-width: 600px) { .wecom-dialog-content { padding: 18px; } .wecom-dialog { max-height: calc(100dvh - 24px); } }

@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const document = join(root, "docs/architecture/agent-architecture.md");
-const scopes = ["core/harness", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/visualization-lab", "app/api/ai/visualization-lab"];
+const scopes = ["core/harness", "core/ai/server", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/visualization-lab", "app/api/ai/visualization-lab"];
 const marker = /<!-- agent-architecture-source-sha256: [a-f0-9]{64} -->/;
+const runtimeFiles = ["scripts/python-runtime-lock.json", "scripts/setup-python-runtime.mjs", "scripts/copy-notebook-runtime.mjs"];
 
 async function sourceFiles(directory) {
   const files = [];
@@ -21,7 +22,7 @@ async function sourceFiles(directory) {
 }
 
 try {
-  const files = (await Promise.all(scopes.map((scope) => sourceFiles(join(root, scope))))).flat()
+  const files = [...(await Promise.all(scopes.map((scope) => sourceFiles(join(root, scope))))).flat(), ...runtimeFiles.map((name) => join(root, name))]
     .map((path) => ({ path, name: relative(root, path).replaceAll("\\", "/") }))
     .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const digest = createHash("sha256");

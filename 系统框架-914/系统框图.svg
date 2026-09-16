@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1440" viewBox="0 0 2000 1440" role="img" aria-labelledby="title description">
+  <title id="title">AgentCanvas 当前 Agent 系统框架，2026 年 9 月 14 日</title>
+  <desc id="description">当前工作区包含主 Agent、可选只读数据子 Agent、供应商无关 HarnessRuntime、模型适配、上下文、工具、Notebook、数据库与保存模块。可视化专家、并行调度和统一产物协议仍在规划中。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#78756e"/></marker>
+    <style>
+      text { font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #232320; }
+      .title { font-size: 42px; font-weight: 700; }
+      .sub { font-size: 21px; fill: #6c6963; }
+      .head { font-size: 28px; font-weight: 700; }
+      .body { font-size: 22px; fill: #56534e; }
+      .small { font-size: 19px; fill: #706d66; }
+      .label { font-size: 18px; letter-spacing: 1px; fill: #78746c; }
+      .card { fill: #ffffff; stroke: #d2cfc8; stroke-width: 1.5; }
+      .soft { fill: #eeece7; stroke: #c5c1b8; stroke-width: 1.5; }
+      .wire { stroke: #78756e; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .branch { stroke: #78756e; stroke-width: 2; fill: none; }
+    </style>
+  </defs>
+  <rect width="2000" height="1440" fill="#f8f7f4"/>
+  <text x="70" y="70" class="title">AgentCanvas · Agent 系统框架</text>
+  <text x="70" y="105" class="sub">2026.09.14 / 当前工作区源码快照 · 包含当天未提交的重构</text>
+  <rect x="1500" y="37" width="430" height="51" rx="5" fill="#252521"/>
+  <text x="1715" y="70" text-anchor="middle" font-size="21" style="fill:#ffffff">开发站已载入 · 稳定站尚未发布</text>
+  <path d="M70 127H1930" stroke="#d2cfc8"/>
+
+  <rect x="70" y="162" width="1320" height="100" rx="8" class="card"/>
+  <text x="100" y="198" class="label">01 / 用户与工作区</text>
+  <text x="100" y="237" class="head">AI 工作台 · Notebook · 看板 · Data Browser · 可视化测试页</text>
+  <path d="M730 262V301" class="wire"/>
+
+  <rect x="70" y="308" width="1320" height="115" rx="8" class="card"/>
+  <text x="100" y="348" class="head">HTTP / SSE 请求边界与服务端组装</text>
+  <text x="100" y="386" class="body">身份与项目授权 · 会话锁与幂等 · 数据/模型/执行依赖注入</text>
+  <text x="1040" y="344" class="small">测试页专用入口</text>
+  <text x="1040" y="378" class="small">固定合成数据 · 隔离会话</text>
+  <text x="1040" y="405" class="small">强制单 Agent · 无外部 MCP</text>
+  <path d="M730 423V463" class="wire"/>
+
+  <rect x="70" y="470" width="1320" height="95" rx="8" class="soft"/>
+  <text x="100" y="509" class="head">CoordinatedHarness · 主任务协调</text>
+  <text x="100" y="544" class="body">按现有条件路由，校验委派，保持原始目标、预算与唯一交付</text>
+  <path d="M730 565V580H382V613" class="wire"/>
+  <path d="M730 580H1077V613" class="wire"/>
+  <rect x="132" y="588" width="500" height="27" fill="#f8f7f4"/>
+  <text x="382" y="608" text-anchor="middle" class="small">默认 / 追问 / 页面任务</text>
+  <rect x="827" y="588" width="500" height="27" fill="#f8f7f4"/>
+  <text x="1077" y="608" text-anchor="middle" class="small">data 开关 + 复杂只读首轮</text>
+
+  <rect x="70" y="620" width="625" height="172" rx="8" class="card"/>
+  <text x="100" y="660" class="head">单 Agent · HarnessRuntime</text>
+  <text x="100" y="700" class="body">规划 → 模型动作 → 工具 → 观察</text>
+  <text x="100" y="734" class="body">检查完成条件，必要时有限修正</text>
+  <text x="100" y="768" class="small">执行器已与 DeepSeek 供应商适配分离</text>
+
+  <rect x="765" y="620" width="625" height="172" rx="8" class="card"/>
+  <text x="795" y="660" class="head">主 Agent → 数据子 Agent → 汇总</text>
+  <text x="795" y="700" class="body">独立 HarnessRuntime · viewer · 最多 1 个</text>
+  <text x="795" y="734" class="body">8 个只读工具，子任务验证后再回传</text>
+  <text x="795" y="768" class="small">串行执行；不能递归委派或修改页面</text>
+  <path d="M382 792V843" class="wire"/>
+  <path d="M1077 792V843" class="wire"/>
+
+  <rect x="70" y="850" width="1320" height="105" rx="8" class="soft"/>
+  <text x="100" y="891" class="head">受控能力层 · 21 个业务工具 + 4 类 Skill</text>
+  <text x="100" y="930" class="body">每轮裁剪工具目录，执行前校验 Schema 与授权；Skill 提供专项方法，不等于独立角色</text>
+  <path d="M730 955V980H275V1003" class="wire"/>
+  <path d="M730 980V1003" class="wire"/>
+  <path d="M730 980H1185V1003" class="wire"/>
+
+  <rect x="70" y="1010" width="410" height="165" rx="8" class="card"/>
+  <text x="95" y="1050" class="head">数据与业务处理</text>
+  <text x="95" y="1087" class="body">Dataset / DataRecipe</text>
+  <text x="95" y="1120" class="body">语义模型 / EDS / 工作簿</text>
+  <text x="95" y="1152" class="small">按项目范围访问真实数据</text>
+
+  <rect x="525" y="1010" width="410" height="165" rx="8" class="card"/>
+  <text x="550" y="1050" class="head">Notebook 与 SQL</text>
+  <text x="550" y="1087" class="body">共用定义 · query/log 接口</text>
+  <text x="550" y="1120" class="body">DuckDB / 远端查询服务</text>
+  <text x="550" y="1152" class="small">PostgreSQL / Databricks 驱动</text>
+
+  <rect x="980" y="1010" width="410" height="165" rx="8" class="card"/>
+  <text x="1005" y="1050" class="head">图表与页面产物</text>
+  <text x="1005" y="1087" class="body">ChangeSet / Recharts</text>
+  <text x="1005" y="1120" class="body">5 类原生图表 · 候选预览</text>
+  <text x="1005" y="1152" class="small">测试页独立数值检查与人工评分</text>
+  <path d="M275 1175V1200H730" class="branch"/>
+  <path d="M1185 1175V1200H730" class="branch"/>
+  <path d="M730 1175V1225" class="wire"/>
+
+  <rect x="70" y="1232" width="1320" height="114" rx="8" class="soft"/>
+  <text x="100" y="1272" class="head">证据验收与交付</text>
+  <text x="100" y="1308" class="body">Evidence Bus / resultRef → 验证 → 主任务唯一回执与 SSE 事件</text>
+  <text x="100" y="1334" class="small">正式页面经人工确认；工作区保存调度 → 项目写入队列 → 文件/浏览器状态</text>
+
+  <rect x="1460" y="162" width="470" height="205" rx="8" class="card"/>
+  <text x="1488" y="202" class="head">模型接口与适配</text>
+  <text x="1488" y="241" class="body">HarnessModel：next 必需</text>
+  <text x="1488" y="274" class="body">classifyIntent / plan 可选</text>
+  <text x="1488" y="307" class="body">服务端组装 DeepSeek 适配</text>
+  <text x="1488" y="342" class="small">凭据、模型 ID 与用量校验留在服务端</text>
+
+  <rect x="1460" y="397" width="470" height="239" rx="8" class="card"/>
+  <text x="1488" y="437" class="head">Context Runtime 相关能力</text>
+  <text x="1488" y="479" class="body">按需选择上下文 / 工具 / Skill</text>
+  <text x="1488" y="512" class="body">工作记忆 / 有界工具观察</text>
+  <text x="1488" y="545" class="body">最近 10 轮 + 滚动会话摘要</text>
+  <text x="1488" y="578" class="body">子任务隔离，不回灌完整对话</text>
+  <text x="1488" y="612" class="small">当前是分布在多个模块中的能力</text>
+
+  <rect x="1460" y="666" width="470" height="225" rx="8" class="card"/>
+  <text x="1488" y="706" class="head">贯穿执行的约束</text>
+  <text x="1488" y="748" class="body">主子共享调用 / 输入 / Token 预算</text>
+  <text x="1488" y="781" class="body">授权复查 / 截止时间 / 取消</text>
+  <text x="1488" y="814" class="body">实际工具证据 / 失败状态保留</text>
+  <text x="1488" y="847" class="body">变化预览与正式应用分开</text>
+  <text x="1488" y="873" class="small">规则检查不等于所有自然语言结论正确</text>
+
+  <rect x="1460" y="921" width="470" height="213" rx="8" class="card"/>
+  <text x="1488" y="961" class="head">9/14 已完成的接口拆分</text>
+  <text x="1488" y="1001" class="body">模型适配 / SQL 服务与驱动</text>
+  <text x="1488" y="1034" class="body">Notebook 定义、执行与日志</text>
+  <text x="1488" y="1067" class="body">保存调度 / 项目写入队列</text>
+  <text x="1488" y="1103" class="small">旧入口兼容；尚非全项目插件化</text>
+
+  <rect x="1460" y="1164" width="470" height="182" rx="8" fill="none" stroke="#aaa59a" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="1488" y="1204" class="head" style="fill:#77736a">规划中 · 尚未接入</text>
+  <text x="1488" y="1243" class="body">可视化专家 / 热力图与动态</text>
+  <text x="1488" y="1276" class="body">并行与递归委派 / 统一产物协议</text>
+  <text x="1488" y="1314" class="small">Vega-Lite 等候选仍属于研究方案</text>
+
+  <path d="M70 1372H1930" stroke="#d2cfc8"/>
+  <text x="70" y="1406" class="small">实线表示当前执行/数据流；右栏表示共享能力；虚线框表示规划。以 site/docs/architecture/agent-architecture.md 为持续维护入口。</text>
+</svg>

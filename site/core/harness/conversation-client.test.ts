@@ -27,3 +27,18 @@ it("clears only the captured project when selection changes during a request", a
   expect(harnessConversationId("page_one")).toBe(second);
   expect([...storage.keys()].every((key) => !key.endsWith(a))).toBe(true);
 });
+
+it("uses the selected thread identity and clears only its pages", async () => {
+  const project = randomUUID(); setActiveProjectHandle(project);
+  const first = `conversation_${randomUUID().replaceAll("-", "")}`, second = `conversation_${randomUUID().replaceAll("-", "")}`;
+  expect(harnessConversationId("same_page", first)).toBe(first);
+  expect(harnessConversationId("same_page", second)).toBe(second);
+  const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 })); vi.stubGlobal("fetch", fetch);
+  await clearHarnessConversations({ contextId: first, pageIds: ["page_one", "page_two", "page_one"] });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch.mock.calls.map((call) => JSON.parse(call[1].body))).toEqual([
+    { conversation_id: first, pageId: "page_one" }, { conversation_id: first, pageId: "page_two" },
+  ]);
+  expect(fetch.mock.calls.every((call) => call[1].headers[PROJECT_HEADER] === project)).toBe(true);
+  expect(harnessConversationId("same_page", second)).toBe(second);
+});

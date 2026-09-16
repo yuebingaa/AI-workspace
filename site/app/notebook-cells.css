@@ -1,0 +1,62 @@
+/* Notebook source and review surfaces use the shared warm grayscale palette. */
+.compact-studio .notebook-view-switch { display: inline-flex; gap: 2px; padding: 2px; margin-right: 7px; border: 1px solid var(--studio-hairline); border-radius: 5px; }
+.compact-studio .notebook-view-switch button { padding: 4px 10px; border: 0; color: var(--studio-muted); }
+.compact-studio .notebook-view-switch button[aria-pressed="true"] { color: var(--studio-ink); background: var(--studio-soft); }
+.compact-studio .notebook-source { min-width: 0; border-top: 1px solid var(--studio-hairline); background: var(--studio-surface); }
+.compact-studio .notebook-source-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 33px; padding: 5px 14px; border-bottom: 1px solid var(--studio-hairline); color: var(--studio-muted); font-size: 10px; }
+.compact-studio .notebook-source-toolbar > span:first-child { color: var(--studio-secondary); }
+.compact-studio .notebook-source-toolbar > span:nth-child(2) { margin-left: auto; }
+.compact-studio .notebook-source-toolbar button { padding: 2px 5px; border-color: transparent; background: transparent; font-size: 10px; }
+.compact-studio .notebook-source-scroll { min-width: 0; max-height: 360px; overflow: auto; scrollbar-width: thin; background: color-mix(in srgb, var(--studio-paper) 45%, var(--studio-surface)); }
+.compact-studio .notebook-source-scroll:focus-visible { outline: 2px solid var(--studio-border-strong); outline-offset: -2px; }
+.compact-studio .notebook-source-scroll pre { margin: 0; min-width: 100%; width: max-content; padding: 12px 0; color: var(--studio-ink); border: 0; border-radius: 0; background: transparent; white-space: pre; font: 12px/22px Consolas, "SFMono-Regular", monospace; }
+.compact-studio .notebook-source-line { display: flex; min-height: 22px; }
+.compact-studio .notebook-source-line code { display: block; flex: 1; min-width: 0; padding: 0 18px 0 12px; font: inherit; color: inherit; background: transparent; }
+.compact-studio .source-line-number { position: sticky; left: 0; flex: 0 0 42px; width: 42px; padding-right: 9px; text-align: right; color: var(--studio-muted); user-select: none; background: var(--studio-paper); border-right: 1px solid var(--studio-hairline); }
+.compact-studio .source-keyword { font-weight: 650; color: var(--studio-ink); }
+.compact-studio .source-string { color: #786449; }
+.compact-studio .source-number { color: #655d52; }
+.compact-studio .source-comment { color: var(--studio-muted); font-style: italic; }
+.compact-studio .notebook-code-label { display: block; font-size: 11px; color: var(--studio-secondary); margin-bottom: 7px; }
+.compact-studio .notebook-code-input { position: relative; display: grid; grid-template-columns: 42px minmax(0, 1fr); min-width: 0; border: 1px solid var(--studio-border); border-radius: 4px; overflow: hidden; background: var(--studio-surface); }
+.compact-studio .notebook-code-input:focus-within { border-color: var(--studio-border-strong); box-shadow: 0 0 0 2px #24232107; }
+.compact-studio .notebook-code-gutter { position: absolute; top: 0; bottom: 0; left: 0; width: 42px; padding: 12px 0; overflow: hidden; user-select: none; pointer-events: none; border-right: 1px solid var(--studio-hairline); background: var(--studio-paper); color: var(--studio-muted); }
+.compact-studio .notebook-code-gutter > span { display: block; height: 22px; text-align: right; padding-right: 9px; font: 12px/22px Consolas, "SFMono-Regular", monospace; }
+.compact-studio .notebook-editor .notebook-code-input textarea { grid-column: 2; border: 0; border-radius: 0; box-shadow: none; outline: none; padding: 12px; margin: 0; min-height: 178px; height: auto; max-height: 450px; resize: vertical; background: transparent; color: var(--studio-ink); font: 12px/22px Consolas, "SFMono-Regular", monospace; white-space: pre; overflow: auto; tab-size: 2; }
+.compact-studio .notebook-recipe-mode { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; font-size: 11px; }
+.compact-studio .notebook-recipe-mode > span { margin-right: auto; color: var(--studio-secondary); }
+.compact-studio .notebook-recipe-mode button { padding: 4px 8px; border-color: var(--studio-hairline); font-size: 10px; }
+.compact-studio .notebook-recipe-mode button[aria-pressed="true"] { background: var(--studio-soft); border-color: var(--studio-border-strong); }
+.compact-studio .notebook-cell-result-pending { border-top: 1px solid var(--studio-hairline); margin: 0; padding: 18px 16px; color: var(--studio-muted); font-size: 11px; }
+.compact-studio .notebook-panel.notebook-view-code .notebook-cell { border-radius: 4px; }
+.compact-studio .notebook-panel.notebook-view-code .notebook-cell-body { display: block; }
+.compact-studio .notebook-panel.notebook-view-code .notebook-workbench { border-top: 1px solid var(--studio-hairline); }
+.compact-studio .notebook-panel.notebook-view-code .notebook-fields { display: none; }
+.compact-studio .notebook-panel.notebook-view-code .notebook-workbench > .notebook-cell-definition { border-right: 0; max-height: none; overflow: visible; }
+.compact-studio .notebook-panel.notebook-view-code .notebook-editor fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.compact-studio .notebook-panel.notebook-view-code .notebook-input-list { grid-column: 1 / -1; }
+.compact-studio .notebook-panel.notebook-view-code .notebook-cell-output { border-top: 1px solid var(--studio-hairline); }
+.compact-studio .notebook-panel.notebook-view-code .notebook-output-placeholder { min-height: 120px; padding: 18px; }
+.compact-studio .notebook-panel.notebook-view-code .notebook-output-placeholder > svg { width: 24px; height: 24px; margin-bottom: 10px; }
+.compact-studio .notebook-draft { border-radius: 5px; background: var(--studio-surface); border-color: var(--studio-border-strong); }
+.compact-studio .notebook-draft > details > summary { padding: 9px 0; color: var(--studio-ink); }
+.compact-studio .notebook-draft > footer { justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
+.compact-studio .notebook-draft > footer > small { margin-right: auto; }
+.compact-studio .notebook-draft-cell { margin: 12px 0 18px; border: 1px solid var(--studio-hairline); border-radius: 4px; overflow: hidden; }
+.compact-studio .notebook-draft-cell > header { display: flex; justify-content: flex-start; gap: 8px; align-items: center; padding: 10px 12px; font-size: 12px; }
+.compact-studio .notebook-draft-cell > header b { font-weight: 500; overflow-wrap: anywhere; }
+.compact-studio .notebook-draft-cell > header small { margin-left: auto; color: var(--studio-muted); }
+.compact-studio .notebook-draft .notebook-source-scroll pre { max-height: none; overflow: visible; overflow-wrap: normal; }
+.compact-studio .notebook-draft-badge { padding: 2px 6px; background: var(--studio-paper); color: var(--studio-secondary); border-radius: 3px; font-size: 10px; }
+.compact-studio .notebook-source-line.added { background: #eef5ef; }
+.compact-studio .notebook-source-line.removed { background: #faf0ed; }
+.compact-studio .source-diff-marker { width: 22px; flex: 0 0 22px; text-align: center; user-select: none; }
+.compact-studio .notebook-source-line.added .source-diff-marker { color: #376b4c; }
+.compact-studio .notebook-source-line.removed .source-diff-marker { color: #9b5147; }
+.compact-studio .notebook-draft-warning { padding: 10px 12px; background: var(--studio-paper); border: 1px solid var(--studio-border); border-radius: 4px; font-size: 12px; line-height: 1.8; }
+@container notebook (max-width: 660px) {
+  .compact-studio .notebook-panel.notebook-view-code .notebook-editor fieldset { grid-template-columns: minmax(0, 1fr); }
+  .compact-studio .notebook-source-toolbar { gap: 7px; padding-inline: 10px; }
+  .compact-studio .notebook-draft { padding: 12px; }
+  .compact-studio .notebook-draft-cell > header { align-items: flex-start; }
+}

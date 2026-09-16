@@ -16,7 +16,6 @@ import {
   HarnessIdempotencyCapacityError,
   HarnessIdempotencyConflictError,
   HarnessIdempotencyStore,
-  MAX_HARNESS_COMPLETION_TOKENS_PER_CALL,
   appendHarnessEvent,
   createHarnessExecutionPlan,
   createHarnessTask,
@@ -110,7 +109,7 @@ function semanticDecision(overrides: Partial<HarnessSemanticIntentDecision> = {}
   };
 }
 
-function dynamicPlan(toolNames: Array<"analyzeEdsReports" | "createChangeSetPreview">) {
+function dynamicPlan(toolNames: Array<"inspectDataset" | "analyzeEdsReports" | "createChangeSetPreview">) {
   return {
     goal: "完成已验证的用户任务",
     rationale: "根据语义路由和 Evidence Bus 安排必要工具。",
@@ -286,7 +285,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.events.some((event) => event.toolCall?.name === "createChangeSetPreview")).toBe(false);
     expect(task.pendingChangeSet).toBeUndefined();
     expect(task.contextUsage?.complexity).toBe("simpleReadOnly");
-    expect(task.contextUsage?.limits).toMatchObject({ maxTotalInputChars: 12_000, maxTotalPromptTokens: 3_500 });
+    expect(task.contextUsage?.limits).toMatchObject({ maxTotalInputChars: null, maxTotalPromptTokens: null });
     expect(input.appSpec).toEqual(formal);
   });
 
@@ -361,7 +360,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
       contextUsage: {
         complexity: "multiStep",
         totalPromptTokens: 16_000,
-        limits: { maxTotalPromptTokens: 48_000 },
+        limits: { maxTotalPromptTokens: null },
       },
     });
     expect(model.inputs[0].tools.map((item) => item.name)).toEqual(["analyzeEdsReports"]);
@@ -870,7 +869,7 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(serializedRounds.every((serialized) => !serialized.includes("order_1_1"))).toBe(true);
     expect(serializedRounds[2]).not.toContain('"tool":"inspectDataset"');
     expect(task.contextUsage?.totalInputChars).toBeLessThan(18_000);
-    expect(task.contextUsage?.totalInputChars).toBeLessThan(task.contextUsage?.limits?.maxTotalInputChars ?? 0);
+    expect(task.contextUsage?.limits?.maxTotalInputChars).toBeNull();
     expect(task.contextUsage?.requests.map((entry) => entry.toolObservationChars)).toEqual([
       0,
       expect.any(Number),
@@ -1041,19 +1040,19 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("模型 token 与执行 bounds 只能收紧，不能放宽硬预算", async () => {
+  it("显式模型额度必须合法，执行时间仍不能放宽硬上限", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     expect(() => new DeepSeekHarnessModel({
       apiKey: "mock-credential",
       model: "mock-deepseek-chat",
       fetchImpl,
-      maxCompletionTokens: MAX_HARNESS_COMPLETION_TOKENS_PER_CALL + 1,
+      maxCompletionTokens: 0,
     })).toThrow(/输出 token 上限/);
     expect(() => new DeepSeekHarnessModel({
       apiKey: "mock-credential",
       model: "mock-deepseek-chat",
       fetchImpl,
-      promptTokenLimit: 12_001,
+      promptTokenLimit: Number.NaN,
     })).toThrow(/输入 token 上限/);
 
     const data = fixtures();
@@ -1313,7 +1312,52 @@ describe("DeepSeekHarness 服务端状态机", () => {
     expect(task.events.some((event) => event.message.includes("48 行"))).toBe(true);
   });
 
-  it("实际累计输入 token 达到硬上限时在下一次模型调用前安全失败", async () => {
+  it("所有模型阶段默认不附加输出限额，超过旧 Token 上限仍正常验收并记录实际消耗", async () => {
+    const data = fixtures();
+    const turns = [semanticDecision(), dynamicPlan(["inspectDataset"]),
+      tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "large_usage"),
+      complete("已核对数据概况，共 48 行，字段结构可用于后续分析。")];
+    let index = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      model: "quota-test-model", choices: [{ message: { content: JSON.stringify(turns[index++]) } }],
+      usage: { prompt_tokens: 16_000, completion_tokens: 3_000, total_tokens: 19_000 },
+    }), { headers: { "content-type": "application/json" } }));
+    const task = await new DeepSeekHarness().run(request("large_token_receipts", "检查 retail_orders 数据集是否可用"), {
+      dataRuntime: data.dataRuntime, apiKey: "mock-credential", model: "quota-test-model", fetchImpl,
+    });
+    expect(task.state, task.error).toBe("completed");
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    for (const [, init] of fetchImpl.mock.calls) expect(JSON.parse(String(init?.body))).not.toHaveProperty("max_tokens");
+    expect(task.usage).toEqual({ promptTokens: 64_000, completionTokens: 12_000, totalTokens: 76_000 });
+    expect(task.contextUsage).toMatchObject({ totalPromptTokens: 64_000, limits: {
+      maxRequestInputChars: null, maxTotalInputChars: null, maxTotalPromptTokens: null,
+    } });
+    expect(task.contextUsage?.limitReached).toBeUndefined();
+    expect(harnessTaskSummarySchema.parse(JSON.parse(JSON.stringify(task)))).toEqual(task);
+  });
+
+  it("默认可超过八次模型调用和循环，完整回执仍可序列化且保留验收", async () => {
+    const data = fixtures();
+    const input = request("nine_model_iterations", "查找 Notebook 的数据单元来源，不要修改或运行");
+    input.notebookContext = { sourceIds: ["dataset_retail_orders"], document: { name: "合成检索", revision: 0, cells: [
+      { id: "source", kind: "data", title: "销售数据", sourceDataSourceId: "dataset_retail_orders", outputName: "orders" },
+    ] } };
+    const before = structuredClone(input);
+    const model = new ScriptedModel([
+      ...Array.from({ length: 6 }, (_, index) => tool("cellSearch", { view: "summary", query: "销售" }, `search_${index}`)),
+      complete("已完成。"), complete("检查完成。"), complete("已检索 Notebook，销售数据单元声明来源为零售数据集，未执行或修改单元。"),
+    ]);
+    const task = await new DeepSeekHarness().run(input, { dataRuntime: data.dataRuntime, modelClient: model });
+    expect(task.state, task.error).toBe("completed");
+    expect(task.counters).toEqual({ loopCount: 9, modelCallCount: 9, toolCallCount: 6 });
+    expect(task.verification).toMatchObject({ status: "passed", attempt: 3 });
+    expect(task.contextUsage?.requests).toHaveLength(9);
+    expect(task.workingMemory?.iteration).toBe(9);
+    expect(harnessTaskSummarySchema.parse(JSON.parse(JSON.stringify(task)))).toEqual(task);
+    expect(input).toEqual(before);
+  });
+
+  it("显式注入有限输入额度时仍在下一次模型调用前停止", async () => {
     const data = fixtures();
     const input = request("request_prompt_token_limit", "检查 retail_orders 数据集是否可用，返回行数和列数。不要修改页面。");
     const formal = structuredClone(input.appSpec);
@@ -1321,7 +1365,8 @@ describe("DeepSeekHarness 服务端状态机", () => {
       tool("inspectDataset", { dataSourceId: "dataset_retail_orders" }, "call_token_limit"),
     ], [{ promptTokens: 3_450, completionTokens: 10, totalTokens: 3_460 }]);
 
-    const task = await new DeepSeekHarness().run(input, { dataRuntime: data.dataRuntime, modelClient: model });
+    const task = await new DeepSeekHarness().run(input, { dataRuntime: data.dataRuntime, modelClient: model,
+      contextBudget: { maxTotalPromptTokens: 3_500 } });
 
     expect(task.state).toBe("failed");
     expect(task.contextUsage?.limitReached).toBe("taskPromptTokens");

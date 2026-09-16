@@ -1,0 +1,78 @@
+/* A docked file browser beside the existing tool rail. */
+.compact-studio.with-workspace-modes .workspace.files-expanded { grid-template-columns: 338px minmax(0, 1fr) var(--assistant-panel-width); }
+.compact-studio.with-workspace-modes .workspace.files-expanded.assistant-collapsed,
+.compact-studio.with-workspace-modes .workspace.workspace-agent.files-expanded { grid-template-columns: 338px minmax(0, 1fr); }
+.compact-studio .workspace.files-expanded > .pages-panel-slot,
+.compact-studio .workspace.workspace-agent.files-expanded > .pages-panel-slot { display: grid; grid-template-columns: 52px minmax(0, 1fr); }
+.compact-studio .workspace.files-expanded .workspace-sidebar-rail { display: flex; width: 52px; border-right: 1px solid var(--studio-hairline); }
+.compact-studio .workspace-sidebar-rail button[aria-expanded="true"] { color: var(--studio-ink); background: var(--studio-soft); }
+.compact-studio .studio-files-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; color: var(--studio-ink); background: var(--studio-surface); }
+.compact-studio .studio-files-panel button, .compact-studio .studio-files-panel input, .compact-studio .studio-files-panel select { font: inherit; color: inherit; }
+.compact-studio .studio-files-panel button { cursor: pointer; }
+.compact-studio .studio-files-panel button:disabled { cursor: not-allowed; opacity: .45; }
+.compact-studio .studio-files-panel button:focus-visible, .compact-studio .studio-files-panel input:focus-visible, .compact-studio .studio-files-panel select:focus-visible { outline: 2px solid var(--studio-border-strong); outline-offset: 2px; }
+.compact-studio .studio-files-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 49px; padding: 11px 14px 5px 16px; }
+.compact-studio .studio-files-header h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.compact-studio .studio-files-header button { display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 4px; background: transparent; color: var(--studio-muted); font-size: 19px; }
+.compact-studio .studio-files-header button:hover { background: var(--studio-soft); }
+.compact-studio .studio-files-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 16px 20px; scrollbar-width: thin; }
+.compact-studio .studio-files-intro { margin: 0 0 18px; color: var(--studio-muted); font-size: 11px; line-height: 1.7; }
+.compact-studio .studio-files-drop { border: 1px dashed var(--studio-border); border-radius: 4px; margin-bottom: 22px; background: var(--studio-surface); }
+.compact-studio .studio-files-drop.dragging { background: var(--studio-soft); border-color: var(--studio-ink); }
+.compact-studio .studio-files-drop > button { width: 100%; min-height: 98px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 0; padding: 12px 6px; background: transparent; color: var(--studio-secondary); font-size: 11px; }
+.compact-studio .studio-files-drop b { color: var(--studio-ink); font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.compact-studio .studio-files-drop small { font-size: 9px; color: var(--studio-muted); }
+.compact-studio .studio-files-listbar { display: flex; align-items: center; gap: 7px; min-height: 28px; font-size: 11px; }
+.compact-studio .studio-files-listbar > span { margin-right: auto; white-space: nowrap; }
+.compact-studio .studio-files-listbar select { min-width: 0; max-width: 110px; border: 0; padding: 3px 0; background: transparent; color: var(--studio-muted); font-size: 10px; }
+.compact-studio .studio-files-listbar button { border: 0; padding: 2px 4px; border-radius: 3px; background: transparent; color: var(--studio-muted); }
+.compact-studio .studio-files-search { display: flex; align-items: center; gap: 6px; margin: 6px 0 9px; padding: 5px 7px; border: 1px solid var(--studio-hairline); border-radius: 3px; color: var(--studio-muted); }
+.compact-studio .studio-files-search svg { flex: 0 0 13px; width: 13px; height: 13px; }
+.compact-studio .studio-files-search input { width: 100%; min-width: 0; border: 0; background: transparent; font-size: 11px; line-height: 1.6; }
+.compact-studio .studio-files-list > article { min-width: 0; margin: 0 -5px; padding: 9px 5px; border-radius: 4px; }
+.compact-studio .studio-files-list > article:hover, .compact-studio .studio-files-list > article.selected { background: var(--studio-paper); }
+.compact-studio .studio-file-main { display: flex; align-items: center; gap: 2px; }
+.compact-studio .studio-file-name { flex: 1; min-width: 0; padding: 3px 0; border: 0; background: transparent; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px !important; line-height: 1.65 !important; }
+.compact-studio .studio-file-action { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 24px; border: 0; border-radius: 3px; background: transparent; color: var(--studio-muted); font-size: 15px !important; }
+.compact-studio .studio-file-action svg { width: 14px; height: 14px; }
+.compact-studio .studio-file-action:hover { background: var(--studio-soft); color: var(--studio-ink); }
+.compact-studio .studio-file-action.studio-file-delete { color: #a44d43; }
+.compact-studio .studio-file-action.studio-file-delete:hover:not(:disabled) { background: #f5e9e6; color: #86382f; }
+.compact-studio .studio-files-status { margin: 8px 0; color: var(--studio-secondary); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.compact-studio .studio-file-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 4px; color: var(--studio-muted); font-size: 10px; line-height: 1.5; }
+.compact-studio .studio-file-meta svg { width: 12px; height: 12px; }
+.compact-studio .studio-file-meta time { margin-left: auto; }
+.compact-studio .studio-file-details { margin-top: 10px; padding: 8px; border: 1px solid var(--studio-hairline); border-radius: 3px; background: var(--studio-surface); }
+.compact-studio .studio-file-details p { margin: 0 0 6px; color: var(--studio-muted); font-size: 10px; line-height: 1.7; }
+.compact-studio .studio-file-details button { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; padding: 7px 0; border: 0; background: transparent; text-align: left; font-size: 11px; }
+.compact-studio .studio-file-details button > svg { flex: 0 0 13px; width: 13px; height: 13px; color: var(--studio-muted); }
+.compact-studio .studio-file-details button > span { min-width: 0; overflow-wrap: anywhere; }
+.compact-studio .studio-file-details button > span:last-child { margin-left: auto; }
+.compact-studio .studio-file-details small { display: block; margin-top: 3px; color: var(--studio-muted); font-size: 10px; }
+.compact-studio .studio-files-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 5px; text-align: center; color: var(--studio-muted); font-size: 11px; line-height: 1.7; }
+.compact-studio .studio-files-empty svg { width: 26px; height: 26px; }
+.compact-studio .studio-files-empty b { font-weight: 500; color: var(--studio-secondary); }
+.compact-studio .studio-files-empty p { margin: 0; }
+.compact-studio .studio-files-error { padding: 9px; border: 1px solid var(--studio-border); border-radius: 3px; color: #93483f; background: var(--studio-paper); font-size: 11px; overflow-wrap: anywhere; line-height: 1.7; }
+.compact-studio .studio-files-connections { margin-top: 25px; padding-top: 18px; border-top: 1px solid var(--studio-hairline); }
+.compact-studio .studio-files-connections h3 { margin: 0; font-size: 12px; font-weight: 500; }
+.compact-studio .studio-files-connections p { margin: 8px 0 12px; color: var(--studio-muted); font-size: 11px; line-height: 1.7; }
+.compact-studio .studio-files-connections button { display: flex; align-items: center; gap: 8px; padding: 8px 10px; width: 100%; border: 1px solid var(--studio-hairline); border-radius: 3px; background: transparent; font-size: 11px; }
+.compact-studio .studio-files-connections button > span { margin-left: auto; }
+.compact-studio .studio-files-panel > footer { flex-shrink: 0; padding: 12px 16px; border-top: 1px solid var(--studio-hairline); }
+.compact-studio .studio-files-panel > footer p { margin: 0 0 7px; color: var(--studio-muted); font-size: 10px; line-height: 1.7; }
+.compact-studio .studio-files-panel > footer button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 0; border: 0; background: transparent; color: var(--studio-secondary); font-size: 11px; }
+.compact-studio .file-delete-dialog { box-sizing: border-box; width: min(560px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); margin: auto; padding: 24px; overflow: auto; border: 1px solid var(--studio-border); border-radius: 5px; background: var(--studio-surface); color: var(--studio-ink); font: inherit; font-size: 14px; box-shadow: 0 12px 36px rgb(32 32 30 / 10%), 0 2px 5px rgb(32 32 30 / 8%); }
+.compact-studio .file-delete-dialog::backdrop { background: rgb(248 247 245 / 80%); }
+.compact-studio .file-delete-dialog h2 { margin: 0 0 24px; padding: 0; color: var(--studio-secondary); font-size: 16px; font-weight: 500; line-height: 1.5; }
+.compact-studio .file-delete-description p { margin: 0; line-height: 1.75; overflow-wrap: anywhere; }
+.compact-studio .file-delete-description code { padding: 2px 5px; border-radius: 3px; background: var(--studio-soft); color: var(--studio-ink); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; box-decoration-break: clone; }
+.compact-studio .file-delete-description .file-delete-note { margin-top: 10px; color: var(--studio-muted); font-size: 12px; }
+.compact-studio .file-delete-dialog .file-delete-error { margin: 16px 0 0; color: #93483f; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.compact-studio .file-delete-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.compact-studio .file-delete-dialog button { min-height: 32px; margin: 0; padding: 5px 12px; border: 1px solid var(--studio-border); border-radius: 3px; background: var(--studio-surface); color: var(--studio-ink); font: inherit; font-size: 13px; line-height: 1.5; cursor: pointer; }
+.compact-studio .file-delete-dialog button:hover:not(:disabled) { background: var(--studio-soft); }
+.compact-studio .file-delete-dialog button.file-delete-confirm { border-color: #e7c4bf; background: #fcf5f3; color: #a23f34; }
+.compact-studio .file-delete-dialog button.file-delete-confirm:hover:not(:disabled) { background: #f5e5e1; border-color: #d6a49c; }
+.compact-studio .file-delete-dialog button:disabled { opacity: .55; cursor: not-allowed; }
+.compact-studio .file-delete-dialog button:focus-visible { outline: 2px solid var(--studio-border-strong); outline-offset: 2px; }

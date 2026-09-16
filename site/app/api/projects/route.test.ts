@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { GET, POST } from "./route";
@@ -7,8 +7,9 @@ import { POST as upload, GET as listDatasets } from "../datasets/route";
 import { GET as getDataset, DELETE as deleteDataset } from "../datasets/[datasetId]/route";
 import { POST as saveOriginal, GET as readOriginal } from "./files/route";
 import { PROJECT_HEADER, PROJECT_LIMITS, type ProjectSession } from "@/core/projects/contracts";
-import { projectState } from "@/core/projects/test-fixture";
+import { projectState, projectUpload } from "@/core/projects/test-fixture";
 import { datasetUploadResponseSchema } from "@/core/datasets/contracts";
+import { projectByHandle } from "@/core/projects/server/store";
 
 let root: string;
 const origin = "http://127.0.0.1:3001";
@@ -28,6 +29,72 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 describe("local project API scope", () => {
+  it("scopes file archive and restore to the selected project and denies access while archived", async () => {
+    const a = await create("a"), b = await create("b"), store = projectByHandle(a.handle);
+    const saved = store.putTable(await projectUpload());
+    const file = store.saveOriginal("synthetic.csv", Buffer.from("category,amount\nAlpha,10"), saved.dataset.datasetId);
+    const body = { action: "archiveFile", fileId: file.id };
+    expect((await POST(request(body, b.handle))).status).toBe(404);
+    expect((await POST(request(body, a.handle, { origin: "https://external.invalid" }))).status).toBe(403);
+    expect((await POST(request({ ...body, fileId: "../files/private.csv" }, a.handle))).status).toBe(400);
+    expect(store.getOriginal(file.id).entry.deletedAt).toBeUndefined();
+    const archived = await POST(request(body, a.handle)); expect(archived.status).toBe(200);
+    expect((await archived.json() as ProjectSession).manifest.files[0].deletedAt).toBeTruthy();
+    expect((await readOriginal(new Request(`${origin}/api/projects/files?id=${file.id}`, { headers: { [PROJECT_HEADER]: a.handle } }))).status).toBe(404);
+    expect(store.getTable(saved.dataset.datasetId)).toEqual(saved);
+    expect((await POST(request({ action: "restoreFile", fileId: file.id }, b.handle))).status).toBe(404);
+    expect((await POST(request({ action: "restoreFile", fileId: file.id }, a.handle))).status).toBe(200);
+    expect(store.getOriginal(file.id).bytes.toString()).toBe("category,amount\nAlpha,10");
+  });
+  it("archives files after module reload without re-trusting a replaced directory", async () => {
+    const project = await create(), store = projectByHandle(project.handle);
+    const saved = store.putTable(await projectUpload());
+    const file = store.saveOriginal("synthetic.csv", Buffer.from("a\n1"), saved.dataset.datasetId);
+    vi.resetModules(); const reloaded = await import("./route");
+    expect((await reloaded.POST(request({ action: "archiveFile", fileId: file.id }, project.handle))).status).toBe(200);
+    renameSync(project.path, join(root, "original")); mkdirSync(project.path);
+    expect((await reloaded.POST(request({ action: "restoreFile", fileId: file.id }, project.handle))).status).toBe(409);
+  });
+  it("keeps archive conflict errors after a server module reload", async () => {
+    const project = await create();
+    const store = projectByHandle(project.handle);
+    const saved = store.putTable(await projectUpload()), state = projectState(saved);
+    state.dataProduct.notebooks = { page: { name: "依赖分析", revision: 1, cells: [{ id: "source", kind: "data", title: "数据", sourceDataSourceId: saved.dataset.datasetId, outputName: "input" }] } };
+    store.saveState(state, 0);
+    vi.resetModules();
+    const reloaded = await import("../datasets/[datasetId]/route");
+    const response = await reloaded.DELETE(new Request(`${origin}/api/datasets/${saved.dataset.datasetId}`, { method: "DELETE", headers: { origin, [PROJECT_HEADER]: project.handle } }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { message: expect.stringContaining("Notebook：依赖分析") } });
+    expect(store.getTable(saved.dataset.datasetId)).not.toBeNull();
+  });
+  it("uses current archive code after reload and retains the original and restorable data", async () => {
+    const project = await create(), store = projectByHandle(project.handle);
+    const saved = store.putTable(await projectUpload()), id = saved.dataset.datasetId;
+    const file = store.saveOriginal("synthetic.csv", Buffer.from("category,amount\nAlpha,10"), id);
+    store.saveState(projectState(saved), 0);
+    const staleDelete = vi.spyOn(store, "deleteTable");
+    vi.resetModules();
+    const reloaded = await import("../datasets/[datasetId]/route");
+    const response = await reloaded.DELETE(new Request(`${origin}/api/datasets/${id}`, { method: "DELETE", headers: { origin, [PROJECT_HEADER]: project.handle } }));
+    expect(response.status).toBe(204);
+    expect(staleDelete).not.toHaveBeenCalled();
+    expect(store.getTable(id)).toBeNull();
+    expect(store.getOriginal(file.id).bytes.toString()).toBe("category,amount\nAlpha,10");
+    expect(store.restoreTable(id)).toEqual(saved);
+    staleDelete.mockRestore();
+  });
+  it("does not re-trust a replaced project directory during a module reload", async () => {
+    const project = await create();
+    projectByHandle(project.handle);
+    renameSync(project.path, join(root, "original"));
+    mkdirSync(project.path);
+    vi.resetModules();
+    const reloaded = await import("./route");
+    const response = await reloaded.GET(request(undefined, project.handle));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { message: expect.stringContaining("项目文件夹已被替换") } });
+  });
   it("requires loopback and same-origin writes before accessing the filesystem", async () => {
     expect((await POST(request({ action: "create", path: join(root, "blocked"), name: "blocked" }, undefined, { origin: "https://external.invalid" }))).status).toBe(403);
     expect((await GET(new Request("https://external.invalid/api/projects"))).status).toBe(403);

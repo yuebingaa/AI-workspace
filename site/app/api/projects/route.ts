@@ -29,6 +29,8 @@ export async function POST(request: Request) {
     if (action.action === "save") return Response.json({ stateRevision: project.saveState(action.state, action.stateRevision) }, { headers });
     if (action.action === "renameTable") project.renameTable(action.datasetId, action.name);
     if (action.action === "restoreTable") project.restoreTable(action.datasetId);
+    if (action.action === "archiveFile") project.archiveOriginal(action.fileId);
+    if (action.action === "restoreFile") project.restoreOriginal(action.fileId);
     return Response.json({ handle: requestProjectHandle(request), path: project.root, manifest: project.read() }, { headers });
   } catch (error) { return projectErrorResponse(error); }
 }

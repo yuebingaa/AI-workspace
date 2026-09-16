@@ -148,8 +148,8 @@ function TaskDetail({ task }: { task: HarnessTaskSummary }) {
   const toolEvents = task.events.filter((event) => event.toolCall);
   const remainingMs = timing ? Math.max(0, timing.totalBudgetMs - timing.activeElapsedMs) : undefined;
   const timePercent = timing ? Math.min(100, (timing.activeElapsedMs / timing.totalBudgetMs) * 100) : 0;
-  const charPercent = context && limits ? Math.min(100, (context.totalInputChars / limits.maxTotalInputChars) * 100) : 0;
-  const tokenPercent = context && limits ? Math.min(100, (context.totalPromptTokens / limits.maxTotalPromptTokens) * 100) : 0;
+  const charPercent = context && limits?.maxTotalInputChars ? Math.min(100, (context.totalInputChars / limits.maxTotalInputChars) * 100) : 0;
+  const tokenPercent = context && limits?.maxTotalPromptTokens ? Math.min(100, (context.totalPromptTokens / limits.maxTotalPromptTokens) * 100) : 0;
   const reasonKind = task.state === "failed" ? "failed" : task.state === "blocked" ? "blocked" : task.state === "cancelled" ? "cancelled" : "neutral";
   const reasonLabel = reasonKind === "failed" ? "失败原因" : reasonKind === "blocked" ? "阻塞原因" : reasonKind === "cancelled" ? "取消原因" : "任务说明";
 
@@ -190,8 +190,8 @@ function TaskDetail({ task }: { task: HarnessTaskSummary }) {
         ) : <p className="history-unavailable">该历史任务未保存耗时预算明细。</p>}
         {context && limits ? (
           <div className="history-context-budget">
-            <div><span>累计输入字符</span><b>{context.totalInputChars.toLocaleString()} / {limits.maxTotalInputChars.toLocaleString()}</b><div className="history-progress"><i style={{ width: `${charPercent}%` }} /></div></div>
-            <div><span>累计输入 Tokens</span><b>{context.totalPromptTokens.toLocaleString()} / {limits.maxTotalPromptTokens.toLocaleString()}</b><div className="history-progress violet"><i style={{ width: `${tokenPercent}%` }} /></div></div>
+            <div><span>累计输入字符</span><b>{context.totalInputChars.toLocaleString()} / {limits.maxTotalInputChars?.toLocaleString() ?? "不设本地限额"}</b>{limits.maxTotalInputChars !== null && <div className="history-progress"><i style={{ width: `${charPercent}%` }} /></div>}</div>
+            <div><span>累计输入 Tokens</span><b>{context.totalPromptTokens.toLocaleString()} / {limits.maxTotalPromptTokens?.toLocaleString() ?? "不设本地限额"}</b>{limits.maxTotalPromptTokens !== null && <div className="history-progress violet"><i style={{ width: `${tokenPercent}%` }} /></div>}</div>
             {context.limitReached && <p>已触发上下文限制：{context.limitReached}</p>}
           </div>
         ) : <p className="history-unavailable">该历史任务未保存上下文预算明细。</p>}

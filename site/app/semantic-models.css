@@ -39,12 +39,3 @@
 .semantic-context { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--studio-secondary); padding: 8px 12px; margin-bottom: 8px; background: var(--studio-paper); border: 1px solid var(--studio-border); border-radius: 8px; }
 .semantic-context > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }.semantic-context button { background: transparent; border: 0; color: inherit; cursor: pointer; }.semantic-context button:disabled { opacity: .4; }
 .agent-workspace-panel > .semantic-context { flex: 0 0 auto; width: min(780px, calc(100% - 48px)); margin: 0 auto 8px; }
-@media (max-width: 600px) { .agent-workspace-panel > .semantic-context { width: calc(100% - 28px); } }
-@media (max-width: 640px) {
-  .semantic-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; }
-  .semantic-dialog header { padding: 14px; }.semantic-dialog h2 { font-size: 19px; }
-  .semantic-manager-body { display: block; }.semantic-manager-body > aside { border-right: 0; border-bottom: 1px solid var(--studio-border); display: flex; gap: 8px; overflow-x: auto; padding: 10px; }
-  .semantic-manager-body > aside button { min-width: 130px; width: auto; margin: 0; }.semantic-manager-body > aside p { min-width: 160px; }
-  .semantic-manager-body form { padding: 14px; }.semantic-basics { grid-template-columns: 1fr; }.semantic-member { grid-template-columns: minmax(0, 1fr); }
-  .semantic-dialog footer { padding: 12px; flex-wrap: wrap; }.semantic-dialog footer > div:last-child { margin-left: auto; }.semantic-dialog footer button { padding: 8px 10px; }
-}

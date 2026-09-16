@@ -1,0 +1,42 @@
+flowchart TB
+  subgraph UI[Web 工作台]
+    Chat[AI 对话]
+    NB[Notebook / 看板 / Data Browser]
+    Lab[可视化测试页：固定合成数据]
+  end
+  Chat --> API[HTTP 请求边界：身份 / 项目范围 / 会话 / 幂等]
+  NB --> Direct[Notebook / 项目 / 数据 API 与人工编辑]
+  Lab --> LabAPI[专用 SSE 入口：重建上下文 / 单 Agent / 无外部 MCP]
+  API --> Route{CoordinatedHarness}
+  Route -->|默认 / 追问 / 页面任务| Runtime[HarnessRuntime]
+  Route -->|data 开关 + 复杂只读首轮| Main[主 Agent 委派]
+  Main --> DataAgent[数据子 Agent：viewer / 独立上下文 / 最多一个]
+  DataAgent --> Runtime
+  LabAPI --> Runtime
+  Compose[服务端模型组装] --> Model[HarnessModel：当前 DeepSeek 适配]
+  Model <--> Runtime
+  Context[上下文选择 / 工作记忆 / 会话摘要] --> Runtime
+  Skills[4 类 Skill / 动态工具目录] --> Runtime
+  Runtime --> Tools[Schema 与权限校验后的业务工具]
+  Tools --> Data[Dataset / DataRecipe / 语义模型 / EDS]
+  Tools --> Notebook[Notebook 定义与执行：query / log 依赖]
+  Direct --> Notebook
+  Notebook --> LocalSQL[本地 DuckDB]
+  Notebook --> SQL[ConnectionQueryService / 驱动接口]
+  SQL --> Drivers[PostgreSQL / Databricks]
+  Tools --> Preview[ChangeSet 候选 / Recharts 图表]
+  Preview --> Human[工作台人工确认；测试页只预览与评分]
+  Data --> Evidence[工具事实 / resultRef / Evidence Bus]
+  Notebook --> Evidence
+  Preview --> Evidence
+  Evidence --> Verify[子任务及主任务验证 / 必要时主 Agent 汇总]
+  Verify --> SSE[主任务唯一回执 / SSE 执行事件]
+  SSE --> UI
+  Human --> Store[正式文档 / 保存调度 / 项目写入队列]
+  Store --> Disk[浏览器状态 / 本地项目文件]
+  Direct --> Store
+  Budget[共享预算 / 授权复查 / 截止时间 / 取消] -.-> Route
+  Budget -.-> Runtime
+  Future[规划：可视化专家 / 热力图与动态 / 并行委派 / 统一产物协议]
+  classDef planned fill:#fff,stroke:#999,stroke-dasharray:6 4,color:#777;
+  class Future planned;

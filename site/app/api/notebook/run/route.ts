@@ -5,10 +5,11 @@ import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity
 import { requestDatasetRepository, requestProject, projectErrorResponse } from "@/core/projects/server/request";
 import { ProjectError } from "@/core/projects/server/store";
 import { parseCsvUpload } from "@/core/datasets/server/csv-dataset";
-import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { readNotebookRequest, resolveNotebookPythonFiles } from "@/core/notebook/server/python-files";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { executeConnectionSql } from "@/core/connections/server/query";
 import { assertLocalProjectRequest, requestProjectHandle } from "@/core/projects/server/request";
+import { notebookDatasetProvenance } from "@/core/notebook/provenance";
 
 export const runtime = "nodejs";
 const headers = { "cache-control": "private, no-store", "x-content-type-options": "nosniff" };
@@ -16,10 +17,10 @@ export async function POST(request: Request) {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
   if ((origin && origin !== new URL(request.url).origin) || (fetchSite && !["same-origin", "none"].includes(fetchSite))) return Response.json({ error: { message: "只允许当前网站运行本地查询" } }, { status: 403, headers });
-  if (request.headers.get("content-type")?.split(";", 1)[0] !== "application/json") return Response.json({ error: { message: "必须使用 JSON 请求" } }, { status: 415, headers });
+  if (!["application/json", "multipart/form-data"].includes(request.headers.get("content-type")?.split(";", 1)[0] ?? "")) return Response.json({ error: { message: "必须使用 JSON 或文件请求" } }, { status: 415, headers });
   try {
-    const raw = await readBoundedUtf8Body(request, 120_000, { signal: request.signal, timeoutMs: 5_000 });
-    const parsed = notebookRunRequestSchema.parse(JSON.parse(raw));
+    const uploaded = await readNotebookRequest(request);
+    const parsed = notebookRunRequestSchema.parse(uploaded.raw);
     if (parsed.document.cells.some((cell) => cell.kind === "warehouseSql")) assertLocalProjectRequest(request);
     const identity = resolveDemoRequestIdentity();
     const datasetRepository = requestDatasetRepository(request);
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
       return { source, rows };
     }));
     const run = await runNotebook({ document: parsed.document, sources, semanticModels: parsed.semanticModels,
+      pythonFiles: resolveNotebookPythonFiles(request, cellsToRun(parsed.document, parsed.targetCellId), uploaded.files),
       connectionQuery: (connectionId, sql, signal) => executeConnectionSql({ connectionId, sql, signal, project: requestProjectHandle(request) }),
       targetCellId: parsed.targetCellId, signal: request.signal, userId: identity.ownerId });
     if (parsed.action !== "run") {
@@ -88,15 +90,11 @@ export async function POST(request: Request) {
       }
       // External SQL aliases do not establish column sensitivity. Explicitly
       // obtain dataset AI consent before sending a manually saved result to AI.
-      if (cellsToRun(parsed.document, parsed.targetCellId).some((item) => item.kind === "warehouseSql")) {
+      if (cellsToRun(parsed.document, parsed.targetCellId).some((item) => item.kind === "warehouseSql" || (item.kind === "python" && item.fileNames.length))) {
         uploaded.dataset.aiAccessPolicy = "pending";
         uploaded.dataset.source.aiAccessPolicy = "pending";
       }
-      if (result.resultRef) uploaded.dataset.provenance = {
-        kind: "notebook", runId: run.runId, resultId: result.resultRef.resultId,
-        cellId: cell.id, revision: run.revision,
-        connectionIds: [...new Set(cellsToRun(parsed.document, cell.id).flatMap((item) => item.kind === "warehouseSql" ? [item.connectionId] : []))],
-      };
+      if (result.resultRef) uploaded.dataset.provenance = notebookDatasetProvenance(parsed.document, run, cell.id);
       const serialized = JSON.stringify({ run, snapshot: uploaded });
       if (Buffer.byteLength(serialized) > NOTEBOOK_LIMITS.outputBytes * 2) throw new Error("结果快照过大");
       if (request.signal.aborted) throw new Error("请求已取消，未保存快照");

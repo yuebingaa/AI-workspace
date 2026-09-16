@@ -32,7 +32,12 @@ npm run site:rollback
 
 ## 首次安装和更新管理器
 
+首次安装或从源码迁移到另一台电脑，在依赖准备好后先执行 `npm run python:setup`。它按 `scripts/python-runtime-lock.json` 的固定版本与 SHA-256 下载约 22 MiB 的 Python / pandas / NumPy / openpyxl 资源到 `vendor/python`；再次执行会校验并复用完整文件。运行分析时离线加载，不需要 AI API Key。构建与发布会把资源复制进独立运行目录，缺少资源会明确终止构建。
+
+Python 单元另需本机 Microsoft Edge / Chrome / Chromium；常见安装路径自动识别，也可通过 `NOTEBOOK_PYTHON_BROWSER` 指定可执行文件。Windows 通常可直接使用系统 Edge。不能把本机 Python 或 `node_modules` 的存在当成此环境已安装；用 `GET /api/notebook/python` 查看资源校验与浏览器可用状态。具体能力和限制见 [Python Runtime](docs/python-runtime.md)。
+
 ```text
+npm run python:setup
 npm run site:install
 npm run site:publish
 npm run site:start -- dev

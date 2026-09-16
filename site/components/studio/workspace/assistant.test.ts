@@ -9,6 +9,7 @@ import { createHarnessTask } from "@/core/harness/task-state";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { semanticFixture } from "@/core/semantic/test-fixture";
 import { saveSemanticModel } from "@/core/semantic/model";
+import { activeAssistantSession, createAssistantSessions, newAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
 import { createStudioAssistantActions, harnessUiClock, useStudioAssistantState, type StudioAssistantState, type StudioAssistantActionsContext } from "./assistant";
 
 vi.mock("@/core/harness/client", async (original) => ({ ...await original<object>(), requestHarnessTask: vi.fn() }));
@@ -54,6 +55,51 @@ beforeEach(() => {
 });
 
 describe("聊天控制器保持请求、会话与确认边界", () => {
+  it("switches only to a current-project thread and restores its draft, reply and task", () => {
+    const { state, values } = context();
+    const session = newAssistantSession([{ id: "turn", instruction: "另一个问题", response: "独立回答", createdAt: new Date().toISOString(), state: "success", taskId: "saved-task" }]);
+    session.draft = "会话草稿"; state.assistant.assistantSessions.items.push(session);
+    state.assistant.harnessTasks = [{ ...createHarnessTask("saved_request", "另一个问题", state.activePageId, "editor", harnessUiClock), id: "saved-task", state: "completed" }];
+    const actions = createStudioAssistantActions(state);
+    actions.handleSelectAssistantSession("another_project_thread"); expect(state.persistExplicitly).not.toHaveBeenCalled();
+    actions.handleSelectAssistantSession(session.id);
+    expect(activeAssistantSession(values.assistantSessions as AssistantSessions)).toEqual(session);
+    expect(values.lastHarnessTaskId).toBe("saved-task"); expect(values.aiMessage).toBe("独立回答");
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+  });
+  it("preserves old threads and blocks switching during a request or preview", () => {
+    const { state, values } = context();
+    state.assistant.assistantSessions = createAssistantSessions([{ id: "first", instruction: "你好", response: "你好", createdAt: new Date().toISOString(), state: "success" }]);
+    const actions = createStudioAssistantActions(state);
+    state.assistant.harnessRequestActiveRef.current = true;
+    actions.handleNewAssistantSession(); expect(state.persistExplicitly).not.toHaveBeenCalled();
+    state.assistant.harnessRequestActiveRef.current = false; state.conversationSwitchBlocked = true;
+    actions.handleNewAssistantSession(); expect(state.persistExplicitly).not.toHaveBeenCalled();
+    state.conversationSwitchBlocked = false; actions.handleNewAssistantSession();
+    const sessions = values.assistantSessions as AssistantSessions;
+    expect(sessions.items).toHaveLength(2); expect(sessions.items[0]).toEqual(state.assistant.assistantSessions.items[0]);
+    expect(activeAssistantSession(sessions).turns).toEqual([]);
+    expect(values.lastHarnessTaskId).toBe(""); expect(values.hasValidAiPlan).toBe(false);
+  });
+  it("完整工作簿提问默认携带原件，普通数据请求不附带无关原件", async () => {
+    const { state } = context();
+    const file = new File(["synthetic-workbook"], "analysis.xlsx");
+    state.activeOriginalWorkbook = { file, sheetNames: ["First", "Second"] };
+    await createStudioAssistantActions(state).handleGenerateAiPlan("读取原始工作簿，统计所有工作表的行数");
+    expect(vi.mocked(requestHarnessTask).mock.calls.at(-1)?.[1]?.rawWorkbook).toBe(file);
+    await createStudioAssistantActions(state).handleGenerateAiPlan("请检查当前数据的字段结构");
+    expect(vi.mocked(requestHarnessTask).mock.calls.at(-1)?.[1]?.rawWorkbook).toBeUndefined();
+  });
+
+  it("刷新后原件不可用时不伪造附件，显式指定的数据源原件仍可读取", async () => {
+    const { state } = context();
+    await createStudioAssistantActions(state).handleGenerateAiPlan("读取原始工作簿第 2 行");
+    expect(vi.mocked(requestHarnessTask).mock.calls.at(-1)?.[1]?.rawWorkbook).toBeUndefined();
+    const file = new File(["synthetic-other-workbook"], "selected.xlsx");
+    await createStudioAssistantActions(state).handleGenerateAiPlan("读取原始工作簿第 2 行", undefined, { dataSourceId: state.activeDataSource!.id, rawWorkbook: file });
+    expect(vi.mocked(requestHarnessTask).mock.calls.at(-1)?.[1]?.rawWorkbook).toBe(file);
+  });
+
   it("AI 请求携带当前选中模型，取消选择后不残留旧口径", async () => {
     const { state } = context(), { product, model, source } = semanticFixture();
     state.dataProduct = saveSemanticModel(product, model, "page_home", "editor");
@@ -142,7 +188,7 @@ describe("聊天控制器保持请求、会话与确认边界", () => {
     expect(values.assistantConversation).toEqual([]);
     expect(state.assistant.setHarnessTasks).not.toHaveBeenCalled();
     expect(state.persistExplicitly).toHaveBeenLastCalledWith(state.execution, state.auditRecords, state.queryRecords,
-      state.dataProduct, state.assistant.harnessTasks, state.edsWorkspace, []);
+      state.dataProduct, state.assistant.harnessTasks, state.edsWorkspace, [], expect.objectContaining({ activeId: state.assistant.assistantSessions.activeId }));
   });
 
   it("重试保留原指令、任务关联和图片，重复发送仍被拦截", async () => {

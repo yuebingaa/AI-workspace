@@ -65,6 +65,7 @@ await page.addInitScript(() => {
 });
 const screenshots = [];
 async function capture(name) {
+  assert.equal(await page.locator(".conversation-heading").count(), 0, "Chat must not show the context title/count/clear toolbar");
   const path = resolve(evidence, `${name}.png`);
   await page.screenshot({ path, animations: "disabled" });
   screenshots.push(path);
@@ -113,8 +114,10 @@ try {
   assert.equal(await page.evaluate(() => window.__traceChecks.aborted), 1);
   const ids = await page.evaluate(() => window.__traceChecks.requests.map((request) => request.conversation_id));
   assert.equal(new Set(ids).size, 1);
-  await page.getByRole("button", { name: "清除上下文", exact: true }).click();
-  await page.getByRole("heading", { name: "今天想从数据里发现什么？" }).waitFor();
+  await page.getByRole("button", { name: "打开工作区菜单", exact: true }).click();
+  await page.getByRole("navigation", { name: "工作区功能菜单" }).getByRole("textbox", { name: "查找功能或工作界面" }).fill("清除上下文");
+  await page.getByRole("navigation", { name: "工作区功能菜单" }).getByRole("button", { name: "清除上下文", exact: true }).click();
+  await page.getByRole("heading", { name: "今天，想了解什么？" }).waitFor();
   assert.equal(await page.evaluate(() => window.__traceChecks.clears.length), 1);
   await send("新会话检查数据结构");
   await page.locator(".harness-trace.running").waitFor();

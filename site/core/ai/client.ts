@@ -4,7 +4,7 @@ import {
   type AiPlanPublicRequest,
   type AiPlanSuccess,
 } from "./contracts";
-import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { readBoundedUtf8Body } from "@/core/http/bounded-body";
 
 export const MAX_AI_PLAN_RESPONSE_BYTES = 1024 * 1024;
 export const AI_PLAN_CLIENT_TIMEOUT_MS = 30_000;

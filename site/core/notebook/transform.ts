@@ -1,11 +1,11 @@
 import type { DataSourceDefinition } from "@/core/models";
-import type { HarnessNotebookCell } from "@/core/harness/notebook-contracts";
+import type { NotebookCell } from "@/core/notebook/definition";
 import { executeDataRecipe } from "@/core/data/recipe-runtime";
 import type { NotebookTable } from "./contracts";
 
 /** Recipe consumes a complete upstream table, never its UI preview. */
 export function executeNotebookTransform(
-  cell: Extract<HarnessNotebookCell, { kind: "transform" }>, input: NotebookTable,
+  cell: Extract<NotebookCell, { kind: "transform" }>, input: NotebookTable,
 ): NotebookTable {
   if (input.truncated) throw new Error("不能对截断结果执行 DataRecipe；请先在上游 SQL 中筛选或聚合");
   const source: DataSourceDefinition = {

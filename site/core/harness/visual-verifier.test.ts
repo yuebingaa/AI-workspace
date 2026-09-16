@@ -77,6 +77,7 @@ describe("Playwright + 多模态视觉 Verifier", () => {
     expect(perception.summary).toBe("截图服务证据已进入 Planner 前置感知。");
     expect(perception.captures).toHaveLength(1);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchImpl.mock.calls[1][1]?.body))).not.toHaveProperty("max_tokens");
   });
 
   it("在 Planner 前把截图、DOM、控制台和交互证据交给多模态观察器", async () => {
@@ -191,16 +192,16 @@ describe("Playwright + 多模态视觉 Verifier", () => {
       usage: { promptTokens: 80, completionTokens: 40, totalTokens: 120 },
     });
     expect(JSON.stringify(evidence)).not.toContain("data:image");
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]?.body))).not.toHaveProperty("max_tokens");
   });
 
   it("把多个视口的真实截图作为 image input 并返回结构化证据", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as {
-        max_tokens: number;
         thinking: { type: string };
         messages: Array<{ role: string; content: unknown }>;
       };
-      expect(body.max_tokens).toBe(2_400);
+      expect(body).not.toHaveProperty("max_tokens");
       expect(body.thinking).toEqual({ type: "disabled" });
       const system = body.messages.find((message) => message.role === "system");
       expect(system?.content).toContain("在画布内横向滚动，这是受支持的导航设计");

@@ -1,6 +1,6 @@
 import { cp, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export async function copyNotebookRuntime(source, destination) {
@@ -16,6 +16,10 @@ export async function copyNotebookRuntime(source, destination) {
   await cp(join(source, 'scripts/notebook-DuckDB-LICENSE.txt'), join(target, 'DuckDB-LICENSE.txt'));
   await cp(join(source, 'node_modules/apache-arrow/LICENSE.txt'), join(target, 'Arrow-LICENSE.txt'));
   await cp(join(source, 'node_modules/apache-arrow/NOTICE.txt'), join(target, 'Arrow-NOTICE.txt'));
+  // Python uses only these pinned offline assets; no machine Python installation is copied.
+  try { await cp(join(source, 'vendor/python'), join(resolve(destination), 'vendor/python'), { recursive: true }); }
+  catch (error) { throw new Error('Python assets missing: run npm run python:setup before building.', { cause: error }); }
+  await cp(dirname(require.resolve('playwright-core/package.json')), join(resolve(destination), 'node_modules/playwright-core'), { recursive: true, dereference: true });
 }
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   await copyNotebookRuntime(process.cwd(), resolve('dist/standalone'));

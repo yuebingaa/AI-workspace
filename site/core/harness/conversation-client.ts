@@ -14,16 +14,17 @@ function readIds() {
   idsByScope.set(key, sessionIds);
   return sessionIds;
 }
-export function harnessConversationId(pageId: string) {
+export function harnessConversationId(pageId: string, contextId?: string) {
+  if (contextId) return contextId;
   const ids = readIds();
   ids[pageId] ??= `conversation_${crypto.randomUUID().replaceAll("-", "")}`;
   try { localStorage.setItem(storageKey(), JSON.stringify(ids)); } catch { /* Session only. */ }
   return ids[pageId];
 }
-export async function clearHarnessConversations() {
+export async function clearHarnessConversations(session?: { contextId: string; pageIds: string[] }) {
   const key = storageKey();
   const headers = projectHeaders({ "content-type": "application/json" });
-  const entries = Object.entries(readIds());
+  const entries = session ? [...new Set(session.pageIds)].map((pageId) => [pageId, session.contextId]) : Object.entries(readIds());
   for (const [pageId, conversation_id] of entries) {
     const response = await fetch("/api/ai/harness/conversation", {
       method: "DELETE", headers,
@@ -32,6 +33,7 @@ export async function clearHarnessConversations() {
     });
     if (!response.ok) throw new Error("服务端会话尚未清除，请稍后重试。");
   }
+  if (session) return;
   idsByScope.delete(key);
   try { localStorage.removeItem(key); } catch { /* Session only. */ }
 }

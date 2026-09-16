@@ -1,16 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { containDialogFocus } from "./dialog-focus";
 import "./wecom-settings.css";
 
 interface ConnectionStatus {
   available: boolean; connected: boolean; pending: boolean; qrReady: boolean; failed: boolean; message: string;
   tools: Array<{ name: string; description: string }>;
 }
-export function WecomSettings({ onSuggestion }: { onSuggestion?: (instruction: string) => void }) {
+export function WecomSettings({ onSuggestion, open: controlledOpen, onOpenChange, hideTrigger = false }: { onSuggestion?: (instruction: string) => void; open?: boolean; onOpenChange?: (open: boolean) => void; hideTrigger?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -54,10 +57,10 @@ export function WecomSettings({ onSuggestion }: { onSuggestion?: (instruction: s
     finally { setBusy(false); }
   }
   return <>
-    <button ref={trigger} type="button" className="ai-api-settings-trigger wecom-trigger" aria-label="配置企业微信连接" onClick={() => { setError(""); setOpen(true); }}>
+    {!hideTrigger && <button ref={trigger} type="button" className="ai-api-settings-trigger wecom-trigger" aria-label="配置企业微信连接" onClick={() => { setError(""); setOpen(true); }}>
       <span className={`wecom-status-dot${status?.connected ? " connected" : ""}`} aria-hidden="true" />企业微信
-    </button>
-    {open && <dialog ref={dialog} className="wecom-dialog" aria-labelledby="wecom-heading" onCancel={close} onClick={(event) => { if (event.target === dialog.current) close(); }}>
+    </button>}
+    {open && <dialog ref={dialog} className="wecom-dialog" aria-labelledby="wecom-heading" onKeyDown={containDialogFocus} onCancel={close} onClick={(event) => { if (event.target === dialog.current) close(); }}>
       <div className="wecom-dialog-content">
         <header><div><h2 id="wecom-heading">连接企业微信</h2><p>让网页智能体读取你授权的企业数据</p></div><button type="button" aria-label="关闭企业微信设置" onClick={close}>×</button></header>
         <div className={`wecom-connection-card${status?.connected ? " connected" : ""}`} role="status">

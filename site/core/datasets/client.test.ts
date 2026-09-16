@@ -91,6 +91,16 @@ describe("CSV 数据集客户端", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([204, 404])("删除的空 %s 回执保持幂等成功", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status })));
+    await expect(deleteUploadedDataset("dataset_upload_1234567890123456")).resolves.toBeUndefined();
+  });
+
+  it.each([404, 409, 500])("删除的 %s 错误正文保留原因，不伪装成已删除", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: { message: "项目操作未完成" } }, { status })));
+    await expect(deleteUploadedDataset("dataset_upload_1234567890123456")).rejects.toEqual(new DatasetClientError(status, "项目操作未完成"));
+  });
+
   it("确认策略 409 后读取权威描述符并在专用错误中返回", async () => {
     let sequence = 0;
     const payload = await parseCsvUpload({

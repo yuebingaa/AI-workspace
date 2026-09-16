@@ -1,30 +1,43 @@
 import { useState, type FormEvent } from "react";
 import type { DataSourceDefinition } from "@/core/models";
 import type { SemanticModel } from "@/core/semantic/contracts";
-import { harnessNotebookCellSchema, type HarnessNotebookCell } from "@/core/harness/notebook-contracts";
+import { notebookCellSchema, type NotebookCell } from "@/core/notebook/definition";
 import { notebookOutputCells } from "@/core/notebook/client-state";
 import { RecipeStepsEditor } from "./RecipeStepsEditor";
 import type { ConnectionDescriptor } from "@/core/connections/contracts";
+import { NotebookCodeEditor } from "./NotebookSource";
+import { applyRecipeSource } from "./cell-source";
 
-export function NotebookCellEditor({ cell, previous, sources, models, connections = [], disabled, onSave, onCancel }: {
-  cell: HarnessNotebookCell; previous: HarnessNotebookCell[]; sources: DataSourceDefinition[]; models: SemanticModel[];
-  disabled: boolean; onSave: (cell: HarnessNotebookCell) => void; onCancel: () => void;
+export function NotebookCellEditor({ cell, previous, sources, models, connections = [], disabled, codeMode = false, onSave, onCancel }: {
+  cell: NotebookCell; previous: NotebookCell[]; sources: DataSourceDefinition[]; models: SemanticModel[];
+  disabled: boolean; onSave: (cell: NotebookCell) => void; onCancel: () => void;
   connections?: ConnectionDescriptor[];
+  codeMode?: boolean;
 }) {
   const [draft, setDraft] = useState(cell);
   const [error, setError] = useState("");
+  const [recipeCode, setRecipeCode] = useState(codeMode);
+  const [recipeSource, setRecipeSource] = useState(cell.kind === "transform" ? JSON.stringify(cell.steps, null, 2) : "");
   const [lists, setLists] = useState({ dimensions: cell.kind === "semanticQuery" ? cell.dimensions.join(", ") : "",
     measures: cell.kind === "semanticQuery" ? cell.measures.join(", ") : "", columns: cell.kind === "table" ? cell.columns.join(", ") : "",
     valueFields: cell.kind === "chart" ? cell.valueFields.join(", ") : "" });
   const outputs = notebookOutputCells(previous);
-  const patch = (value: Partial<HarnessNotebookCell>) => setDraft({ ...draft, ...value } as HarnessNotebookCell);
+  const patch = (value: Partial<NotebookCell>) => setDraft({ ...draft, ...value } as NotebookCell);
   const list = (value: string) => value.split(/[,，]/u).map((item) => item.trim()).filter(Boolean);
   function submit(event: FormEvent) {
     event.preventDefault();
     const value = draft.kind === "semanticQuery" ? { ...draft, dimensions: list(lists.dimensions), measures: list(lists.measures) }
       : draft.kind === "table" ? { ...draft, columns: list(lists.columns) }
         : draft.kind === "chart" ? { ...draft, valueFields: list(lists.valueFields) } : draft;
-    try { onSave(harnessNotebookCellSchema.parse(value)); } catch (caught) { setError(caught instanceof Error ? caught.message : "单元格式无效"); }
+    try { onSave(draft.kind === "transform" && recipeCode ? applyRecipeSource(draft, recipeSource) : notebookCellSchema.parse(value)); } catch (caught) { setError(caught instanceof Error ? caught.message : "单元格式无效"); }
+  }
+  function changeRecipeMode(code: boolean) {
+    if (draft.kind !== "transform" || code === recipeCode) return;
+    try {
+      if (code) setRecipeSource(JSON.stringify(draft.steps, null, 2));
+      else setDraft(applyRecipeSource(draft, recipeSource));
+      setRecipeCode(code); setError("");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "处理规则无效"); }
   }
   const model = draft.kind === "semanticQuery" ? models.find((item) => item.id === draft.modelId) : undefined;
   return <form className="notebook-editor" onSubmit={submit}>
@@ -40,15 +53,24 @@ export function NotebookCellEditor({ cell, previous, sources, models, connection
           <input type="checkbox" checked={draft.inputCellIds.includes(item.id)} onChange={(event) => patch({ inputCellIds: event.target.checked ? [...draft.inputCellIds, item.id] : draft.inputCellIds.filter((id) => id !== item.id) })} />
           <code>{item.outputName}</code><span>{item.title}</span>
         </label>)}</div>
-        <label className="notebook-wide">SQL<textarea aria-label="SQL" className="notebook-code" spellCheck={false} value={draft.sql} maxLength={10_000} required rows={8} onChange={(event) => patch({ sql: event.target.value })} /></label>
+        <div className="notebook-wide"><span className="notebook-code-label">SQL</span><NotebookCodeEditor label="SQL" value={draft.sql} onChange={(sql) => patch({ sql })} /></div>
         <small className="notebook-wide">本地 DuckDB · 只读查询 · 单条 SELECT / WITH · 8 秒超时 · 最多 1000 行。字段名使用双引号。</small>
+      </>}
+      {draft.kind === "python" && <>
+        <div className="notebook-input-list"><b>输入 DataFrame</b>{outputs.map((item) => <label key={item.id}>
+          <input type="checkbox" checked={draft.inputCellIds.includes(item.id)} onChange={(event) => patch({ inputCellIds: event.target.checked ? [...draft.inputCellIds, item.id] : draft.inputCellIds.filter((id) => id !== item.id) })} />
+          <code>{item.outputName}</code><span>{item.title}</span>
+        </label>)}</div>
+        <label className="notebook-wide">原始文件（每行一个文件名，可选）<textarea aria-label="Python 原始文件" rows={2} value={draft.fileNames.join("\n")} onChange={(event) => patch({ fileNames: event.target.value.split(/\r?\n/u).filter(Boolean) })} /></label>
+        <div className="notebook-wide"><span className="notebook-code-label">Python</span><NotebookCodeEditor label="Python" value={draft.code} maxLength={20000} onChange={(code) => patch({ code })} /></div>
+        <small className="notebook-wide">已提供 pd（pandas）、np（NumPy）和 openpyxl。把结果 DataFrame 赋给 {draft.outputName}，后续 SQL 可直接使用。原始文件来自本次导入或当前项目，使用 <code>pd.read_excel(files[&quot;文件名.xlsx&quot;])</code> 读取。每次运行重新计算，单元限时 10 秒。</small>
       </>}
       {draft.kind === "warehouseSql" && <>
         <label>数据库连接<select aria-label="数据库连接" value={draft.connectionId} onChange={(event) => patch({ connectionId: event.target.value })}>
           {!connections.some((item) => item.id === draft.connectionId) && <option value={draft.connectionId}>连接不可用，请重新选择</option>}
           {connections.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>)}
         </select></label>
-        <label className="notebook-wide">SQL<textarea aria-label="SQL" className="notebook-code" value={draft.sql} rows={8} maxLength={10_000} required spellCheck={false} onChange={(event) => patch({ sql: event.target.value })} /></label>
+        <div className="notebook-wide"><span className="notebook-code-label">SQL</span><NotebookCodeEditor label="SQL" value={draft.sql} onChange={(sql) => patch({ sql })} /></div>
         <small className="notebook-wide">查询所选数据库的表；最多返回 1000 行。需要继续处理时，请先在数据库完成大表筛选和聚合。</small>
       </>}
       {"inputCellId" in draft && <label>上游输出<select aria-label="上游输出" value={draft.inputCellId} onChange={(event) => patch({ inputCellId: event.target.value })}>
@@ -65,7 +87,10 @@ export function NotebookCellEditor({ cell, previous, sources, models, connection
         <label>结果上限<input type="number" value={draft.limit} min={1} max={100} onChange={(event) => patch({ limit: Number(event.target.value) })} /></label>
       </>}
       {draft.kind === "table" && <label className="notebook-wide">展示字段（逗号分隔，使用结果中的字段名）<input value={lists.columns} required onChange={(event) => setLists({ ...lists, columns: event.target.value })} /></label>}
-      {draft.kind === "transform" && <RecipeStepsEditor steps={draft.steps} onChange={(steps) => patch({ steps })} />}
+      {draft.kind === "transform" && <div className="notebook-wide">
+        <div className="notebook-recipe-mode" role="group" aria-label="处理规则编辑方式"><span>处理规则</span><button type="button" aria-pressed={!recipeCode} onClick={() => changeRecipeMode(false)}>表单</button><button type="button" aria-pressed={recipeCode} onClick={() => changeRecipeMode(true)}>规则代码</button></div>
+        {recipeCode ? <><NotebookCodeEditor label="DataRecipe 规则代码" value={recipeSource} onChange={setRecipeSource} maxLength={60000} /><small>JSON 规则与表单同步，保存时检查字段和步骤格式。</small></> : <RecipeStepsEditor steps={draft.steps} onChange={(steps) => patch({ steps })} />}
+      </div>}
       {draft.kind === "chart" && <>
         <label>图表类型<select aria-label="图表类型" value={draft.chartType} onChange={(event) => patch({ chartType: event.target.value as typeof draft.chartType })}>{[["bar", "柱状图"], ["line", "折线图"], ["area", "面积图"], ["pie", "饼图"], ["donut", "环形图"]].map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
         <label>分类字段<input value={draft.categoryField} required onChange={(event) => patch({ categoryField: event.target.value })} /></label>

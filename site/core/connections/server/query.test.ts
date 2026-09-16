@@ -89,6 +89,16 @@ describe("connection authorization and provider adapters", () => {
   it("normalizes the table directory through the same authorized execution path", async () => {
     pg.fields = ["table_schema", "table_name", "column_name", "data_type"].map((name) => ({ name, dataTypeID: 25 }));
     pg.rows = [["public", "sales", "amount", "numeric"]];
-    expect(await inspectConnectionSchema({ connectionId: "pg_test", project: null })).toEqual({ columns: [{ table_schema: "public", table_name: "sales", column_name: "amount", data_type: "numeric" }], truncated: false });
+    const schema = await inspectConnectionSchema({ connectionId: "pg_test", project: null, refresh: true });
+    expect(schema).toMatchObject({ columns: [{ table_catalog: "test", table_schema: "public", table_name: "sales", column_name: "amount", data_type: "numeric",
+      table_id: expect.stringMatching(/^relation_/u), column_id: expect.stringMatching(/^column_/u) }], truncated: false,
+      catalog: { complete: true, freshness: "fresh", tableCount: 1 } });
+    const count = pg.connections;
+    expect(await inspectConnectionSchema({ connectionId: "pg_test", project: null })).toEqual(schema);
+    expect(pg.connections).toBe(count);
+    pg.fields = [{ name: "amount", dataTypeID: 23 }]; pg.rows = [["230"]];
+    const queried = await executeConnectionSql({ connectionId: "pg_test", project: null, sql: "SELECT amount FROM sales" });
+    expect(queried.rows).toEqual([{ amount: 230 }]);
+    expect(queried.catalogRef).toMatchObject({ id: schema.catalog!.id, revision: schema.catalog!.revision });
   });
 });

@@ -110,8 +110,8 @@ export function createHarnessNotebookArtifact(
       continue;
     }
 
-    if (cell.kind === "sql") {
-      normalizeNotebookSql(cell.sql);
+    if (cell.kind === "sql" || cell.kind === "python") {
+      if (cell.kind === "sql") normalizeNotebookSql(cell.sql);
       for (const id of cell.inputCellIds) if (!outputs.has(id)) throw new StudioValidationError("Notebook 草稿校验失败", ["SQL 必须引用排在它之前的表格输出：" + id]);
       outputs.set(cell.id, { fields: null, sourceDataSourceId: "" });
       lineage.push({ cellId: cell.id, dependsOn: cell.inputCellIds });
@@ -156,7 +156,7 @@ export function createHarnessNotebookArtifact(
     requireFields(cell.title, upstream.fields, [cell.categoryField, ...cell.valueFields]);
   }
 
-  if (!usedSourceIds.size && !usedConnectionIds.size) {
+  if (!usedSourceIds.size && !usedConnectionIds.size && !draft.cells.some((cell) => cell.kind === "python")) {
     throw new StudioValidationError("Notebook 草稿校验失败", ["Notebook 至少需要一个当前工作界面的 Data 单元。"]);
   }
 

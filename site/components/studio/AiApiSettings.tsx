@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { containDialogFocus } from "./dialog-focus";
 
 interface AiApiStatus {
   configured: boolean;
@@ -16,8 +17,12 @@ async function readResponse(response: Response): Promise<AiApiStatus> {
   return payload;
 }
 
-export function AiApiSettings() {
-  const [open, setOpen] = useState(false);
+export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger = false }: { open?: boolean; onOpenChange?: (open: boolean) => void; hideTrigger?: boolean } = {}) {
+  const [localOpen, setLocalOpen] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
   const [editing, setEditing] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState<AiApiStatus | null>(null);
@@ -27,6 +32,8 @@ export function AiApiSettings() {
 
   useEffect(() => {
     if (!open) return;
+    const element = dialog.current;
+    element?.showModal();
     const controller = new AbortController();
     void fetch("/api/settings/ai", { cache: "no-store", signal: controller.signal })
       .then(readResponse)
@@ -34,12 +41,20 @@ export function AiApiSettings() {
       .catch((caught) => {
         if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "无法读取 AI API 配置。");
       });
-    return () => controller.abort();
+    return () => { controller.abort(); element?.close(); };
   }, [open]);
 
   function openSettings() {
     setError("");
     setOpen(true);
+  }
+
+  function closeSettings() {
+    dialog.current?.close();
+    setApiKey("");
+    setError("");
+    setOpen(false);
+    trigger.current?.focus();
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -121,7 +136,8 @@ export function AiApiSettings() {
 
   return (
     <>
-      <button
+      {!hideTrigger && <button
+        ref={trigger}
         type="button"
         className="ai-api-settings-trigger"
         aria-label="配置 AI API"
@@ -129,19 +145,19 @@ export function AiApiSettings() {
         onClick={openSettings}
       >
         <span aria-hidden="true">⚙</span> API
-      </button>
+      </button>}
       {open && (
-        <div className="ai-api-settings-overlay" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !busy) setOpen(false);
+        <dialog ref={dialog} className="ai-api-settings-overlay" aria-labelledby="ai-api-settings-title" onKeyDown={containDialogFocus} onCancel={event => { event.preventDefault(); if (!busy) closeSettings(); }} onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !busy) closeSettings();
         }}>
-          <section className="ai-api-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-api-settings-title">
+          <section className="ai-api-settings-dialog">
             <header>
               <div>
                 <small>LOCAL AI CREDENTIAL</small>
                 <h2 id="ai-api-settings-title">AI 接口配置</h2>
                 <p>配置 DeepSeek API Key，供本机 Harness 和 AI 规划器使用。</p>
               </div>
-              <button type="button" aria-label="关闭 AI API 配置" disabled={busy} onClick={() => setOpen(false)}>×</button>
+              <button type="button" aria-label="关闭 AI API 配置" disabled={busy} onClick={closeSettings}>×</button>
             </header>
 
             {status?.configured && !editing ? (
@@ -202,10 +218,10 @@ export function AiApiSettings() {
               {status?.configured && !editing && <button type="button" disabled={busy} onClick={() => setEditing(true)}>更换密钥</button>}
               {status?.source === "runtime" && !editing && <button type="button" disabled={busy} onClick={() => { void clearRuntimeKey(); }}>清除临时密钥</button>}
               {editing && status?.configured && <button type="button" disabled={busy} onClick={() => { setApiKey(""); setEditing(false); }}>取消更换</button>}
-              <button type="button" disabled={busy} onClick={() => setOpen(false)}>完成</button>
+              <button type="button" disabled={busy} onClick={closeSettings}>完成</button>
             </footer>
           </section>
-        </div>
+        </dialog>
       )}
     </>
   );

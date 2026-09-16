@@ -9,6 +9,7 @@ import { harnessMcpToolSummarySchema, type HarnessMcpToolSummary } from "./mcp/c
 import { harnessNotebookArtifactSchema, type HarnessNotebookArtifact } from "./notebook-contracts";
 import { notebookDocumentSchema } from "@/core/notebook/contracts";
 import { harnessAnalysisPlanArtifactSchema, type HarnessAnalysisPlanArtifact } from "./analysis-plan-contracts";
+import type { HarnessInputInspection } from "./input-inspector";
 
 export const MAX_HARNESS_INSTRUCTION_LENGTH = 1_000;
 export const MAX_HARNESS_REQUEST_BYTES = 180_000;
@@ -19,8 +20,8 @@ export const MAX_HARNESS_EVENTS = 80;
 export const MAX_HARNESS_TASKS = 20;
 
 export const DEFAULT_HARNESS_LIMITS = {
-  maxLoops: 8,
-  maxModelCalls: 8,
+  maxLoops: null,
+  maxModelCalls: null,
   maxToolCalls: 6,
   modelRequestTimeoutMs: 25_000,
   toolCallTimeoutMs: 10_000,
@@ -67,6 +68,12 @@ export const harnessToolNameSchema = z.enum([
   "querySemanticModel",
   "createAnalysisPlan",
   "createNotebookDraft",
+  "cellSearch",
+  "editNotebookCells",
+  "createPythonCell",
+  "getKernelPackagesInfo",
+  "runNotebookCells",
+  "submitNotebookDraft",
   "inspectConnectionSchema",
   "inspectFields",
   "transformSpreadsheetData",
@@ -218,11 +225,11 @@ export const harnessContextLimitSchema = z.enum([
 export type HarnessContextLimit = z.infer<typeof harnessContextLimitSchema>;
 
 export const harnessContextBudgetSchema = z.object({
-  maxRequestInputChars: z.number().int().positive(),
+  maxRequestInputChars: z.number().int().positive().nullable(),
   maxToolResultChars: z.number().int().positive(),
   maxToolResultEntries: z.number().int().positive(),
-  maxTotalInputChars: z.number().int().positive(),
-  maxTotalPromptTokens: z.number().int().positive(),
+  maxTotalInputChars: z.number().int().positive().nullable(),
+  maxTotalPromptTokens: z.number().int().positive().nullable(),
 }).strict();
 
 export const harnessContextUsageSchema = z.object({
@@ -241,7 +248,7 @@ export const harnessContextUsageSchema = z.object({
     toolObservationEntries: z.number().int().nonnegative().default(0),
     budgetCheck: z.literal("beforeModel").default("beforeModel"),
     compacted: z.boolean(),
-  }).strict()).max(8),
+  }).strict()),
 }).strict();
 
 export const harnessSkillSummarySchema = z.object({
@@ -262,7 +269,7 @@ export type HarnessToolFailureKind = z.infer<typeof harnessToolFailureKindSchema
 
 export const harnessWorkingMemorySchema = z.object({
   goal: z.string().min(1).max(420),
-  iteration: z.number().int().min(1).max(DEFAULT_HARNESS_LIMITS.maxLoops),
+  iteration: z.number().int().min(1),
   confirmedDataSources: z.array(z.object({
     id: z.string().min(1).max(160),
     rowCount: z.number().int().nonnegative().optional(),
@@ -656,6 +663,7 @@ export interface HarnessConversationBrief {
 
 export interface HarnessPlannerInput {
   instruction: string;
+  inputInspection?: HarnessInputInspection;
   conversationBrief?: HarnessConversationBrief;
   semanticIntent?: HarnessSemanticIntentDecision;
   fallbackPlan: HarnessExecutionPlan;

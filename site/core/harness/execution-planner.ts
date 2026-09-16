@@ -11,6 +11,7 @@ import {
 import { plannedHarnessToolSequence, type HarnessRecoveryContext } from "./context-selector";
 import { sanitizeHarnessText } from "./security";
 import { requiresHarnessVisualVerification } from "./task-verifier";
+import { canonicalNotebookTool } from "./notebook-cell-tools";
 
 const toolObjectives: Record<HarnessToolName, string> = {
   analyzeEdsReports: "读取并验证 EDS 派生汇总",
@@ -22,6 +23,12 @@ const toolObjectives: Record<HarnessToolName, string> = {
   querySemanticModel: "按选定语义模型的指标口径查询数据",
   createAnalysisPlan: "规划并校验分析目标、步骤和交付物",
   createNotebookDraft: "生成并校验 Notebook 单元依赖草稿",
+  cellSearch: "搜索 Notebook 单元和相邻定义",
+  editNotebookCells: "修改任务内单元草稿并检查依赖",
+  createPythonCell: "创建或更新 Python 分析单元草稿",
+  getKernelPackagesInfo: "检查 Python 环境与固定包版本",
+  runNotebookCells: "执行单元并核对实际结果",
+  submitNotebookDraft: "提交已试运行的单元修改对照",
   inspectConnectionSchema: "读取已授权连接的表和字段结构",
   inspectFields: "验证任务所需字段与数据质量",
   transformSpreadsheetData: "处理数据并生成主页面表格结果",
@@ -136,6 +143,9 @@ export function createModelHarnessExecutionPlan(
 }
 
 export function orderHarnessToolsByPlan(plan: HarnessExecutionPlan, availableTools: HarnessToolName[]): HarnessToolName[] {
+  // Cell editing is an iterative state machine: the current draft/run version,
+  // not a tool's first observation, decides the next allowed operation.
+  if (plan.steps.some((step) => step.toolName === "submitNotebookDraft")) return availableTools;
   const available = new Set(availableTools);
   const ordered = plan.steps.flatMap((step) => step.kind === "tool" && step.toolName && available.has(step.toolName)
     && !(step.toolName === "inspectConnectionSchema" && step.status === "completed")
@@ -151,7 +161,7 @@ export function syncHarnessExecutionPlan(
   failedAttempts: HarnessWorkingMemory["failedAttempts"],
   recovery?: HarnessRecoveryContext,
 ): HarnessExecutionPlan {
-  const completedTools = new Set(observations.map((observation) => observation.toolName));
+  const completedTools = new Set(observations.map((observation) => canonicalNotebookTool(observation.toolName)));
   const exhaustedTools = new Set(failedAttempts
     .filter((attempt) => attempt.status === "exhausted")
     .map((attempt) => attempt.toolName));
@@ -186,7 +196,7 @@ export function syncHarnessExecutionPlan(
   const toolSteps = plannedToolSteps.map((step) => {
     const toolName = step.toolName;
     const attempts = toolName ? failedAttempts.filter((attempt) => attempt.toolName === toolName).length : 0;
-    if (toolName && completedTools.has(toolName) && !(toolName === "callMcpTool" && executorTool === toolName)) return { ...step, status: "completed" as const, attempts };
+    if (toolName && completedTools.has(toolName) && !(["callMcpTool", "cellSearch", "editNotebookCells", "runNotebookCells"].includes(toolName) && executorTool === toolName)) return { ...step, status: "completed" as const, attempts };
     if (toolName && exhaustedTools.has(toolName)) return { ...step, status: "failed" as const, attempts };
     if (toolName === executorTool && !activated) {
       activated = true;
@@ -210,7 +220,8 @@ export function syncHarnessExecutionPlan(
     revision: recovery ? Math.max(plan.revision, recovery.attempt + 1) : plan.revision,
     steps,
     currentStepId: steps.find((step) => step.status === "active")?.id ?? finalizeStep.id,
-    allowedTools: executorTool ? [...new Set([executorTool, ...allowedTools.filter((tool) => tool === "inspectConnectionSchema")])] : [],
+    allowedTools: executorTool ? [...new Set([executorTool, ...allowedTools.filter((tool) => tool === "inspectConnectionSchema"
+      || (plan.steps.some((step) => step.toolName === "submitNotebookDraft") && ["cellSearch", "editNotebookCells", "createPythonCell", "getKernelPackagesInfo", "runNotebookCells", "submitNotebookDraft"].includes(tool)))])] : [],
     ...(recoveryReason ? { replanReason: sanitizeHarnessText(recoveryReason).slice(0, 500) } : {}),
   });
 }

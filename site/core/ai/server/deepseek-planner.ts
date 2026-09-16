@@ -20,10 +20,9 @@ import {
 } from "../operation-output";
 import { buildPlannerContext, DEEPSEEK_CHANGESET_SYSTEM_PROMPT } from "../planner-context";
 
-export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-export const DEEPSEEK_CHAT_COMPLETIONS_URL = `${DEEPSEEK_BASE_URL}/chat/completions`;
+import { DEEPSEEK_CHAT_COMPLETIONS_URL, MAX_DEEPSEEK_RESPONSE_BYTES } from "./deepseek-endpoint";
+export { DEEPSEEK_BASE_URL, DEEPSEEK_CHAT_COMPLETIONS_URL, MAX_DEEPSEEK_RESPONSE_BYTES } from "./deepseek-endpoint";
 export const DEFAULT_DEEPSEEK_TIMEOUT_MS = 20_000;
-export const MAX_DEEPSEEK_RESPONSE_BYTES = 512 * 1024;
 export const DEEPSEEK_PLANNER_TOKEN_BUDGET = {
   maxPromptTokens: 12_000,
   maxCompletionTokens: 3_000,

@@ -143,6 +143,7 @@ export interface StudioDatasetActionsContext extends WorkspaceFeedback,
   setActivePageId: StateSetter<string>;
   setPersistenceNotice: StateSetter<string | null>;
   persistExplicitly: PersistWorkspace;
+  flushProject?: () => Promise<void>;
   handleGenerateAiPlan: ReturnType<typeof createStudioAssistantActions>["handleGenerateAiPlan"];
 }
 
@@ -159,7 +160,7 @@ export function createStudioDatasetActions(context: StudioDatasetActionsContext)
     persistExplicitly, handleGenerateAiPlan,
   } = context;
 
-  function handleCreateEdsWorkspace(results: EdsAnalysisResponse[], activeResultIndex: number, source: File, allowAiRawAccess: boolean) {
+  function handleCreateEdsWorkspace(results: EdsAnalysisResponse[], activeResultIndex: number, source: File) {
     if (role === "viewer") throw new Error("查看者无权生成 EDS 工作区看板，请切换为编辑者或管理员。");
     aiRequestAbortRef.current?.abort();
     const current = latestDatasetWorkspaceRef.current;
@@ -209,7 +210,6 @@ export function createStudioDatasetActions(context: StudioDatasetActionsContext)
         workspaceId: EDS_WORKSPACE_PAGE_ID,
         file: source,
         sheetNames: [...new Set(results.flatMap((result) => result.summary.sourceSheets))],
-        aiRawAccess: allowAiRawAccess,
       },
     ]);
     setAuditRecords(nextAuditRecords);
@@ -223,9 +223,7 @@ export function createStudioDatasetActions(context: StudioDatasetActionsContext)
     setPuckSessionKey((value) => value + 1);
     setIsDataSourceOpen(false);
     setAiInstruction("检查 EDS 分析数据，说明异常次数最多的线体和累计时间最长的异常类型。不要修改页面。");
-    setAiMessage(allowAiRawAccess
-      ? "EDS 派生汇总已进入 AI 数据上下文；原始工作簿仅保留在本次浏览器会话，并已授权 Harness 在相关提问中完整扫描所有数据行、执行结构化查询。原文件不会写入聊天、localStorage、备份或审计正文。"
-      : "EDS 派生汇总已进入 AI 数据上下文；原始工作簿仅挂载在本次会话的“原始资料”区，AI 完整扫描尚未授权。原文件不会进入本地持久化。");
+    setAiMessage("EDS 分析看板已生成。可继续分析派生汇总，也可按需查询完整原始工作簿；原件保留在当前浏览器会话。");
     setAiMetadata(null);
     setAiRequestStatus("idle");
     setAiRequestError(null);
@@ -312,7 +310,7 @@ export function createStudioDatasetActions(context: StudioDatasetActionsContext)
     const isEdsDataSource = Boolean(edsWorkspace && dataSourceId.startsWith("dataset_eds_"));
     const instruction = isEdsDataSource
       ? EDS_AI_ANALYSIS_INSTRUCTION
-      : workbook?.aiRawAccess
+      : workbook
         ? `请完整分析原始工作簿和当前数据集“${source.name}”。先检查工作表结构、字段类型、数据质量和关键统计，再说明主要分布、异常点、可能原因及可执行建议，并引用具体数值。只进行数据分析，不要修改页面，不要创建 ChangeSet。`
         : `请分析当前数据集“${source.name}”。先检查字段结构与数据质量，再计算关键统计，说明主要分布、异常点、可能原因及可执行建议，并引用具体数值。只进行数据分析，不要修改页面，不要创建 ChangeSet。`;
     setActiveDataSourceId(dataSourceId);
@@ -320,7 +318,7 @@ export function createStudioDatasetActions(context: StudioDatasetActionsContext)
     setValidationError(null);
     void handleGenerateAiPlan(instruction, undefined, {
       dataSourceId,
-      ...(workbook?.aiRawAccess ? { rawWorkbook: workbook.file } : {}),
+      ...(workbook ? { rawWorkbook: workbook.file } : {}),
     });
   }
 
@@ -403,6 +401,15 @@ export function createStudioDatasetActions(context: StudioDatasetActionsContext)
     if (appSpecUsesDataSource(beforeDelete.execution.present, dataSourceId) || beforeDelete.execution.history.some((entry) => appSpecUsesDataSource(entry.appSpec, dataSourceId))) {
       throw new Error("该数据源仍被页面组件或变更历史引用，无法删除。请先撤销相关绑定。");
     }
+    if (beforeDelete.execution.preview && appSpecUsesDataSource(beforeDelete.execution.preview.appSpec, dataSourceId)) {
+      throw new Error("该数据源仍被待确认预览引用，请先取消预览或解除对应绑定。");
+    }
+    if (Object.values(beforeDelete.dataProduct.notebooks ?? {}).some((book) => book.cells.some((cell) => cell.kind === "data" && cell.sourceDataSourceId === dataSourceId))) {
+      throw new Error("该数据源仍被 Notebook 引用，请先删除或更换对应数据单元。");
+    }
+    // Keep the server's reference check in sync with recent Notebook/model edits.
+    // A failed/conflicting save must stop deletion, not discard local changes.
+    if (context.flushProject) await context.flushProject();
     await deleteUploadedDataset(dataSourceId);
     const current = latestDatasetWorkspaceRef.current;
     const next = removeUploadedDatasetFromWorkspace(current, dataSourceId);
@@ -421,7 +428,8 @@ export function createStudioDatasetActions(context: StudioDatasetActionsContext)
       next.dataProduct,
       current.harnessTasks,
     );
-    setSaveLabel(persistence.persisted ? "已保存 · 临时数据源已删除" : "已删除 · 当前页面未持久化");
+    const deletionLabel = activeDataSource.ephemeral ? "临时数据源已删除" : "数据表已移入回收站";
+    setSaveLabel(persistence.persisted ? `已保存 · ${deletionLabel}` : `${deletionLabel} · 当前页面未持久化`);
   }
 
   return { handleCreateEdsWorkspace, handleSelectEdsWorkspaceReport, handleAnalyzeEdsReports, handleAnalyzeDataSource, applyUploadedDescriptor, handleCsvUploaded, handleConfirmDatasetAiAccess, handleDeleteDataset };

@@ -8,7 +8,7 @@ import { DatasetAiAccessPolicyConflictError, DatasetAiAccessRevokedError, type D
 import type { OwnershipScope } from "@/core/identity/ownership";
 import { JsonFileSnapshotAdapter, configuredSnapshotAdapter } from "@/core/persistence/server/json-file-snapshot";
 import { loadStudioStateSafely, parseStudioPersistedState, type StudioPersistedState } from "@/core/repository/studio-repository";
-import { PROJECT_FORMAT, PROJECT_LIMITS, projectManifestSchema, type ProjectManifest, type ProjectSession } from "../contracts";
+import { PROJECT_FORMAT, PROJECT_LIMITS, projectManifestSchema, type ProjectFile, type ProjectManifest, type ProjectSession } from "../contracts";
 import { projectDatasetReferences } from "../references";
 
 export class ProjectError extends Error {
@@ -36,7 +36,14 @@ export function checkedProjectPath(input: string, allowMissingLeaf = false): str
 
 export class LocalProjectStore {
   private readonly rootIdentity: { dev: number; ino: number };
-  constructor(readonly root: string) { checkedProjectPath(root); const stat = lstatSync(root); this.rootIdentity = { dev: stat.dev, ino: stat.ino }; }
+  constructor(readonly root: string, previous?: LocalProjectStore) {
+    checkedProjectPath(root);
+    const stat = lstatSync(root);
+    // A hot reload may replace the implementation, but must never re-trust a
+    // directory that was replaced underneath an already-open project handle.
+    this.rootIdentity = previous?.rootIdentity ?? { dev: stat.dev, ino: stat.ino };
+    if (stat.dev !== this.rootIdentity.dev || stat.ino !== this.rootIdentity.ino) throw new ProjectError("项目文件夹已被替换，请重新打开项目", 409);
+  }
   private check() {
     checkedProjectPath(this.root);
     const stat = lstatSync(this.root);
@@ -201,7 +208,7 @@ export class LocalProjectStore {
       return descriptor;
     });
   }
-  saveOriginal(name: string, bytes: Buffer, datasetId: string) {
+  saveOriginal(name: string, bytes: Buffer, datasetId: string): ProjectFile {
     const extension = /\.xlsx$/iu.test(name) ? "xlsx" : /\.csv$/iu.test(name) ? "csv" : null;
     if (!extension || !bytes.length || bytes.length > PROJECT_LIMITS.fileBytes || /[\\/\u0000-\u001f]/u.test(name) || name.length > 255) throw new ProjectError("只接受不超过 10 MiB 的 CSV / XLSX 原始文件");
     if (extension === "xlsx" && bytes.subarray(0, 2).toString() !== "PK") throw new ProjectError("XLSX 文件格式无效");
@@ -209,7 +216,13 @@ export class LocalProjectStore {
       if (!manifest.tables.some((entry) => entry.descriptor.datasetId === datasetId && !entry.deletedAt)) throw new ProjectError("原始文件必须关联当前项目的数据表");
       const hash = digest(bytes);
       const existing = manifest.files.find((entry) => entry.sha256 === hash && entry.name === name);
-      if (existing) { existing.datasetIds = [...new Set([...existing.datasetIds, datasetId])]; return existing; }
+      if (existing) {
+        // Re-importing an archived original explicitly restores that file.
+        const saved = this.readBytes("files", existing.file, PROJECT_LIMITS.fileBytes);
+        if (digest(saved) !== existing.sha256) throw new ProjectError("原始文件校验失败", 409);
+        delete existing.deletedAt;
+        existing.datasetIds = [...new Set([...existing.datasetIds, datasetId])]; return existing;
+      }
       const id = randomUUID();
       const entry = { id, name, file: `file-${id}.${extension}`, bytes: bytes.length, sha256: hash, datasetIds: [datasetId], savedAt: new Date().toISOString() };
       projectManifestSchema.parse({ ...manifest, files: [...manifest.files, entry] });
@@ -218,11 +231,27 @@ export class LocalProjectStore {
     });
   }
   getOriginal(id: string) {
-    const entry = this.read().files.find((file) => file.id === id);
+    const entry = this.read().files.find((file) => file.id === id && !file.deletedAt);
     if (!entry) throw new ProjectError("原始文件不存在", 404);
     const bytes = this.readBytes("files", entry.file, PROJECT_LIMITS.fileBytes);
     if (digest(bytes) !== entry.sha256) throw new ProjectError("原始文件校验失败", 409);
     return { entry, bytes };
+  }
+  archiveOriginal(id: string) {
+    this.edit((manifest) => {
+      const entry = manifest.files.find((file) => file.id === id);
+      if (!entry) throw new ProjectError("原始文件不存在", 404);
+      entry.deletedAt ??= new Date().toISOString();
+    });
+  }
+  restoreOriginal(id: string) {
+    this.edit((manifest) => {
+      const entry = manifest.files.find((file) => file.id === id);
+      if (!entry) throw new ProjectError("原始文件不存在", 404);
+      const bytes = this.readBytes("files", entry.file, PROJECT_LIMITS.fileBytes);
+      if (digest(bytes) !== entry.sha256) throw new ProjectError("原始文件校验失败，未恢复", 409);
+      delete entry.deletedAt;
+    });
   }
   datasets(ownership: OwnershipScope): DatasetRepository & { assertAiAccessPolicies: (owner: OwnershipScope, expected: ReadonlyArray<{ datasetId: string; policy: string }>) => void } {
     const checkOwner = (owner: OwnershipScope) => { if (owner.ownerId !== ownership.ownerId || owner.tenantId !== ownership.tenantId) throw new ProjectError("项目所有者不匹配", 403); };
@@ -277,6 +306,11 @@ export function projectByHandle(handle: string): LocalProjectStore {
   const entry = recentProjects().find((item) => item.handle === handle);
   if (!entry) throw new ProjectError("项目尚未打开，请先选择项目文件夹", 404);
   let store = stores.get(handle);
-  if (!store) { store = new LocalProjectStore(checkedProjectPath(entry.path)); stores.set(handle, store); }
+  // globalThis survives dev reloads. Reusing its old methods also reuses stale
+  // schemas/error constructors, turning recoverable ProjectErrors into HTTP 500.
+  if (!(store instanceof LocalProjectStore)) {
+    store = new LocalProjectStore(checkedProjectPath(entry.path), store);
+    stores.set(handle, store);
+  }
   return store;
 }

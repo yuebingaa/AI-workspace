@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROJECT_FORMAT, PROJECT_HEADER, type ProjectSession } from "./contracts";
-import { ProjectStudioRepository, projectHeaders, setActiveProjectHandle } from "./client";
+import { ProjectStudioRepository, projectHeaders, setActiveProjectHandle, setProjectFileArchived } from "./client";
 import { projectState } from "./test-fixture";
 
 function session(): ProjectSession {
@@ -10,6 +10,16 @@ function session(): ProjectSession {
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); setActiveProjectHandle(null); });
 describe("project save queue", () => {
+  it("pins file mutations to their project and reports failures without a success receipt", async () => {
+    const selected = session(), fileId = randomUUID();
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json(selected))
+      .mockResolvedValueOnce(Response.json({ error: { message: "项目写入被占用" } }, { status: 409 }));
+    vi.stubGlobal("fetch", fetch); setActiveProjectHandle(randomUUID());
+    expect(await setProjectFileArchived(selected.handle, fileId, true)).toEqual(selected);
+    expect(fetch.mock.calls[0][1].headers[PROJECT_HEADER]).toBe(selected.handle);
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ action: "archiveFile", fileId });
+    await expect(setProjectFileArchived(selected.handle, fileId, false)).rejects.toThrow(/写入被占用/);
+  });
   it("does not rewrite an unchanged opened project", async () => {
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     const repo = new ProjectStudioRepository(session(), vi.fn());

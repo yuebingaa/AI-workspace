@@ -1,5 +1,5 @@
 import { BoundedBinaryError, readBoundedBinaryBody } from "@/core/http/bounded-binary";
-import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { readBoundedUtf8Body } from "@/core/http/bounded-body";
 import {
   EXCEL_EXPORT_MAX_FILE_BYTES,
   encodeExcelDownloadFileName,

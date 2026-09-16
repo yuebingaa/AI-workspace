@@ -12,6 +12,7 @@ import {
 } from "./contracts";
 import { plannedHarnessToolSequence, resolveHarnessIntent } from "./context-selector";
 import { sanitizeHarnessText } from "./security";
+import { isNotebookInspection, canonicalNotebookTool } from "./notebook-cell-tools";
 
 export type HarnessVerificationOutcome = "completed" | "awaitingConfirmation";
 
@@ -43,6 +44,7 @@ export function requiresHarnessVisualVerification(
 ): boolean {
   if (semanticIntent?.mode === "conversation") return false;
   if (semanticIntent?.requiresVisualVerification === true) return true;
+  if (isNotebookInspection(request) && !/渲染|布局|颜色|响应式|遮挡|溢出|坐标轴|图例|视觉|好看/iu.test(request.instruction)) return false;
   if (semanticIntent?.mode === "changePreview" && semanticIntent.changeTarget !== "none") return true;
   if (semanticIntent && (
     semanticIntent.componentKind === "chart"
@@ -94,7 +96,7 @@ export function pendingHarnessTaskVerification(): HarnessTaskVerification {
 
 export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskVerification {
   const requiredTools = plannedHarnessToolSequence(input.request, input.semanticIntent);
-  const observedTools = new Set(input.observations.map((observation) => observation.toolName));
+  const observedTools = new Set(input.observations.map((observation) => canonicalNotebookTool(observation.toolName)));
   const missingTools = requiredTools.filter((toolName) => !observedTools.has(toolName));
   const unresolvedPlanSteps = input.plan.steps.filter((step) => step.kind === "tool"
     && step.toolName
@@ -106,10 +108,10 @@ export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskV
     || toolName === "updateEdsTablePreview");
   const explicitChartChangeGoal = explicitChartChangeGoalPattern.test(input.request.instruction)
     && !/不要(?:修改|创建|新增|增加|添加|生成)[^，。；]*/u.test(input.request.instruction);
-  const requiresChangeSet = !requiredTools.includes("createNotebookDraft") && (plannedChangeSet || explicitChartChangeGoal);
+  const requiresChangeSet = !requiredTools.includes("createNotebookDraft") && !requiredTools.includes("submitNotebookDraft") && (plannedChangeSet || explicitChartChangeGoal);
   const requiresExport = requiredTools.includes("exportDataRecipeToExcel");
   const requiresAnalysisPlan = requiredTools.includes("createAnalysisPlan");
-  const requiresNotebook = requiredTools.includes("createNotebookDraft");
+  const requiresNotebook = requiredTools.includes("createNotebookDraft") || requiredTools.includes("submitNotebookDraft");
   const message = sanitizeHarnessText(input.candidate.message).trim();
   const responseIsSpecific = message.length > 0
     && (input.candidate.outcome === "awaitingConfirmation"
@@ -132,7 +134,7 @@ export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskV
     && analysisPlanData.steps.length > 0,
   );
   const notebookReady = !requiresNotebook || input.observations.some((observation) => {
-    if (observation.toolName !== "createNotebookDraft" || !observation.data || typeof observation.data !== "object") return false;
+    if ((observation.toolName !== "createNotebookDraft" && observation.toolName !== "submitNotebookDraft") || !observation.data || typeof observation.data !== "object") return false;
     const data = observation.data as Record<string, unknown>;
     return typeof data.notebookArtifactId === "string"
       && data.status === "draft"
@@ -162,7 +164,7 @@ export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskV
       "notebook_draft", "Notebook 草稿",
       notebookReady,
       "Notebook 草稿包含已校验的单元和依赖关系。",
-      "缺少经过 createNotebookDraft 校验的 Notebook 草稿证据。",
+      "缺少经过草稿提交工具校验的 Notebook 运行证据。",
     )] : []),
     ...(requiresAnalysisPlan ? [check(
       "analysis_plan", "Analysis Plan",
@@ -195,8 +197,8 @@ export function verifyHarnessTask(input: HarnessTaskVerifierInput): HarnessTaskV
       "deliverable",
       "交付物",
       changeSetReady && exportReady && analysisPlanReady && notebookReady,
-      requiresChangeSet ? "ChangeSet 已生成并停在人工确认。" : requiresExport ? "Excel 导出物已生成。" : requiresNotebook ? "Analysis Plan 和 Notebook 草稿已生成。" : requiresAnalysisPlan ? "Analysis Plan 已生成。" : "当前任务不要求额外交付物。",
-      requiresChangeSet ? "缺少待确认 ChangeSet。" : requiresExport ? "缺少要求的 Excel 导出物。" : requiresNotebook ? "缺少要求的 Analysis Plan 或 Notebook 草稿。" : "缺少要求的 Analysis Plan。",
+      requiresChangeSet ? "ChangeSet 已生成并停在人工确认。" : requiresExport ? "Excel 导出物已生成。" : requiresNotebook ? "Notebook 草稿及本次要求的验证已就绪。" : requiresAnalysisPlan ? "Analysis Plan 已生成。" : "当前任务不要求额外交付物。",
+      requiresChangeSet ? "缺少待确认 ChangeSet。" : requiresExport ? "缺少要求的 Excel 导出物。" : requiresNotebook ? "缺少要求的 Notebook 草稿或验证。" : "缺少要求的 Analysis Plan。",
     ),
     check(
       "formal_app_protection",

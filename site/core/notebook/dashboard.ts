@@ -1,8 +1,8 @@
 import type { AppPage, ChangeSet, DataBinding } from "@/core/models";
 import type { DatasetUploadResponse } from "@/core/datasets/contracts";
-import type { HarnessNotebookCell } from "@/core/harness/notebook-contracts";
+import type { NotebookCell } from "@/core/notebook/definition";
 
-export function notebookDashboardPreview(page: AppPage, cell: HarnessNotebookCell, snapshot: DatasetUploadResponse, id: string): ChangeSet {
+export function notebookDashboardPreview(page: AppPage, cell: NotebookCell, snapshot: DatasetUploadResponse, id: string): ChangeSet {
   const source = snapshot.dataset.source;
   const fieldName = (name: string) => snapshot.dataset.fieldMappings.find((item) => item.originalName === name)?.normalizedName ?? name;
   const binding: DataBinding = { dataSourceId: source.id, field: source.fields[0].name, aggregation: "none", groupBy: null,

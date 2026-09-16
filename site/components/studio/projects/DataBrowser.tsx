@@ -4,30 +4,37 @@ import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { deleteUploadedDataset, loadUploadedDataset } from "@/core/datasets/client";
 import type { DatasetUploadResponse } from "@/core/datasets/contracts";
-import { downloadProjectFile, loadProject, projectRequest } from "@/core/projects/client";
-import { projectSessionSchema, type ProjectManifest } from "@/core/projects/contracts";
+import { downloadProjectFile, loadProject, projectRequest, setProjectFileArchived } from "@/core/projects/client";
+import { projectSessionSchema, type ProjectFile, type ProjectManifest } from "@/core/projects/contracts";
 import { projectDatasetReferences } from "@/core/projects/references";
 import type { SemanticModel } from "@/core/semantic/contracts";
 import type { AppSpec } from "@/core/models";
 import { useLocalProjects } from "./LocalProjectsProvider";
+import { DatasetProvenance } from "../datasets/DatasetProvenance";
+import { fileSize } from "../files/file-list";
+import { FileDeleteDialog } from "../files/FileDeleteDialog";
 
 type Category = "tables" | "files" | "models" | "results" | "trash" | "projects";
 const categories: Array<[Category, string, string]> = [["tables", "数据表", "▦"], ["files", "原始文件", "▤"], ["models", "语义模型", "◇"], ["results", "已保存结果", "◫"], ["trash", "回收站", "♧"], ["projects", "项目文件夹", "▱"]];
 const recentSchema = z.object({ projects: z.array(z.object({ handle: z.string(), path: z.string(), name: z.string() })) });
-export function DataBrowser({ onClose, onImport, onUse, onRemoved, onModel, models, canEdit, preview }: {
+export function DataBrowser({ onClose, onImport, onUse, onRemoved, onFileRemoved, onModel, models, canEdit, preview, initialCategory }: {
   onClose: () => void; onImport: () => void;
   onUse: (result: DatasetUploadResponse, destination: "preview" | "notebook" | "agent") => void;
   onRemoved: (id: string) => void; onModel: (id?: string) => void;
+  onFileRemoved?: (datasetIds: string[]) => void;
   models: SemanticModel[]; canEdit: boolean;
   preview?: AppSpec;
+  initialCategory?: Category;
 }) {
   const project = useLocalProjects();
-  const [category, setCategory] = useState<Category>(project.session ? "tables" : "projects");
+  const [category, setCategory] = useState<Category>(initialCategory ?? (project.session ? "tables" : "projects"));
   const [manifest, setManifest] = useState<ProjectManifest | null>(project.session?.manifest ?? null);
   const [recent, setRecent] = useState<Array<{ handle: string; name: string; path: string }>>([]);
   const [path, setPath] = useState(""); const [name, setName] = useState("我的数据项目");
   const [search, setSearch] = useState(""); const [selectedId, setSelectedId] = useState("");
   const [rename, setRename] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<ProjectFile | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   async function refresh() {
     if (project.session) setManifest((await loadProject(project.session.handle)).manifest);
@@ -65,10 +72,28 @@ export function DataBrowser({ onClose, onImport, onUse, onRemoved, onModel, mode
     await deleteUploadedDataset(selected.descriptor.datasetId);
     onRemoved(selected.descriptor.datasetId); setSelectedId(""); await refresh();
   }
-  const count = (key: Category) => key === "models" ? models.length : key === "files" ? manifest?.files.length ?? 0 : key === "projects" ? recent.length
-    : (manifest?.tables ?? []).filter((table) => key === "trash" ? table.deletedAt : !table.deletedAt && table.kind === (key === "results" ? "result" : "table")).length;
+  const files = (manifest?.files ?? []).filter((file) => Boolean(file.deletedAt) === (category === "trash") && file.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+  async function changeFile(file: ProjectFile, archived: boolean) {
+    if (!canEdit || !project.session) throw new Error("当前无法修改原件，请重新打开项目后重试。");
+    setNotice("");
+    await project.flush();
+    const next = await setProjectFileArchived(project.session.handle, file.id, archived);
+    setManifest(next.manifest);
+    if (archived) onFileRemoved?.(file.datasetIds);
+    setNotice(archived ? "文件已移入回收站，已导入的数据表仍可使用。" : "文件已恢复，可在原始文件栏查看和下载。");
+  }
+  async function confirmFileRemoval(file: ProjectFile) {
+    if (busy) throw new Error("请等待当前操作结束后重试。");
+    setBusy(true); setError("");
+    try { await changeFile(file, true); } finally { setBusy(false); }
+  }
+  const fileList = <div className="project-file-list">{files.map((file) => <article key={file.id} aria-label={`原始文件 ${file.name}`}><span className="project-file-type">{file.name.toLowerCase().endsWith(".xlsx") ? "XLSX" : "CSV"}</span><div><b>{file.name}</b><p>{fileSize(file.bytes)} · 关联 {file.datasetIds.length} 张表 · {new Date(file.deletedAt ?? file.savedAt).toLocaleString("zh-CN")}</p></div>
+    {category === "trash" ? <button disabled={busy || !canEdit} aria-label={`恢复文件 ${file.name}`} onClick={() => void act(() => changeFile(file, false))}>恢复文件</button> : <><button disabled={busy} onClick={() => void act(() => downloadProjectFile(file.id, file.name))}>下载原件</button><button className="danger" disabled={busy || !canEdit} aria-label={`删除文件 ${file.name}`} onClick={() => { setError(""); setPendingDelete(file); }}>移入回收站</button></>}
+  </article>)}</div>;
+  const count = (key: Category) => key === "models" ? models.length : key === "files" ? (manifest?.files.filter((file) => !file.deletedAt).length ?? 0) : key === "projects" ? recent.length
+    : (manifest?.tables ?? []).filter((table) => key === "trash" ? table.deletedAt : !table.deletedAt && table.kind === (key === "results" ? "result" : "table")).length + (key === "trash" ? manifest?.files.filter((file) => file.deletedAt).length ?? 0 : 0);
   return <div className="data-browser-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <section className="data-browser" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Data Browser 数据浏览器" onKeyDown={(event) => {
+    <section className="data-browser" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Data Browser 数据浏览器" tabIndex={-1} onKeyDown={(event) => {
       if (event.key === "Escape" && !busy) onClose();
       if (event.key === "Tab") {
         const nodes = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]'));
@@ -81,7 +106,8 @@ export function DataBrowser({ onClose, onImport, onUse, onRemoved, onModel, mode
         <div className="data-browser-actions"><button disabled={busy} onClick={() => { void act(refresh); }}>刷新</button><button aria-label="关闭数据浏览器" disabled={busy} onClick={onClose}>×</button></div></header>
       <div className="data-browser-project"><div><b>{project.session?.manifest.name ?? "尚未打开本地项目"}</b><p title={project.session?.path}>{project.session?.path ?? "把数据、语义模型和分析步骤保存在一个本地文件夹中"}</p></div><span className={`project-save-status ${project.status.state}`}>{project.session ? project.status.message : "本地单用户"}</span></div>
       {(error || project.status.state === "error") && <div className="data-browser-error" role="alert">{error || project.status.message}</div>}
-      {project.status.state === "error" && <div className="data-browser-error"><p>自动保存已暂停。请先关闭此面板，用顶部“备份”导出未保存定义，再重新读取磁盘版本。该操作不会删除数据文件。</p><button disabled={busy} onClick={() => { if (window.confirm("放弃当前窗口尚未保存的工作台定义，重新读取磁盘版本？如需保留当前修改，请先取消并导出备份。")) void act(async () => { await project.reloadDiscardingChanges(); onClose(); }); }}>放弃未保存修改并重新打开</button></div>}
+      {notice && <p className="data-browser-reference-note" role="status">{notice}</p>}
+      {project.status.state === "error" && <div className="data-browser-error"><p>自动保存已暂停。请先关闭此面板，在左上角菜单的“设置与备份”中导出未保存定义，再重新读取磁盘版本。该操作不会删除数据文件。</p><button disabled={busy} onClick={() => { if (window.confirm("放弃当前窗口尚未保存的工作台定义，重新读取磁盘版本？如需保留当前修改，请先取消并导出备份。")) void act(async () => { await project.reloadDiscardingChanges(); onClose(); }); }}>放弃未保存修改并重新打开</button></div>}
       <div className="data-browser-body"><nav aria-label="数据资源分类">{categories.map(([key, label, icon]) => <button key={key} aria-current={category === key ? "page" : undefined} onClick={() => { setCategory(key); setSearch(""); setSelectedId(""); }}><span>{icon}</span>{label}<small>{count(key)}</small></button>)}
         <p>文件在本机保存。<br />AI 只按所选数据和授权方式读取。</p></nav>
         <main className="data-browser-content">
@@ -95,18 +121,23 @@ export function DataBrowser({ onClose, onImport, onUse, onRemoved, onModel, mode
           : category === "models" ? <><div className="data-browser-section-title"><div><h3>语义模型</h3><p>定义维度、指标和统计口径，与项目一起保存。</p></div><button className="primary" disabled={!canEdit || busy || !(manifest?.tables.some((table) => !table.deletedAt))} onClick={() => { onModel(); onClose(); }}>＋ 新建语义模型</button></div>
             <div className="project-model-grid">{models.map((model) => <button key={model.id} disabled={busy} onClick={() => { onModel(model.id); onClose(); }}><span>◇</span><b>{model.name}</b><p>{model.description || "暂无描述"}</p><small>v{model.version} · {model.dimensions.length} 个维度 · {model.measures.length} 个指标</small><em>编辑 / 删除 →</em></button>)}</div>{!models.length && <p className="data-browser-empty">导入数据表后，为常用分析建立统一口径。</p>}</>
           : category === "files" ? <><div className="data-browser-section-title"><div><h3>原始文件</h3><p>保留导入的 CSV / Excel 原件，不被分析步骤覆盖。</p></div><button className="primary" disabled={busy || !canEdit} onClick={() => { onClose(); onImport(); }}>＋ 导入文件</button></div>
-            <div className="project-file-list">{manifest?.files.map((file) => <article key={file.id}><span className="project-file-type">{file.name.toLowerCase().endsWith(".xlsx") ? "XLSX" : "CSV"}</span><div><b>{file.name}</b><p>{Math.round(file.bytes / 1024)} KB · 关联 {file.datasetIds.length} 张表 · {new Date(file.savedAt).toLocaleString("zh-CN")}</p></div><button disabled={busy} onClick={() => { void act(() => downloadProjectFile(file.id, file.name)); }}>下载原件</button></article>)}</div>{!manifest?.files.length && <p className="data-browser-empty">在此项目中导入文件后，原件会出现在这里。</p>}</>
+            {fileList}{!files.length && <p className="data-browser-empty">在此项目中导入文件后，原件会出现在这里。</p>}</>
           : <><div className="data-browser-section-title"><div><h3>{category === "trash" ? "回收站" : category === "results" ? "已保存结果" : "项目数据表"}</h3><p>{category === "trash" ? "恢复时保留原有数据 ID。第一版不提供永久清空。" : category === "results" ? "Notebook 生成的看板结果快照，保存后可继续分析。" : "同一份数据可用于不同的工作界面、Notebook 和看板。"}</p></div>{category !== "trash" && <button className="primary" disabled={busy || !canEdit} onClick={() => { onClose(); onImport(); }}>＋ 导入表格</button>}</div>
             <input className="data-browser-search" aria-label="搜索数据表" placeholder="搜索表名或原始文件…" value={search} onChange={(event) => setSearch(event.target.value)} />
+            {category === "trash" && files.length > 0 && <><h4>原始文件</h4>{fileList}{selected && <h4>数据表</h4>}</>}
             {selected ? <div className="data-browser-table-layout"><div className="data-browser-table-list">{tables.map((table) => <button key={table.descriptor.datasetId} className={selected === table ? "selected" : ""} onClick={() => { setSelectedId(table.descriptor.datasetId); setRename(""); }}><span>▦</span><b>{table.descriptor.source.name}</b><small>{table.descriptor.source.rowCount.toLocaleString()} 行 · {table.descriptor.source.columnCount} 列</small></button>)}</div>
               <section className="data-browser-table-detail"><small>PROJECT DATASET</small><h3>{selected.descriptor.source.name}</h3><p className="data-browser-source">来源：{selected.descriptor.originalFileName}</p><div className="data-browser-metrics"><div><b>{selected.descriptor.source.rowCount.toLocaleString()}</b><span>数据行</span></div><div><b>{selected.descriptor.source.columnCount}</b><span>字段</span></div><div><b>{selected.descriptor.source.qualityScore}%</b><span>数据质量</span></div></div>
                 <p className="project-retained">✓ 已保存到项目 · 不按临时保留期过期{selected.descriptor.aiAccessPolicy === "pending" ? " · AI 敏感数据授权待确认" : ""}</p>
+                <DatasetProvenance provenance={selected.descriptor.provenance} />
                 <div className="data-browser-actions">{category === "trash" ? <button className="primary" disabled={busy || !canEdit} onClick={() => { void act(async () => { await projectRequest({ action: "restoreTable", datasetId: selected.descriptor.datasetId }); onUse(await loadUploadedDataset(selected.descriptor.datasetId), "preview"); onClose(); }); }}>恢复数据表</button>
                   : <><button className="primary" disabled={busy} onClick={() => { void act(() => use("preview")); }}>预览数据 / 字段</button><button disabled={busy} onClick={() => { void act(() => use("notebook")); }}>用于 Notebook</button><button disabled={busy} onClick={() => { void act(() => use("agent")); }}>加入 AI 上下文</button></>}</div>
                 <div className="data-browser-fields"><h4>字段目录</h4>{selected.descriptor.source.fields.map((field) => <div key={field.name}><span>{field.label}<small>{field.name}</small></span><code>{field.type}</code></div>)}</div>
                 {category !== "trash" && <><label className="project-rename">重命名数据表<input aria-label="数据表新名称" placeholder={selected.descriptor.source.name} value={rename} maxLength={160} onChange={(event) => setRename(event.target.value)} /></label><div className="data-browser-actions"><button disabled={busy || !canEdit || !rename.trim()} onClick={() => { void act(async () => { await project.flush(); await projectRequest({ action: "renameTable", datasetId: selected.descriptor.datasetId, name: rename }); onUse(await loadUploadedDataset(selected.descriptor.datasetId), "preview"); onClose(); }); }}>保存名称</button><button className="danger" disabled={busy || !canEdit || uses.length > 0} onClick={() => { void act(remove); }}>移入回收站</button></div><p className="data-browser-reference-note">{uses.length ? `正在被引用：${uses.join("；")}。解除引用后才能删除。` : "没有发现已保存的分析引用；删除时服务端会再次检查。"}</p></>}
-              </section></div> : <div className="data-browser-empty"><span>▦</span><h3>{category === "trash" ? "回收站为空" : "这里还没有数据"}</h3><p>{category === "results" ? "在 Notebook 生成看板预览后，结果快照会自动保存到这里。" : category === "trash" ? "移入回收站的数据可以恢复。" : "导入 CSV 或 Excel，让这个项目开始回答问题。"}</p></div>}
+              </section></div> : (category !== "trash" || !files.length) && <div className="data-browser-empty"><span>▦</span><h3>{category === "trash" ? "回收站为空" : "这里还没有数据"}</h3><p>{category === "results" ? "在 Notebook 生成看板预览后，结果快照会自动保存到这里。" : category === "trash" ? "移入回收站的数据和文件可以恢复。" : "导入 CSV 或 Excel，让这个项目开始回答问题。"}</p></div>}
           </>}
         </main></div><footer className="data-browser-footer"><span>本地文件夹是真实存储 · 数据 ID 不随重命名变化</span><span>请定期备份整个项目 · 密钥不随项目保存</span></footer>
-    </section></div>;
+    </section>
+    {pendingDelete && <FileDeleteDialog name={pendingDelete.name} recoverable disabled={busy || !canEdit}
+      fallbackFocusRef={dialogRef} onConfirm={() => confirmFileRemoval(pendingDelete)} onClose={() => setPendingDelete(null)} />}
+    </div>;
 }

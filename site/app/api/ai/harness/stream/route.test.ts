@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoFixtureResult } from "@/fixtures/demo-product";
-import { DeepSeekHarness } from "@/core/harness/deepseek-harness";
+import { HarnessRuntime } from "@/core/harness/runtime";
 import { createHarnessTask } from "@/core/harness/task-state";
 import { readHarnessStream } from "@/core/harness/stream";
 import { type HarnessTraceEvent, harnessRequestSchema } from "@/core/harness/contracts";
@@ -16,8 +16,9 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("POST /api/ai/harness/stream", () => {
   it("keeps public schema and uploaded-data privacy checks before opening the stream", async () => {
-    const spy = vi.spyOn(DeepSeekHarness.prototype, "run");
+    const spy = vi.spyOn(HarnessRuntime.prototype, "run");
     expect((await POST(request({ ...payload(), role: "admin" }))).status).toBe(400);
+    expect((await POST(request({ ...payload(), inputInspection: { workbook: { status: "parsedAttachment" } } }))).status).toBe(400);
     const input = payload();
     input.appSpec = structuredClone(input.appSpec);
     input.appSpec.dataSources[0] = { ...input.appSpec.dataSources[0], id: "dataset_upload_unavailable_stream", sourceType: "csv" };
@@ -30,7 +31,7 @@ describe("POST /api/ai/harness/stream", () => {
     vi.stubEnv("HARNESS_MCP_ENABLED", "false");
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const spy = vi.spyOn(DeepSeekHarness.prototype, "run").mockImplementation(async (raw, options) => {
+    const spy = vi.spyOn(HarnessRuntime.prototype, "run").mockImplementation(async (raw, options) => {
       const input = harnessRequestSchema.parse(raw);
       const task = createHarnessTask(input.idempotencyKey, input.instruction, input.pageId, input.role, { now: () => new Date(), id: () => "route_event" });
       const event: HarnessTraceEvent = { id: `${task.id}:1`, sequence: 1, taskId: task.id, timestamp: task.createdAt, type: "task_started", message: "任务已开始" };

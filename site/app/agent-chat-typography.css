@@ -58,14 +58,3 @@
   font-size: 12px;
   cursor: pointer;
 }
-
-@media (max-width: 600px) {
-  .workspace-agent .agent-workspace-panel {
-    --agent-chat-assistant-size: 15px;
-    --agent-chat-user-size: 14px;
-  }
-
-  .workspace-agent .agent-workspace-panel .prompt-box textarea {
-    font-size: 15px;
-  }
-}

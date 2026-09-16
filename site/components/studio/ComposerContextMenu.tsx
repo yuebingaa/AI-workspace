@@ -32,7 +32,6 @@ function menuPosition(anchor: HTMLElement) {
     left,
     bottom: Math.max(12, Math.min(window.innerHeight - box.top + 16, window.innerHeight - 230)),
     width,
-    narrow: window.innerWidth < 620,
     submenuLeft: left + width + 300 < window.innerWidth - 12 ? left + width + 4 : Math.max(12, left - 300),
     submenuWidth: Math.min(296, window.innerWidth - 24),
   };
@@ -141,12 +140,11 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
       role="menu"
       aria-label="添加上下文菜单"
       ref={rootRef}
-      hidden={position.narrow && Boolean(section)}
       style={{ left: position.left, bottom: position.bottom, width: position.width }}
       onKeyDown={handleKeys}
       onBlur={handleBlur}
     >
-      <button type="button" role="menuitem" onPointerEnter={() => { if (!position.narrow) setSection(null); }} onClick={() => pick(onChooseFiles)}><ContextIcon kind="file" /><span>添加文件或图片</span></button>
+      <button type="button" role="menuitem" onPointerEnter={() => setSection(null)} onClick={() => pick(onChooseFiles)}><ContextIcon kind="file" /><span>添加文件或图片</span></button>
       {([
         ["data", "选择工作界面与数据表"],
         ["results", "添加处理配方或结果"],
@@ -154,17 +152,17 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
         ["connections", "选择数据连接"],
       ] as const).map(([id, label]) => <button
         key={id} data-section={id} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={section === id}
-        onPointerEnter={(event) => { if (event.pointerType === "mouse" && !position.narrow) openSection(id); }}
+        onPointerEnter={(event) => { if (event.pointerType === "mouse") openSection(id); }}
         onClick={() => openSection(id, true)}
       ><ContextIcon kind={id} /><span>{label}</span><span className="context-menu-chevron" aria-hidden="true">›</span></button>)}
     </div>
     {section && <div
-      className={`composer-context-submenu${position.narrow ? " compact" : ""}`}
+      className="composer-context-submenu"
       ref={submenuRef} role="menu" aria-label={title}
-      style={{ left: position.narrow ? Math.min(position.left, window.innerWidth - position.submenuWidth - 12) : position.submenuLeft, bottom: position.bottom, width: position.submenuWidth, maxHeight: Math.min(340, window.innerHeight - position.bottom - 12) }}
+      style={{ left: position.submenuLeft, bottom: position.bottom, width: position.submenuWidth, maxHeight: Math.min(340, window.innerHeight - position.bottom - 12) }}
       onKeyDown={handleKeys} onBlur={handleBlur}
     >
-      <div className="context-submenu-heading">{position.narrow && <button type="button" aria-label="返回上下文菜单" onClick={returnToRoot}>‹</button>}<span>{title}</span></div>
+      <div className="context-submenu-heading"><span>{title}</span></div>
       <label className="context-menu-search"><ContextIcon kind="search" /><input ref={searchRef} aria-label={`搜索${title}`} placeholder={section === "connections" ? "筛选数据连接…" : "搜索…"} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
       <div className="context-menu-options">
         {section === "data" && <>

@@ -1,0 +1,504 @@
+{
+  "schemaVersion": "agent-framework-snapshot-v1",
+  "snapshotDate": "2026-09-14",
+  "verifiedAt": "2026-09-14T06:38:14.899Z",
+  "timezone": "Asia/Shanghai",
+  "scope": "Documentation and diagrams of the current working tree, including uncommitted changes; no application source copied.",
+  "git": {
+    "branch": "feature/eds-analysis-dashboard",
+    "head": "15ebdae7b4bc08ee6aeee5b5cfaf0d15a6b9a018",
+    "includesUncommittedWork": true
+  },
+  "canonicalArchitecture": "site/docs/architecture/agent-architecture.md",
+  "sourceFingerprint": "dac1157360cea67eef18f39ae930768c726f2cbe62fce11f729e2b25f634191a",
+  "architectureScopeFileCount": 101,
+  "sourceDriftPolicy": "Source hashes identify this snapshot; links point to the live workspace and may change later.",
+  "inventory": {
+    "toolNames": [
+      "analyzeEdsReports",
+      "scanEdsRawWorkbook",
+      "queryEdsRawWorkbook",
+      "inspectEdsRawWorkbook",
+      "readEdsRawRows",
+      "inspectDataset",
+      "querySemanticModel",
+      "createAnalysisPlan",
+      "createNotebookDraft",
+      "inspectConnectionSchema",
+      "inspectFields",
+      "transformSpreadsheetData",
+      "previewDataRecipe",
+      "validateDataRecipe",
+      "exportDataRecipeToExcel",
+      "inspectAppSpec",
+      "createEdsBreakdownChartPreview",
+      "createEdsLineIssueChartPreview",
+      "updateEdsTablePreview",
+      "createChangeSetPreview",
+      "callMcpTool"
+    ],
+    "skills": [
+      "data-visualization",
+      "eds-analysis",
+      "dashboard-editing",
+      "workbook-analysis"
+    ]
+  },
+  "checks": {
+    "architectureGuard": "passed",
+    "localLinks": {
+      "checked": 82,
+      "missing": []
+    },
+    "unicodeReplacementCharacters": 0,
+    "diagram": {
+      "width": 2000,
+      "height": 1440,
+      "textCount": 66,
+      "outOfBounds": [],
+      "pngWidth": 2000,
+      "pngHeight": 1440,
+      "visualInspection": "PNG reviewed by assistant; labels and connectors legible, no clipping observed"
+    },
+    "externalRequestsDuringDiagramCheck": 0,
+    "applicationTests": "not run in this documentation task",
+    "build": "not run in this documentation task",
+    "liveModels": "not called"
+  },
+  "serviceObservation": {
+    "checkedAt": "2026-09-14T06:27:04.182Z",
+    "supervisorFresh": true,
+    "stable": {
+      "health": "ok",
+      "port": 3000,
+      "release": "2026-09-09T06-17-07-261Z-36adf84e"
+    },
+    "dev": {
+      "health": "ok",
+      "port": 3001
+    },
+    "capture": {
+      "health": "ok",
+      "port": 3198
+    },
+    "note": "Observed using npm run site:status; no start/stop/publish operations performed."
+  },
+  "artifacts": [
+    {
+      "path": "01-Agent系统框架.md",
+      "bytes": 10564,
+      "sha256": "557eee29de41eb3875552ef89745c69e389ceebf5e779eb3f497f687a5eda5db"
+    },
+    {
+      "path": "02-模块与代码索引.md",
+      "bytes": 9742,
+      "sha256": "3059abd1f5b7240f70bde82e6366a5b03ddeb9e949392a052d27e6e50781af5c"
+    },
+    {
+      "path": "03-状态与后续计划.md",
+      "bytes": 7360,
+      "sha256": "227af2f420e5b9e499dad026b803db30e3214cf2a5f6c9b4c568cdb83a0caf4c"
+    },
+    {
+      "path": "04-Harness运行框架.md",
+      "bytes": 14543,
+      "sha256": "b7bf214229685d2108f01d5af0e3c2c8a59b4679472afa44c6a0441817d8548f"
+    },
+    {
+      "path": "05-Harness接口与排查索引.md",
+      "bytes": 9502,
+      "sha256": "40ede5fe393c975d956eb37b69f283fee230f1d855b08c942a505216dfc4ffb7"
+    },
+    {
+      "path": "系统框图.mmd",
+      "bytes": 2072,
+      "sha256": "532880a2d90951ab6e29e4bfdf6d6cb6090b40d0411eab01185487d88976f42a"
+    },
+    {
+      "path": "系统框图.png",
+      "bytes": 407612,
+      "sha256": "509618699b7a784b913b6ca96f832ed7cb550cf270f16ee8e6ec640e8f800ffd"
+    },
+    {
+      "path": "系统框图.svg",
+      "bytes": 9316,
+      "sha256": "57d5f58d47c2fddf9f5fc534f903a63a4ed01621bf9ec802bba026f80e4833eb"
+    },
+    {
+      "path": "Harness核对记录.json",
+      "bytes": 8761,
+      "sha256": "890f57b513bd97495fb5b735c7925b0db041b6764492b2fe997524b752e71567"
+    },
+    {
+      "path": "Harness运行框图.mmd",
+      "bytes": 2036,
+      "sha256": "fa4aece11783641c406ea9ed2bd8089704a727b17d73801a3e683c00f9ac896c"
+    },
+    {
+      "path": "Harness运行框图.png",
+      "bytes": 330540,
+      "sha256": "2c7389b7ae8a4a570096e5a877c04dce42dda1017187df30e3d08a058107b859"
+    },
+    {
+      "path": "Harness运行框图.svg",
+      "bytes": 13039,
+      "sha256": "0043fe3b56df285a0ddc4e9e6496d8f4720ad49dda7a57e70092e2876053e022"
+    },
+    {
+      "path": "README.md",
+      "bytes": 3288,
+      "sha256": "3165f59e9f46a5dc67e600205977ccc8f1aef7ff82a6b33b8ea7b3582efc83e6"
+    }
+  ],
+  "sources": [
+    {
+      "path": "AGENTS.md",
+      "bytes": 3716,
+      "sha256": "8531dd0ee5f6f52df53ac0123ca8fb8a99162ac49f1c4a2e00b1373f42424c74"
+    },
+    {
+      "path": "site/app/api/ai/harness/handler.ts",
+      "bytes": 28122,
+      "sha256": "af28ae1376399c382a0f43ee8623d5cd6fe486a6b16e6882da2f507b2f244f2e"
+    },
+    {
+      "path": "site/app/api/ai/visualization-lab/stream/route.ts",
+      "bytes": 214,
+      "sha256": "7801007211cd13e5352363e7d558b599bcea139e99464927c4edb21e5e19d393"
+    },
+    {
+      "path": "site/components/data-components/BarChart.tsx",
+      "bytes": 11389,
+      "sha256": "d26f2c7db1809b99eb5a985a81174c503c520748842d6b0bb8edfa59139c4d46"
+    },
+    {
+      "path": "site/components/registry/component-registry.tsx",
+      "bytes": 14235,
+      "sha256": "41c47004077d996131b36315e2fc9ea91dd4f6cda21364a1adbe39393e109f78"
+    },
+    {
+      "path": "site/components/studio/HarnessTrace.tsx",
+      "bytes": 4011,
+      "sha256": "f39d908ae6a530cbbb707a6f739531fd2224e58d39e3a976d7c74f8e63a97c63"
+    },
+    {
+      "path": "site/components/studio/StudioWorkspace.tsx",
+      "bytes": 71672,
+      "sha256": "811af2a041d723d21f2d4a0b49992b53f107bdefb9b8ec3bfe09b03733dcab9b"
+    },
+    {
+      "path": "site/components/studio/WorkspaceNavigation.tsx",
+      "bytes": 8775,
+      "sha256": "bdd9b66298d747ff8b240eef0216f04725240b552723c8f41aa5dd3b782df14c"
+    },
+    {
+      "path": "site/components/studio/projects/LocalProjectsProvider.tsx",
+      "bytes": 3838,
+      "sha256": "3c7596b3d4b2b2c88cb44b2899445c1dde11d68e7d0f2c36e5e0acb75e4f9972"
+    },
+    {
+      "path": "site/components/studio/workspace/persistence-controller.ts",
+      "bytes": 2666,
+      "sha256": "9a6008e2f29cd0fc1c9824d633c5bfcf42515077d4cc9ec0524d27dfd7055a78"
+    },
+    {
+      "path": "site/components/studio/workspace/persistence.ts",
+      "bytes": 2684,
+      "sha256": "4de0fb67129c484de31b7224b21ff75ce9a08657c14c8be825fc8f8c46269935"
+    },
+    {
+      "path": "site/core/ai/server/deepseek-harness-model.ts",
+      "bytes": 16869,
+      "sha256": "8237a09d13f497d4868f6ea71e5faea81465bd7643554fd5dff9446a962d6b52"
+    },
+    {
+      "path": "site/core/ai/server/harness-composition.ts",
+      "bytes": 1239,
+      "sha256": "3504e1b5a3f096f4997015e210a3ad8f33f59cf2a6b325cc7a49d376ba122d5c"
+    },
+    {
+      "path": "site/core/architecture/module-boundaries.test.ts",
+      "bytes": 9148,
+      "sha256": "4eaa7ed9b7832ffc9c07f39f3051592546820fa3b0695dbad61a26f19a0e2e34"
+    },
+    {
+      "path": "site/core/changesets/executor.ts",
+      "bytes": 15224,
+      "sha256": "16b02cafd3141bcc0a4917a2eb23f950013a9f3c8edf8f2b340165330fb6ab98"
+    },
+    {
+      "path": "site/core/connections/server/drivers/databricks.ts",
+      "bytes": 4682,
+      "sha256": "7939d90baa78ee978c0ace1977d83037527f9ad5c6835d5e91da25cf0ac0f25e"
+    },
+    {
+      "path": "site/core/connections/server/drivers/postgres.ts",
+      "bytes": 3359,
+      "sha256": "28d7a1e087081442bde9229b0b112e94a066ac40565e74173d4e5032ae5c6710"
+    },
+    {
+      "path": "site/core/connections/server/query-contracts.ts",
+      "bytes": 1289,
+      "sha256": "e556ed1edd8738d3e467edb709d592a0793b3b5f2209b56642a14b2cfdf823a6"
+    },
+    {
+      "path": "site/core/connections/server/query-service.ts",
+      "bytes": 2765,
+      "sha256": "46c226c63822e8a4df2ba80918cfa6e228adf1453120283a0e5c9cc3ce3c4c9b"
+    },
+    {
+      "path": "site/core/connections/server/query.ts",
+      "bytes": 634,
+      "sha256": "095f62544608514830476c946220ac07e46dced7290aded7c7ca6d44613a89e4"
+    },
+    {
+      "path": "site/core/datasets/server/dataset-repository.ts",
+      "bytes": 11894,
+      "sha256": "6ffd14a61e201b887072fbff07905f8353dbd5ee6ddc97e82de2bc625c0757ac"
+    },
+    {
+      "path": "site/core/harness/agents/budget.ts",
+      "bytes": 3265,
+      "sha256": "5ec9b4700ac197b3286a7968d7d31a036fc1fadbde143882fb1011ea86261089"
+    },
+    {
+      "path": "site/core/harness/agents/contracts.ts",
+      "bytes": 854,
+      "sha256": "6e932065d9582f84f1b7b5fb7f451cae8a13af449d3d7e8faa4da6f3559ceace"
+    },
+    {
+      "path": "site/core/harness/agents/coordinator.ts",
+      "bytes": 19670,
+      "sha256": "fde3175c5c6333714bfee135ece28fcce1e1a0ca46178e685ff4eb6946fd593f"
+    },
+    {
+      "path": "site/core/harness/agents/registry.ts",
+      "bytes": 1849,
+      "sha256": "cd61d02c3e443dc182b75a0d8766a056d2d0fa8f52e68f06a7008a44efea8b07"
+    },
+    {
+      "path": "site/core/harness/client.ts",
+      "bytes": 5799,
+      "sha256": "49962a82340d551a14567a31825aaeb94bcdbd636c199a986ce274c5e19df677"
+    },
+    {
+      "path": "site/core/harness/context-selector.ts",
+      "bytes": 60161,
+      "sha256": "a1aff16346baafa7727e59a885a00be9c018049cb61978a0c61062147c66d485"
+    },
+    {
+      "path": "site/core/harness/contracts.ts",
+      "bytes": 29430,
+      "sha256": "fbed9e350a5354cfc8b98fe10c7b18360651485f2657ecf54018d08aabc472ec"
+    },
+    {
+      "path": "site/core/harness/deepseek-harness.ts",
+      "bytes": 1347,
+      "sha256": "440a3d0cc1f802a0595a8e4301d4b1485f0788760377d92e9e23479021518abd"
+    },
+    {
+      "path": "site/core/harness/evidence-bus.ts",
+      "bytes": 5516,
+      "sha256": "87bc60c4a50f714628ab2fcd00c97e84c391f51cb44ca01f66cfb72b2b0bd30f"
+    },
+    {
+      "path": "site/core/harness/execution-planner.ts",
+      "bytes": 13398,
+      "sha256": "56f281f007958ab47253cc522bc9085ee3731d9a14f75d47c00c75eb48aeb7b4"
+    },
+    {
+      "path": "site/core/harness/failure-response.ts",
+      "bytes": 4858,
+      "sha256": "a30b848079bfee155766942813f85dce96ef3f5b158d0cff0be42e832a8ae413"
+    },
+    {
+      "path": "site/core/harness/model-errors.ts",
+      "bytes": 439,
+      "sha256": "5cd6f1effa155e09941b1c2159b530a52be68de48b0c9760640efa62e67968a9"
+    },
+    {
+      "path": "site/core/harness/model-policy.ts",
+      "bytes": 4804,
+      "sha256": "766da8b1aeec57c1a0f78340968dd80f5ec4bd534db89975f646e2c3cec85688"
+    },
+    {
+      "path": "site/core/harness/runtime.ts",
+      "bytes": 99252,
+      "sha256": "b64c3012afc3362fd95b6e04bd36b6a79735b0398ad373cb19041088797117b4"
+    },
+    {
+      "path": "site/core/harness/server/conversation-store.ts",
+      "bytes": 5922,
+      "sha256": "e7242c87008f3965e7361fe2e9ecab9c0388dbebd86490fc9a01b8c67f01becd"
+    },
+    {
+      "path": "site/core/harness/skill-registry.ts",
+      "bytes": 6757,
+      "sha256": "681eb577f456df80383b4b27416b809702ff5732d4054e867e1aabb0607585ac"
+    },
+    {
+      "path": "site/core/harness/skills/dashboard-editing/SKILL.md",
+      "bytes": 1695,
+      "sha256": "5bece7db5b1650fdfc68104c48361e02910c53086f5b766f1d614c936d9ee94e"
+    },
+    {
+      "path": "site/core/harness/skills/data-visualization/SKILL.md",
+      "bytes": 1989,
+      "sha256": "a26848ebf5b099463cf517e210a068370ec4f9a8fee31cb55f58c9838d22a673"
+    },
+    {
+      "path": "site/core/harness/skills/eds-analysis/SKILL.md",
+      "bytes": 1808,
+      "sha256": "7b3f2575a083eb2efd3c0da8b40a84a250cf77f8743106b16bbac09325c698b1"
+    },
+    {
+      "path": "site/core/harness/skills/workbook-analysis/SKILL.md",
+      "bytes": 1354,
+      "sha256": "ff9aefecef67777ca7c8e6cfd80a647f10cedb607799a6090678f923ef75580e"
+    },
+    {
+      "path": "site/core/harness/stream.ts",
+      "bytes": 5659,
+      "sha256": "54ba0eda35895e186088c6bfc9245093d4df7e0d2645b28116da2e0c15123f7c"
+    },
+    {
+      "path": "site/core/harness/task-verifier.ts",
+      "bytes": 11992,
+      "sha256": "c4cabd09dedc730443a3f1df396ca2cf60f331e41b32315c8ec662a872c31e9a"
+    },
+    {
+      "path": "site/core/harness/tool-registry.ts",
+      "bytes": 95019,
+      "sha256": "b119aa7daef8af19459ef87f3df6baf2ea007fde1b092366945cf5521ad6c4c0"
+    },
+    {
+      "path": "site/core/harness/visual-verifier.ts",
+      "bytes": 44861,
+      "sha256": "ed0d7a9bb337d95d44c3ac635c1dde53a26b7522939c629c1dfd46af896c2cde"
+    },
+    {
+      "path": "site/core/models/data-binding.ts",
+      "bytes": 2606,
+      "sha256": "f760d1eed9981382116b87e086c0517303c60de7c516fbcac03b3afacb605a7f"
+    },
+    {
+      "path": "site/core/notebook/contracts.ts",
+      "bytes": 3660,
+      "sha256": "39f97bd29b6a522a48d3be0ace3663a4896336783d82e8361e5e59d4b6bb621b"
+    },
+    {
+      "path": "site/core/notebook/definition.ts",
+      "bytes": 4913,
+      "sha256": "628e4c4f7d67e0ffb8f5e33a978e6173804fd83627db10b4dbb7a6ece1714a4f"
+    },
+    {
+      "path": "site/core/notebook/execution-contracts.ts",
+      "bytes": 1555,
+      "sha256": "173df0f35a38099c456d2de9ccc671d21d1fbb92d68bf610bb3eb20e1d053ed8"
+    },
+    {
+      "path": "site/core/notebook/server/execution.ts",
+      "bytes": 9827,
+      "sha256": "1c8454facc6532497916295fab9e48a019584bb440e0fbaa7393eabbdca4a80d"
+    },
+    {
+      "path": "site/core/notebook/server/query-engine.ts",
+      "bytes": 3786,
+      "sha256": "d304d895f54f87f85718a0135893a027b5eb2b0bd7087635b8bac122ec267fbc"
+    },
+    {
+      "path": "site/core/notebook/server/query-log.ts",
+      "bytes": 1109,
+      "sha256": "7b4f00c1b15c4f946f872ed7dc00fbfe64b1bed29d991b61a144b3d94d02b3de"
+    },
+    {
+      "path": "site/core/notebook/server/runtime.ts",
+      "bytes": 696,
+      "sha256": "5e7a17bb8f34c1f5716d1e3401f588ce5dae38f3ed4cde3e3b66635e63cf7480"
+    },
+    {
+      "path": "site/core/projects/client.ts",
+      "bytes": 3334,
+      "sha256": "341aa588e879c88bd8f40ed321ee54cd819c3743f4065f70ad8009b8867ab4a9"
+    },
+    {
+      "path": "site/core/projects/server/request.ts",
+      "bytes": 2214,
+      "sha256": "973d4382b6da6cd9be90583d4dd99e8f5c311b981a264406a2af99f5f14cacde"
+    },
+    {
+      "path": "site/core/projects/server/store.ts",
+      "bytes": 19147,
+      "sha256": "4ffc79c9da0ce10fafe7e6563d5badcec560d8bd15df6e85454b2affa2912d4d"
+    },
+    {
+      "path": "site/core/projects/state-repository.ts",
+      "bytes": 3591,
+      "sha256": "32ed066dadea3e2e3e45837a1c099291a9666cbbbcee2b74d0428c94e1a55a2e"
+    },
+    {
+      "path": "site/core/visualization-lab/cases.ts",
+      "bytes": 4485,
+      "sha256": "0fe999b5355cd492fed51131049e47b4f71cb43c15326e9cf0c7becfafdd4b0e"
+    },
+    {
+      "path": "site/core/visualization-lab/evaluate.ts",
+      "bytes": 5047,
+      "sha256": "223c6de2d380471b279b44b583b013c5fe10b6c591f953eec030b65232351839"
+    },
+    {
+      "path": "site/docs/architecture/agent-architecture.md",
+      "bytes": 55317,
+      "sha256": "d79142e88e38d5d9132bd3f7979938cc6444210735f505a097f6cacee76cfecb"
+    },
+    {
+      "path": "site/docs/architecture/hex-visualization-research.md",
+      "bytes": 16001,
+      "sha256": "65d1aab2124908fd3f6d48eabe8b0718ca685c8b7f3554cef2c3a4a4e4cbe5b0"
+    },
+    {
+      "path": "site/docs/architecture/notebook-refactor-2026-09-14.md",
+      "bytes": 9046,
+      "sha256": "5c4fdd3ccf5769f15fca72dd42ac4a7dad93727e6f5a413e23d90df65b849006"
+    },
+    {
+      "path": "site/docs/architecture/persistence-refactor-2026-09-14.md",
+      "bytes": 13066,
+      "sha256": "8badeba15a0fc584cfbba5c4fb623fb1f31775f24b8b640cd52b9df4ede6a4cf"
+    },
+    {
+      "path": "site/docs/architecture/refactor-2026-09-14.md",
+      "bytes": 17976,
+      "sha256": "e7031e416ec582c253e20a63062fc68094fff0475d621ff2f2ae19210516a9ba"
+    },
+    {
+      "path": "site/docs/architecture/visualization-agent-design.md",
+      "bytes": 18508,
+      "sha256": "28810343ab200a9509f3ed9e3fa1bf30dd2b9f52347689867a3951e63767884a"
+    },
+    {
+      "path": "site/docs/verification/notebook-existing-data-2026-09-13.md",
+      "bytes": 6479,
+      "sha256": "3e2921407b9d79d3ae6fcc0e9fa1a4ea53379065f8d9b54740533f801a9c853f"
+    },
+    {
+      "path": "site/scripts/check-agent-architecture.mjs",
+      "bytes": 2632,
+      "sha256": "fc30918ee82826d75e9d9792bcba3680d762f99637d70e402bd8f3b30cdbd8b2"
+    }
+  ],
+  "supplements": [
+    {
+      "id": "harness-2026-09-14",
+      "verifiedAt": "2026-09-14T06:54:37.631Z",
+      "record": "Harness核对记录.json",
+      "scope": "Added Harness-specific documents and diagrams; updated README navigation and artifact hashes. Original source inventory and earlier checks are retained as historical observations.",
+      "previousReadmeDigest": {
+        "path": "README.md",
+        "bytes": 2465,
+        "sha256": "1a927bcb61cf6c92df1577832462bdeaa1a65c9dd4bae217d87f036ea15e9897"
+      },
+      "localLinksChecked": 144
+    }
+  ]
+}

@@ -1,23 +1,24 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { DEFAULT_DEEPSEEK_MODEL } from "@/core/ai/contracts";
 import {
   harnessModelTurnSchema, harnessRequestSchema, harnessTaskSummarySchema,
   type HarnessModel, type HarnessModelInput, type HarnessModelResult, type HarnessModelUsage,
   type HarnessObservation, type HarnessTaskSummary, type HarnessTraceEvent,
 } from "../contracts";
 import { buildHarnessContextSelection, estimateHarnessModelInputChars, resolveHarnessContextBudget, resolveHarnessIntent } from "../context-selector";
-import { DeepSeekHarness, DeepSeekHarnessModel, HarnessRequestError, resolvedBounds, type DeepSeekHarnessOptions } from "../deepseek-harness";
+import { HarnessRuntime, HarnessRequestError, resolvedBounds, type HarnessRuntimeOptions } from "../runtime";
 import { createHarnessTask, appendHarnessEvent } from "../task-state";
 import { executeHarnessTool } from "../tool-registry";
 import { pendingHarnessTaskVerification, verifyHarnessTask } from "../task-verifier";
 import { sanitizeHarnessText } from "../security";
+import { inspectHarnessInput, inspectedModelContext, inputInspectionMessage } from "../input-inspector";
 import { failureResponse, failureExplanationInputChars } from "../failure-response";
 import { AgentBudget, AgentBudgetError } from "./budget";
+import { withinModelLimit } from "../model-limits";
 import { canDelegateDataTask, dataAgentProfile, isDataAgentTool } from "./registry";
 import type { AgentDelegation, AgentIdentity } from "./contracts";
 
-export interface CoordinatedHarnessOptions extends DeepSeekHarnessOptions {
+export interface CoordinatedHarnessOptions extends HarnessRuntimeOptions {
   agentMode?: "single" | "data";
 }
 
@@ -49,12 +50,12 @@ async function bounded<T>(work: (signal: AbortSignal) => Promise<T>, signal: Abo
 
 /** Serial v1: one coordinator, one scoped data worker, one user-facing receipt. */
 export class CoordinatedHarness {
-  private readonly harness = new DeepSeekHarness();
+  private readonly harness = new HarnessRuntime();
 
   async run(rawRequest: unknown, options: CoordinatedHarnessOptions): Promise<HarnessTaskSummary> {
     const request = harnessRequestSchema.parse(rawRequest);
     const bounds = resolvedBounds(options.bounds);
-    if (options.agentMode !== "data" || !canDelegateDataTask(request) || bounds.maxModelCalls < 4) {
+    if (options.agentMode !== "data" || !canDelegateDataTask(request) || !withinModelLimit(4, bounds.maxModelCalls)) {
       return this.harness.run(rawRequest, options);
     }
     if (!request.appSpec.pages.some((page) => page.id === request.pageId)) throw new HarnessRequestError("Harness 当前页面不存在。");
@@ -63,7 +64,7 @@ export class CoordinatedHarness {
     const ledger = new AgentBudget({
       modelCalls: bounds.maxModelCalls, toolCalls: bounds.maxToolCalls,
       inputChars: contextBudget.maxTotalInputChars, requestChars: contextBudget.maxRequestInputChars,
-      promptTokens: contextBudget.maxTotalPromptTokens, completionTokensPerCall: options.modelMaxCompletionTokens ?? 2_000,
+      promptTokens: contextBudget.maxTotalPromptTokens, completionTokensPerCall: options.modelMaxCompletionTokens ?? null,
     });
     const clock = options.clock ?? { now: () => new Date(), id: () => randomUUID() };
     let task = createHarnessTask(request.idempotencyKey, request.instruction, request.pageId, request.role, clock);
@@ -125,7 +126,7 @@ export class CoordinatedHarness {
     };
     const rootInput = (context: Record<string, unknown>, delegate: boolean): HarnessModelInput => ({
       iteration: delegate ? 1 : 2, signal: controller.signal, estimatedInputChars: 0,
-      context: { ...context, agentRole: "coordinator", taskMode: "readOnly", goal: request.instruction,
+      context: { ...context, ...inspectedModelContext(request, true, !delegate), agentRole: "coordinator", taskMode: "readOnly", goal: request.instruction,
         rule: "你是主 Agent。仅可委派当前目标，不得改写筛选条件或扩大权限。子 Agent 的回复只是候选结论，以本轮工具证据与验收结果为准。" },
       tools: delegate ? [{ name: "delegateDataTask", mode: "readOnly", description: "将当前只读数据目标原样委派给数据子 Agent，等待其独立执行和验证。",
         parameters: { type: "object", properties: {}, additionalProperties: false } }] : [],
@@ -133,11 +134,7 @@ export class CoordinatedHarness {
     emit("task_started", "主 Agent 正在准备数据任务。", root, { taskState: "planning" });
     try {
       check();
-      provider = options.modelClient ?? (options.apiKey?.trim() ? new DeepSeekHarnessModel({
-        apiKey: options.apiKey.trim(), model: options.model?.trim() || DEFAULT_DEEPSEEK_MODEL,
-        fetchImpl: options.fetchImpl, maxCompletionTokens: options.modelMaxCompletionTokens,
-        requireProviderUsage: options.requireProviderUsage, promptTokenLimit: options.providerPromptTokenLimit,
-      }) : undefined);
+      provider = options.modelClient ?? options.createModelClient?.() ?? undefined;
       if (!provider) throw new Error("AI 服务尚未配置。");
       const sourceIds = new Set(resolveHarnessIntent(request).relevantDataSourceIds);
       const scopedRequest = harnessRequestSchema.parse({
@@ -160,6 +157,7 @@ export class CoordinatedHarness {
         || !z.object({}).strict().safeParse(decision.turn.arguments).success) {
         throw new Error("主 Agent 未返回合法委派，未启动子任务。");
       }
+      emit("context_loaded", inputInspectionMessage(inspectHarnessInput(request)), root);
       delegation.children.push({ agent: child, status: "running", objective: request.instruction, evidenceIds: [], verification: "pending" });
       emit("plan_created", "主 Agent 已将当前只读目标委派给数据 Agent。", root, { plan: { revision: 1, source: "model",
         steps: [{ id: "delegate_data", objective: request.instruction, status: "active" },
@@ -184,9 +182,10 @@ export class CoordinatedHarness {
         return result;
       } };
       const childResult = await this.harness.run(scopedRequest, {
+        inputInspectionApproved: true,
         modelClient: childModel, dataRuntime: scopedRuntime, rawWorkbook: options.rawWorkbook,
         signal: controller.signal, clock, evidenceNamespace: childKey,
-        bounds: { ...bounds, maxModelCalls: bounds.maxModelCalls - 2 }, contextBudget: options.contextBudget,
+        bounds: { ...bounds, maxModelCalls: bounds.maxModelCalls === null ? null : bounds.maxModelCalls - 2 }, contextBudget: options.contextBudget,
         onEvent: (event) => {
           if (controller.signal.aborted) return;
           emit(event.type === "task_started" ? "context_loaded" : event.type, `数据 Agent · ${event.message}`, child,

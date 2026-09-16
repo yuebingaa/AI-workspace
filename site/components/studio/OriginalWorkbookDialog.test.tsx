@@ -43,7 +43,7 @@ describe("OriginalWorkbookDialog", () => {
     expect(container.querySelectorAll("tbody tr")).toHaveLength(50);
     expect(container.textContent).toContain("51 行 × 2 列");
     expect(container.textContent).toContain("1 / 2");
-    expect(container.textContent).toContain("不进入 AI 上下文、localStorage、工作区备份或审计正文");
+    expect(container.textContent).toContain("AI 可按需查询全部工作表和数据行");
 
     const next = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "下一页")!;
     act(() => next.click());

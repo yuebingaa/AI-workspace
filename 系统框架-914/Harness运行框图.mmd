@@ -1,0 +1,34 @@
+flowchart TB
+  UI[Web 工作台：目标与选定上下文] --> API[handler：身份 / 项目授权 / 会话锁 / 幂等]
+  API --> Composition[服务端组装：模型工厂 / 数据与工具端口]
+  Composition --> Route{CoordinatedHarness 路由}
+  Route -->|默认 single| Runtime
+  Route -->|data 且符合保守条件| Delegate[主 Agent 委派一个只读数据子任务]
+  Delegate -->|复用执行器 / 独立上下文| Runtime
+  subgraph Runtime[HarnessRuntime：供应商无关的执行循环]
+    Init[初始化 / 可选语义分类 / Skill / 视觉预检] --> Plan[Execution Planner：当前步骤与允许工具]
+    Plan --> Context[上下文选择 / 工作记忆 / 有界观察 / 压缩]
+    Context --> Model[HarnessModel：结构化动作]
+    Model -->|callTool| Gate[当前步骤 / 工具白名单 / 参数 / 授权检查]
+    Gate --> Tools[受控工具调用]
+    Tools -->|成功| Observe[Observation / 计划更新 / Evidence Bus]
+    Observe --> Context
+    Tools -->|可恢复失败| Recover[有界参数修正与恢复规划]
+    Recover --> Plan
+    Model -->|complete| Verify[Task Verifier / 可选 Visual Verifier]
+    Observe -->|候选产物| Verify
+    Verify -->|允许修正| Plan
+    Model -->|blocked| Blocked[保留缺少条件说明]
+    Recover -->|耗尽| Explain[失败解释：受控事实 / 有限模型 / 本地回退]
+    Verify -->|最终未通过| Explain
+    Verify -->|通过| Candidate[完成结果或待确认预览]
+  end
+  Provider[服务端 DeepSeek 适配器] -.实现 HarnessModel.-> Model
+  Domain[数据 / EDS / 语义 / Notebook / SQL / ChangeSet / MCP] -.按工具与角色供给.-> Tools
+  Budget[贯穿控制：预算 / 超时 / 撤权复查 / 取消 / 事件] -.约束.-> Runtime
+  Candidate --> ParentCheck[若为子任务：主 Agent 汇总并再验收]
+  ParentCheck --> Receipt[主任务唯一回执 / 会话提交 / SSE 终止帧]
+  Blocked --> Receipt
+  Explain --> Receipt
+  Receipt --> UI
+  UI -->|预览并确认| Save[正式 AppSpec / 工作区与项目保存]

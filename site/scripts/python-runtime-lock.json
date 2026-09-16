@@ -1,0 +1,85 @@
+{
+  "version": "314.0.7",
+  "pythonVersion": "3.14.2",
+  "base": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/",
+  "pureWheels": [
+    "et_xmlfile-2.0.0-py3-none-any.whl",
+    "openpyxl-3.1.5-py2.py3-none-any.whl"
+  ],
+  "packages": {
+    "pandas": "3.0.2",
+    "numpy": "2.4.6",
+    "python-dateutil": "2.9.0.post0",
+    "six": "1.17.0",
+    "pytz": "2026.1.post1",
+    "et-xmlfile": "2.0.0",
+    "openpyxl": "3.1.5"
+  },
+  "files": {
+    "pyodide-lock.json": {
+      "sha256": "5dc2fc119108bc148c7457dc86e7675b5c87e1cafd420b9c34c1eaef7b36c010",
+      "bytes": 119077,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide-lock.json"
+    },
+    "pyodide.js": {
+      "sha256": "3141b814715a72e59b51b1b18b9ceae5bf19f7c852417e431bb0a34feadf825c",
+      "bytes": 18912,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.js"
+    },
+    "pyodide.asm.wasm": {
+      "sha256": "cc36e3cab04fdfc9a63ff13eb52eae2b911bf46c025cc7b281f394bd3de1d5e6",
+      "bytes": 9598218,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.asm.wasm"
+    },
+    "pyodide.asm.mjs": {
+      "sha256": "f7cdc8ece80678ceb712f8e65ebe6d3a83203a180c399865f49612a051693635",
+      "bytes": 1250344,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.asm.mjs"
+    },
+    "python_stdlib.zip": {
+      "sha256": "fa1957e5777068fc4f7437f96d860ae2fbe9c19732ba06c84e004ec16dd7dd7a",
+      "bytes": 2545637,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/python_stdlib.zip"
+    },
+    "pandas-3.0.2-cp314-cp314-pyemscripten_2026_0_wasm32.whl": {
+      "sha256": "45ff57772cc2f366a8582c7d3097cc4e6676342ecd5a3c08184a43462d5a02ae",
+      "bytes": 4177749,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pandas-3.0.2-cp314-cp314-pyemscripten_2026_0_wasm32.whl"
+    },
+    "numpy-2.4.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl": {
+      "sha256": "a292c1f5d7d8a2208cd5e94fc467604c131cabcd2fc14fed6eefde121e7fabdf",
+      "bytes": 2960568,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/numpy-2.4.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl"
+    },
+    "six-1.17.0-py2.py3-none-any.whl": {
+      "sha256": "228c50f73aa7addf2c2ccf2979c256802a59ab69cad8152b31b9443cc8140f42",
+      "bytes": 11050,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/six-1.17.0-py2.py3-none-any.whl"
+    },
+    "python_dateutil-2.9.0.post0-py2.py3-none-any.whl": {
+      "sha256": "9b13365edf9c188f570baf9c540bbb3029ada2a2dacb9694b3659941693ee9e5",
+      "bytes": 229892,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/python_dateutil-2.9.0.post0-py2.py3-none-any.whl"
+    },
+    "pytz-2026.1.post1-py2.py3-none-any.whl": {
+      "sha256": "b8249d6450146e0b61e6d710dc02ebb35a904796c4c2f97fe87d4ac5872db36a",
+      "bytes": 510489,
+      "url": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pytz-2026.1.post1-py2.py3-none-any.whl"
+    },
+    "et_xmlfile-2.0.0-py3-none-any.whl": {
+      "sha256": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa",
+      "bytes": 18059,
+      "url": "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl"
+    },
+    "openpyxl-3.1.5-py2.py3-none-any.whl": {
+      "sha256": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2",
+      "bytes": 250910,
+      "url": "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl"
+    },
+    "pyodide-LICENSE": {
+      "url": "https://raw.githubusercontent.com/pyodide/pyodide/314.0.7/LICENSE",
+      "bytes": 16725,
+      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+    }
+  }
+}

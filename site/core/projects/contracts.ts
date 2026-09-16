@@ -26,6 +26,7 @@ export const projectFileSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/u),
   datasetIds: z.array(z.string().regex(/^dataset_upload_[A-Za-z0-9_-]{16,160}$/u)).max(PROJECT_LIMITS.tables),
   savedAt: z.iso.datetime(),
+  deletedAt: z.iso.datetime().optional(),
 }).strict();
 export const projectManifestSchema = z.object({
   format: z.literal(PROJECT_FORMAT), id: z.string().uuid(), name: z.string().trim().min(1).max(100),
@@ -53,4 +54,6 @@ export const projectActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), stateRevision: z.number().int().nonnegative(), state: projectStateSchema }).strict(),
   z.object({ action: z.literal("renameTable"), datasetId: z.string(), name: z.string().trim().min(1).max(160) }).strict(),
   z.object({ action: z.literal("restoreTable"), datasetId: z.string() }).strict(),
+  z.object({ action: z.literal("archiveFile"), fileId: z.string().uuid() }).strict(),
+  z.object({ action: z.literal("restoreFile"), fileId: z.string().uuid() }).strict(),
 ]);

@@ -22,8 +22,6 @@ export const DEFAULT_HARNESS_VISUAL_VIEWPORTS = [
 export const MAX_HARNESS_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 export const MAX_HARNESS_VISION_RESPONSE_BYTES = 256 * 1024;
 export const DEFAULT_HARNESS_VISUAL_TIMEOUT_MS = 35_000;
-export const DEFAULT_HARNESS_VISION_MAX_TOKENS = 2_400;
-export const DEFAULT_HARNESS_PREFLIGHT_VISION_MAX_TOKENS = 6_000;
 
 export interface CapturedScreenshot {
   bytes: Buffer;
@@ -653,7 +651,6 @@ export class PlaywrightMultimodalVisualVerifier implements HarnessVisualVerifier
           response_format: { type: "json_object" },
           thinking: { type: "disabled" },
           temperature: 0,
-          max_tokens: DEFAULT_HARNESS_PREFLIGHT_VISION_MAX_TOKENS,
           messages: [
             { role: "system", content: PREFLIGHT_PERCEPTION_PROMPT },
             { role: "user", content },
@@ -718,7 +715,6 @@ export class PlaywrightMultimodalVisualVerifier implements HarnessVisualVerifier
           response_format: { type: "json_object" },
           thinking: { type: "disabled" },
           temperature: 0,
-          max_tokens: DEFAULT_HARNESS_VISION_MAX_TOKENS,
           messages: [
             { role: "system", content: UPLOADED_IMAGE_PROMPT },
             {
@@ -848,8 +844,6 @@ export class PlaywrightMultimodalVisualVerifier implements HarnessVisualVerifier
           response_format: { type: "json_object" },
           thinking: { type: "disabled" },
           temperature: 0,
-          // 视觉推理模型会把思考 token 计入输出预算；过小会出现 finish_reason=length 且 content 为空。
-          max_tokens: DEFAULT_HARNESS_VISION_MAX_TOKENS,
           messages: [
             { role: "system", content: VISUAL_VERIFIER_PROMPT },
             { role: "user", content: userContent },

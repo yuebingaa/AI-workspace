@@ -32,7 +32,7 @@ import {
   removeUploadedDatasetFromWorkspace,
 } from "@/core/datasets/workspace-state";
 import type { DatasetUploadResponse } from "@/core/datasets/contracts";
-import type { HarnessNotebookArtifact, HarnessNotebookCell } from "@/core/harness/notebook-contracts";
+import type { NotebookArtifact, NotebookCell } from "@/core/notebook/definition";
 import type { NotebookDocument } from "@/core/notebook/contracts";
 import { notebookDashboardPreview } from "@/core/notebook/dashboard";
 import {
@@ -42,6 +42,7 @@ import {
 } from "@/core/eds";
 import type { AiChangeSetAuditMetadata, ChangeOperation, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
+import { restoreAssistantSessions } from "@/core/harness/assistant-sessions";
 import {
   createBrowserStudioRepository,
   createStudioSnapshot,
@@ -49,7 +50,6 @@ import {
   importStudioBackup,
   loadStudioStateSafely,
   restoreStudioBackup,
-  saveStudioStateSafely,
   STUDIO_BACKUP_MAX_BYTES,
   type StudioRepository,
 } from "@/core/repository";
@@ -72,19 +72,25 @@ import { triggerBrowserDownload } from "./ExcelDownloadButton";
 import { PageStructurePanel } from "./PageStructurePanel";
 import { PublishReadinessDialog } from "./PublishReadinessDialog";
 import { OriginalWorkbookDialog } from "./OriginalWorkbookDialog";
-import { StudioHeader, type PreviewDevice } from "./StudioHeader";
-import { WorkspaceModeBar, type WorkspaceMode } from "./AgentWorkspace";
+import { StudioHeader } from "./StudioHeader";
+import type { WorkspaceMode } from "./AgentWorkspace";
+import { WorkspaceNavigation, type WorkspaceNavigationAction } from "./WorkspaceNavigation";
+import { AiApiSettings } from "./AiApiSettings";
+import { WecomSettings } from "./WecomSettings";
 import { NotebookPanel } from "./notebook/NotebookPanel";
 import type { ComposerResultOption } from "./ComposerContextMenu";
 import { useStudioPageActions, selectablePageId, useStudioPagesState } from "./workspace/pages";
 import { harnessUiClock, useStudioAssistantActions, useStudioAssistantState } from "./workspace/assistant";
 import { useStudioDatasetActions, useStudioDatasetsState } from "./workspace/datasets";
 import { useStudioSemanticState, useStudioSemanticActions } from "./workspace/semantics";
+import { useStudioPersistence } from "./workspace/persistence";
 import { SemanticModelManager, SemanticModelSection } from "./SemanticModelManager";
 import { selectedSemanticModel } from "@/core/semantic/model";
 import { WorkspaceSidebarRail } from "./WorkspaceSidebarRail";
 import { LocalProjectsProvider, useLocalProjects } from "./projects/LocalProjectsProvider";
 import { DataBrowser } from "./projects/DataBrowser";
+import { FilesPanel } from "./files/FilesPanel";
+import type { SessionImportedFile } from "./files/file-list";
 import type { DatasetUploadResponse as ProjectDatasetResponse } from "@/core/datasets/contracts";
 import {
   ASSISTANT_PANEL_MAX_WIDTH,
@@ -124,6 +130,12 @@ function StudioProjectWorkspace() {
 function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const localProject = useLocalProjects();
   const [dataBrowserOpen, setDataBrowserOpen] = useState(false);
+  const [dataBrowserCategory, setDataBrowserCategory] = useState<"trash" | undefined>();
+  const [filesPanelOpen, setFilesPanelOpen] = useState(false);
+  const [importedFiles, setImportedFiles] = useState<SessionImportedFile[]>([]);
+  const [removedOriginalDatasetIds, setRemovedOriginalDatasetIds] = useState<string[]>([]);
+  const [filesRefreshVersion, setFilesRefreshVersion] = useState(0);
+  const filesButtonRef = useRef<HTMLButtonElement>(null);
   const { repurchaseChangeSet } = fixtures;
   const initialProduct = useMemo(
     () => {
@@ -171,11 +183,13 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   } = datasets;
   const semantic = useStudioSemanticState(dataProduct, activePageId, activeDataSource?.id ?? "");
   const [spreadsheetResultFocusRevision, setSpreadsheetResultFocusRevision] = useState(0);
-  const [device] = useState<PreviewDevice>("desktop");
+  const [spreadsheetResultPageId, setSpreadsheetResultPageId] = useState<string | null>(null);
   const [saveLabel, setSaveLabel] = useState("已保存 · 演示草稿");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("preview");
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("canvas");
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("agent");
+  const [settingsPanel, setSettingsPanel] = useState<"api" | "wecom" | null>(null);
+  const [assistantCollapsed, setAssistantCollapsed] = useState(false);
   const [notebookInteractionBusy, setNotebookInteractionBusy] = useState(false);
   const [puckDraft, setPuckDraft] = useState<StudioPuckData | null>(null);
   const [puckSessionKey, setPuckSessionKey] = useState(0);
@@ -207,7 +221,10 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     harnessTasks,
     setHarnessTasks,
     assistantConversation,
-    setAssistantConversation,
+    assistantSessions,
+    setAssistantSessions,
+    isSessionChanging,
+    lastHarnessTaskId,
     setLastHarnessTaskId,
     isLocalAssistantReply,
     setIsLocalAssistantReply,
@@ -215,13 +232,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   } = assistant;
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isPublishInfoOpen, setIsPublishInfoOpen] = useState(false);
-  const [compactPanel, setCompactPanel] = useState<"pages" | "assistant" | null>(null);
   const [isPagesExpanded, setIsPagesExpanded] = useState(false);
   const [assistantPanelWidth, setAssistantPanelWidth] = useState<number | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const publishButtonRef = useRef<HTMLButtonElement>(null);
-  const pagesButtonRef = useRef<HTMLButtonElement>(null);
+  const pagesButtonRef = historyButtonRef;
   const assistantButtonRef = useRef<HTMLButtonElement>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
   const sidebarRailToggleRef = useRef<HTMLButtonElement>(null);
@@ -229,7 +245,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const assistantPanelSlotRef = useRef<HTMLDivElement>(null);
   const assistantResizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const repositoryRef = useRef<StudioRepository | null>(null);
-  const persistedQueryRecordsRef = useRef<QueryExecutionRecord[] | null>(null);
   const puckDraftOriginRef = useRef<PuckDraftOrigin | null>(null);
   const latestDatasetWorkspaceRef = useRef({
     execution,
@@ -275,42 +290,30 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     };
   }, [aiChangeSet, status]);
   useEffect(() => {
-    if (!compactPanel) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const trigger = compactPanel === "pages" ? pagesButtonRef.current : assistantButtonRef.current;
-      setCompactPanel(null);
-      queueMicrotask(() => trigger?.focus());
-    };
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [compactPanel]);
-
-  useEffect(() => {
     if (assistantPanelWidth === null) return;
     const clampToViewport = () => {
       setAssistantPanelWidth((current) => current === null
         ? null
-        : clampAssistantPanelWidth(current, window.innerWidth, isPagesExpanded));
+        : clampAssistantPanelWidth(current, window.innerWidth, isPagesExpanded || filesPanelOpen));
     };
     clampToViewport();
     window.addEventListener("resize", clampToViewport);
     return () => window.removeEventListener("resize", clampToViewport);
-  }, [assistantPanelWidth, isPagesExpanded]);
+  }, [assistantPanelWidth, isPagesExpanded, filesPanelOpen]);
 
   useEffect(() => () => {
     document.documentElement.classList.remove("assistant-panel-resizing");
   }, []);
 
   function handleWorkspaceModeChange(mode: WorkspaceMode) {
+    setSpreadsheetResultPageId(null);
     setWorkspaceMode(mode);
-    setCompactPanel(null);
     try {
       window.localStorage.setItem("datacanvas-ai:workspace-mode:v1", mode);
     } catch { /* Keeping a view preference is optional. */ }
   }
 
-  function handleNotebookChange(document: NotebookDocument, adopted?: HarnessNotebookArtifact) {
+  function handleNotebookChange(document: NotebookDocument, adopted?: NotebookArtifact) {
     if (role === "viewer" || aiRequestStatus === "loading") throw new Error("当前不能修改 Notebook，请等待任务结束或切换为编辑者");
     const current = latestDatasetWorkspaceRef.current;
     const nextProduct = { ...current.dataProduct, notebooks: { ...current.dataProduct.notebooks, [activePageId]: document } };
@@ -322,7 +325,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     persistExplicitly(current.execution, current.auditRecords, current.queryRecords, nextProduct, nextTasks);
   }
 
-  function handleNotebookSnapshot(snapshot: DatasetUploadResponse, cell: HarnessNotebookCell) {
+  function handleNotebookSnapshot(snapshot: DatasetUploadResponse, cell: NotebookCell) {
     if (role === "viewer" || aiRequestStatus === "loading") throw new Error("当前不能创建看板预览");
     const current = latestDatasetWorkspaceRef.current;
     const page = current.execution.present.pages.find((item) => item.id === activePageId);
@@ -371,28 +374,59 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setActiveDataSourceId(artifact.sourceDataSourceId);
       setSpreadsheetResultFocusRevision((revision) => revision + 1);
       handleWorkspaceModeChange("canvas");
+      setSpreadsheetResultPageId(activePageId);
       requestAnimationFrame(() => document.querySelector(".spreadsheet-workspace")?.scrollIntoView({ block: "nearest" }));
     }
   }
 
-  function closeCompactPanel(restoreFocus = false) {
-    const trigger = compactPanel === "pages" ? pagesButtonRef.current : assistantButtonRef.current;
-    setCompactPanel(null);
-    if (restoreFocus) queueMicrotask(() => trigger?.focus());
-  }
-
   function expandPagesPanel() {
+    setFilesPanelOpen(false);
     setIsPagesExpanded(true);
     requestAnimationFrame(() => sidebarPanelCloseRef.current?.focus());
   }
 
   function collapsePagesPanel() {
     setIsPagesExpanded(false);
-    requestAnimationFrame(() => sidebarRailToggleRef.current?.focus());
+    requestAnimationFrame(() => (workspaceMode === "agent" ? pagesButtonRef.current : sidebarRailToggleRef.current)?.focus());
+  }
+
+  function closeFilesPanel() {
+    setFilesPanelOpen(false);
+    requestAnimationFrame(() => (workspaceMode !== "agent" ? filesButtonRef.current : pagesButtonRef.current)?.focus());
+  }
+
+  function openAssistantPanel() {
+    if (workspaceMode === "agent") { assistantPanelSlotRef.current?.querySelector("textarea")?.focus(); return; }
+    setAssistantCollapsed(false);
+    requestAnimationFrame(() => assistantPanelSlotRef.current?.querySelector("textarea")?.focus());
+  }
+
+  function handleNavigationAction(action: WorkspaceNavigationAction) {
+    if (action === "data") { if (aiRequestStatus !== "loading" && !notebookInteractionBusy && !isCsvUploadOpen) setDataBrowserOpen(true); }
+    else if (action === "pages") expandPagesPanel();
+    else if (action === "files") {
+      if (filesPanelOpen) { closeFilesPanel(); return; }
+      setIsPagesExpanded(false); setFilesPanelOpen(true);
+    }
+    else if (action === "models") semantic.setEditor({ modelId: semantic.selected?.id });
+    else if (action === "connections") {
+      handleWorkspaceModeChange("notebook");
+      requestAnimationFrame(() => {
+        const panel = document.querySelector<HTMLDetailsElement>(".notebook-connections");
+        if (panel) { panel.open = true; panel.scrollIntoView({ block: "nearest" }); panel.querySelector("summary")?.focus(); }
+      });
+    }
+    else if (action === "history") handleOpenHistory();
+    else if (action === "clearConversation") handleClearAssistantConversation();
+    else if (action === "api" || action === "wecom") setSettingsPanel(action);
+    else if (action === "import") setIsCsvUploadOpen(true);
+    else if (action === "backup") handleExportBackup();
+    else if (action === "restore") handleChooseBackupFile();
+    else if (action === "undo") handleUndo();
   }
 
   function resizeAssistantPanel(width: number) {
-    setAssistantPanelWidth(clampAssistantPanelWidth(width, window.innerWidth, isPagesExpanded));
+    setAssistantPanelWidth(clampAssistantPanelWidth(width, window.innerWidth, isPagesExpanded || filesPanelOpen));
   }
 
   function handleAssistantResizeStart(event: ReactPointerEvent<HTMLDivElement>) {
@@ -444,7 +478,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       if (cancelled) return;
       try {
         const savedMode = window.localStorage.getItem("datacanvas-ai:workspace-mode:v1");
-        if (savedMode === "agent" || savedMode === "notebook") setWorkspaceMode(savedMode);
+        if (savedMode === "agent" || savedMode === "notebook" || savedMode === "canvas") setWorkspaceMode(savedMode);
       } catch { /* Mode switching also works without browser storage. */ }
       const repository = localProject.repository ?? createBrowserStudioRepository();
       repositoryRef.current = repository;
@@ -456,7 +490,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setAuditRecords(restored.auditRecords);
       if (restored.restored) setQueryRecords(restored.queryRecords);
       setHarnessTasks(restored.harnessTasks);
-      setAssistantConversation(restored.assistantConversation);
+      const restoredSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation);
+      setAssistantSessions(restoredSessions);
       setEdsWorkspace(restored.edsWorkspace);
       setDataRuntime(mergeEdsWorkspaceRuntime(localProject.session ? { rowsByDataSourceId: {} } : fixtures.dataRuntime, restored.edsWorkspace));
       setActivePageId(INITIAL_WORKSPACE_PAGE_ID);
@@ -492,7 +527,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
               : "error");
         setIsLocalAssistantReply(!latestConversationTurn.taskId);
       }
-      const pendingHarnessTask = restored.harnessTasks.find((task) => task.state === "awaitingConfirmation" && task.pendingChangeSet);
+      setLastHarnessTaskId(latestConversationTurn?.taskId ?? "");
+      const pendingHarnessTask = restored.harnessTasks.find((task) => task.id === latestConversationTurn?.taskId && task.state === "awaitingConfirmation" && task.pendingChangeSet);
       if (pendingHarnessTask?.pendingChangeSet) {
         setAiChangeSet(pendingHarnessTask.pendingChangeSet);
         setAiMessage(pendingHarnessTask.resultMessage ?? "Harness 已恢复待确认变更，请重新预览后人工确认。");
@@ -511,13 +547,14 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setHasValidAiPlan(false);
         setAiRequestStatus("idle");
       }
+      setAssistantSessions(restoredSessions);
       setSaveLabel(restored.restored ? "已恢复 · 本地草稿" : "已保存 · 演示草稿");
       setPersistenceNotice(restored.notice?.includes("回退") ? restored.notice : null);
       setIsHistoryLoading(false);
     });
     return () => { cancelled = true; };
   }, [fixtures.dataRuntime, initialProduct, setActivePageId, setAiChangeSet, setAiInstruction, setAiMessage,
-    setAiMetadata, setAiRequestStatus, setAssistantConversation, setHarnessTasks, setHasValidAiPlan,
+    setAiMetadata, setAiRequestStatus, setAssistantSessions, setLastHarnessTaskId, setHarnessTasks, setHasValidAiPlan,
     setIsLocalAssistantReply, setLastSubmittedInstruction, setActiveDataSourceId, setEdsWorkspace, localProject.repository, localProject.session]);
 
 
@@ -535,37 +572,10 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     };
   }, [activeDataSourceId, assistantConversation, auditRecords, dataProduct, dataRuntime, edsWorkspace, execution, harnessTasks, queryRecords]);
 
-  useEffect(() => {
-    if (localProject.repository && !isHistoryLoading) {
-      const result = saveStudioStateSafely(localProject.repository, createStudioSnapshot(dataProduct, execution, auditRecords, queryRecords, harnessTasks, edsWorkspace, assistantConversation));
-      if (!result.persisted) setPersistenceNotice(result.notice);
-      return;
-    }
-    if (isHistoryLoading || persistedQueryRecordsRef.current === queryRecords) return;
-    persistedQueryRecordsRef.current = queryRecords;
-    const result = saveStudioStateSafely(
-      repositoryRef.current,
-      createStudioSnapshot(dataProduct, execution, auditRecords, queryRecords, harnessTasks, edsWorkspace, assistantConversation),
-    );
-    if (!result.persisted) setPersistenceNotice(result.notice);
-  }, [assistantConversation, auditRecords, dataProduct, edsWorkspace, execution, harnessTasks, isHistoryLoading, queryRecords, localProject.repository]);
-
-  function persistExplicitly(
-    nextExecution = execution,
-    nextAuditRecords = auditRecords,
-    nextQueryRecords = queryRecords,
-    nextDataProduct = dataProduct,
-    nextHarnessTasks = harnessTasks,
-    nextEdsWorkspace = edsWorkspace,
-    nextAssistantConversation = assistantConversation,
-  ) {
-    const result = saveStudioStateSafely(
-      repositoryRef.current,
-      createStudioSnapshot(nextDataProduct, nextExecution, nextAuditRecords, nextQueryRecords, nextHarnessTasks, nextEdsWorkspace, nextAssistantConversation),
-    );
-    if (!result.persisted) setPersistenceNotice(result.notice);
-    return result;
-  }
+  const { persistExplicitly, markQueriesRestored } = useStudioPersistence({
+    dataProduct, execution, auditRecords, queryRecords, harnessTasks, edsWorkspace, assistantConversation, assistantSessions,
+    isHistoryLoading, projectRepository: localProject.repository, repositoryRef, setPersistenceNotice,
+  });
 
   function clearPuckDraft() {
     puckDraftOriginRef.current = null;
@@ -872,6 +882,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         harnessTasks,
         edsWorkspace,
         assistantConversation,
+        assistantSessions,
       ), now);
       const timestamp = now.toISOString().replaceAll(":", "-").replace(".000Z", "Z");
       triggerBrowserDownload(
@@ -898,7 +909,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       const inspected = importStudioBackup(serialized);
       const summary = [
         inspected.edsWorkspace ? `${getEdsWorkspaceReports(inspected.edsWorkspace).length} 份 EDS 派生汇总` : "无 EDS 派生汇总",
-        `${inspected.assistantConversation.length} 轮聊天`,
+        inspected.assistantSessions ? `${inspected.assistantSessions.items.length} 个会话、${inspected.assistantSessions.items.reduce((total, item) => total + item.turns.length, 0)} 轮聊天` : `${inspected.assistantConversation.length} 轮聊天`,
         `${inspected.harnessTasks.length} 个 Harness 任务`,
         `${inspected.auditRecords.length} 条审计记录`,
       ].join("、");
@@ -913,17 +924,22 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       const restoredExecution = ensureInitialBlankWorkspaceInExecution(restored.execution);
 
       const latestConversationTurn = restored.assistantConversation.at(-1);
-      const pendingHarnessTask = restored.harnessTasks.find((task) => task.state === "awaitingConfirmation" && task.pendingChangeSet);
+      const restoredSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation);
+      const pendingHarnessTask = restored.harnessTasks.find((task) => task.id === latestConversationTurn?.taskId && task.state === "awaitingConfirmation" && task.pendingChangeSet);
       setDataProduct({ ...restoredDataProduct, appSpec: restoredExecution.present });
       setExecution(restoredExecution);
       setDataRuntime(mergeEdsWorkspaceRuntime(fixtures.dataRuntime, restored.edsWorkspace));
       setEdsWorkspace(restored.edsWorkspace);
       setOriginalWorkbooks([]);
+      setImportedFiles([]);
+      setRemovedOriginalDatasetIds([]);
       setOpenOriginalWorkbookId(null);
       setAuditRecords(restored.auditRecords);
       setHarnessTasks(restored.harnessTasks);
-      setAssistantConversation(restored.assistantConversation);
-      persistedQueryRecordsRef.current = restored.queryRecords;
+      setAssistantSessions(restoredSessions);
+      assistant.sessionImagesRef.current.clear();
+      assistant.setAiImageAttachments([]); assistant.setLastSubmittedImages([]);
+      markQueriesRestored(restored.queryRecords);
       setQueryRecords(restored.queryRecords);
       setActivePageId(INITIAL_WORKSPACE_PAGE_ID);
       setActiveDataSourceId(selectedSemanticModel(restoredDataProduct, INITIAL_WORKSPACE_PAGE_ID)?.sourceDatasetId
@@ -938,7 +954,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setValidationError(null);
       setAiMetadata(null);
       setAiRequestError(null);
-      setLastHarnessTaskId(pendingHarnessTask?.id ?? "");
+      setLastHarnessTaskId(latestConversationTurn?.taskId ?? "");
 
       if (pendingHarnessTask?.pendingChangeSet) {
         setAiChangeSet(pendingHarnessTask.pendingChangeSet);
@@ -973,6 +989,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setHasValidAiPlan(false);
         setIsLocalAssistantReply(true);
       }
+      setAssistantSessions(restoredSessions);
       setSaveLabel("已恢复 · 工作区备份");
       setPersistenceNotice(`已从“${file.name}”恢复：${summary}。临时 CSV 原始数据仍需在原服务端有效期内重新加载。`);
 
@@ -1002,12 +1019,17 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     try { semanticActions.select(id); } catch (error) { setPersistenceNotice(readableValidationError(error)); }
   }
 
-  const { handleGenerateAiPlan, handleCancelAiRequest, handleClearAssistantConversation, handleRetryAiRequest, handleImageAttachmentsChange } = useStudioAssistantActions({
+  const conversationDisabledReason = isHistoryLoading ? "正在恢复项目会话"
+    : aiRequestStatus === "loading" || isSessionChanging ? "请等待当前任务结束，再切换会话"
+      : execution.preview ? "请先确认或取消当前变更预览"
+        : notebookInteractionBusy || isCsvUploadOpen ? "请先完成当前编辑或导入" : undefined;
+  const { handleGenerateAiPlan, handleCancelAiRequest, handleClearAssistantConversation, handleRetryAiRequest, handleImageAttachmentsChange, handleSelectAssistantSession, handleNewAssistantSession } = useStudioAssistantActions({
     assistant, role, activePageId, renderedSpec, activeDataSource, activeOriginalWorkbook,
     edsWorkspace, dataProduct, execution, auditRecords, queryRecords, persistExplicitly,
     setExecution, setPendingPuckChangeSet, setPendingChangeSource, setCanvasMode,
     auditCurrentPreviewCancellation, setValidationError, setSaveLabel,
     notebookInteractionBusy,
+    conversationSwitchBlocked: Boolean(conversationDisabledReason),
     ...(workspaceMode === "notebook" ? { notebookContext: { document: notebookDocument,
       sourceIds: [...new Set([...notebookSources.map((source) => source.id), ...notebookDocument.cells.flatMap((cell) => cell.kind === "data" ? [cell.sourceDataSourceId] : [])])].slice(0, 10) } } : {}),
   });
@@ -1018,6 +1040,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setPendingPuckChangeSet, setPendingChangeSource, setCanvasMode, clearPuckDraft,
     setPuckSessionKey, setValidationError, setSaveLabel, setPersistenceNotice,
     persistExplicitly, handleGenerateAiPlan,
+    flushProject: localProject.session ? localProject.flush : undefined,
   });
 
   const { handlePageChange, handleInterfaceChange, handleCreateInterface, handleRenamePage, handleDeletePage } = useStudioPageActions({
@@ -1029,7 +1052,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     ensurePuckDraft, auditCurrentPreviewCancellation, addAudit, persistExplicitly,
   });
 
-  function useProjectTable(result: ProjectDatasetResponse, destination: "preview" | "notebook" | "agent") {
+  function handleUseProjectTable(result: ProjectDatasetResponse, destination: "preview" | "notebook" | "agent") {
     handleCsvUploaded(result, undefined, activePageId);
     if (destination === "preview") setIsDataSourceOpen(true);
     else if (destination === "notebook") handleWorkspaceModeChange("notebook");
@@ -1045,12 +1068,22 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     latestDatasetWorkspaceRef.current = { ...current, ...next };
     setExecution(next.execution); setDataProduct(next.dataProduct); setDataRuntime(next.dataRuntime);
     setOriginalWorkbooks((items) => items.filter((item) => item.datasetId !== id));
+    setImportedFiles((items) => items.filter((item) => item.datasetId !== id));
     if (activeDataSourceId === id) { setActiveDataSourceId(""); setIsDataSourceOpen(false); }
     persistExplicitly(next.execution, current.auditRecords, current.queryRecords, next.dataProduct, current.harnessTasks);
   }
+  function removeOriginalFile(datasetIds: string[], file?: File) {
+    const ids = new Set(datasetIds);
+    if (file) for (const item of [...importedFiles, ...datasets.originalWorkbooks]) {
+      if (item.file === file) ids.add(item.datasetId);
+    }
+    setImportedFiles((items) => items.filter((item) => !ids.has(item.datasetId)));
+    setOriginalWorkbooks((items) => items.filter((item) => !ids.has(item.datasetId)));
+    setRemovedOriginalDatasetIds((items) => [...new Set([...items, ...ids])]);
+  }
 
   return (
-    <main className="studio-shell with-workspace-modes">
+    <main className="studio-shell with-workspace-modes compact-studio">
       <input
         ref={backupFileInputRef}
         className="visually-hidden"
@@ -1062,29 +1095,25 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       <StudioHeader
         interfaces={interfaces}
         activeInterfaceId={activePageId}
-        canUndo={role !== "viewer" && execution.history.length > 0}
         saveLabel={localProject.session ? localProject.status.message : saveLabel}
-        role={role}
-        historyCount={harnessTasks.length + auditRecords.length}
-        historyButtonRef={historyButtonRef}
+        mode={workspaceMode}
+        assistantOpen={!assistantCollapsed}
+        navigation={<WorkspaceNavigation buttonRef={historyButtonRef} interfaces={interfaces} activeInterfaceId={activePageId}
+          canClearConversation={assistantConversation.length > 0 && aiRequestStatus !== "loading"}
+          projectName={localProject.session?.manifest.name} saveLabel={localProject.session ? localProject.status.message : saveLabel}
+          role={role} canUndo={role !== "viewer" && execution.history.length > 0}
+          resourceBusy={aiRequestStatus === "loading" || notebookInteractionBusy || isCsvUploadOpen} historyCount={harnessTasks.length + auditRecords.length}
+          onRoleChange={handleRoleChange} onInterfaceChange={handleInterfaceChange} onCreateInterface={handleCreateInterface} onAction={handleNavigationAction} />}
         publishButtonRef={publishButtonRef}
-        pagesButtonRef={pagesButtonRef}
         assistantButtonRef={assistantButtonRef}
-        onUndo={handleUndo}
-        onRoleChange={handleRoleChange}
-        onExportBackup={handleExportBackup}
-        onChooseBackupFile={handleChooseBackupFile}
         onInterfaceChange={handleInterfaceChange}
-        onCreateInterface={handleCreateInterface}
-        onOpenHistory={handleOpenHistory}
+        onModeChange={handleWorkspaceModeChange}
         onOpenPublish={handleOpenPublishInfo}
-        onOpenPages={() => setCompactPanel("pages")}
         onOpenAssistant={() => {
-          if (workspaceMode === "agent") assistantPanelSlotRef.current?.querySelector("textarea")?.focus();
-          else setCompactPanel("assistant");
+          if (!assistantCollapsed) setAssistantCollapsed(true);
+          else openAssistantPanel();
         }}
       />
-      <WorkspaceModeBar mode={workspaceMode} pageTitle={activePage?.title ?? "工作界面"} onChange={handleWorkspaceModeChange} />
       {localProject.notice && <div className="persistence-notice" role="alert">{localProject.notice}</div>}
       {localProject.status.state === "error" && <div className="persistence-notice" role="alert">{localProject.status.message}。请先使用“备份”导出当前定义，避免丢失未保存修改。</div>}
       {persistenceNotice && <div className="persistence-notice" role="alert"><span>{persistenceNotice}</span><button type="button" onClick={() => setPersistenceNotice(null)}>知道了</button></div>}
@@ -1092,20 +1121,33 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         id="workspace-view-panel"
         role="tabpanel"
         aria-labelledby={`workspace-tab-${workspaceMode}`}
-        className={`workspace${isPagesExpanded ? " pages-expanded" : ""}${workspaceMode === "agent" ? " workspace-agent" : ""}`}
+        className={`workspace${isPagesExpanded ? " pages-expanded" : ""}${filesPanelOpen ? " files-expanded" : ""}${workspaceMode === "agent" ? " workspace-agent" : ""}${assistantCollapsed && workspaceMode !== "agent" ? " assistant-collapsed" : ""}`}
         style={assistantPanelWidth === null ? undefined : { "--assistant-panel-width": `${assistantPanelWidth}px` } as CSSProperties}
       >
-        <div className={`workspace-panel-slot pages-panel-slot${compactPanel === "pages" ? " open" : ""}`}>
+        <div className="workspace-panel-slot pages-panel-slot">
           <WorkspaceSidebarRail
             toggleButtonRef={sidebarRailToggleRef}
-            hasOriginalWorkbook={activeOriginalWorkbooks.length > 0}
+            filesOpen={filesPanelOpen}
+            filesButtonRef={filesButtonRef}
             onExpand={expandPagesPanel}
             onUploadCsv={() => setIsCsvUploadOpen(true)}
-            onOpenOriginalWorkbook={handleOpenOriginalWorkbook}
+            onOpenOriginalWorkbook={() => handleNavigationAction("files")}
             onOpenDataBrowser={() => { if (aiRequestStatus !== "loading" && !notebookInteractionBusy && !isCsvUploadOpen) setDataBrowserOpen(true); }}
+            onOpenModels={() => handleNavigationAction("models")}
+            onOpenConnections={() => handleNavigationAction("connections")}
+            onOpenHistory={handleOpenHistory}
           />
+          {filesPanelOpen ? <FilesPanel project={localProject.session} sources={renderedSpec.dataSources.filter((source) => workspaceDatasets.some((item) => item.id === source.id))}
+            files={importedFiles} workbooks={activeOriginalWorkbooks} refreshVersion={filesRefreshVersion}
+            removedDatasetIds={removedOriginalDatasetIds} onRemoved={removeOriginalFile}
+            beforeRemove={localProject.flush}
+            onTrash={() => { setDataBrowserCategory("trash"); setDataBrowserOpen(true); }}
+            canImport={role !== "viewer" && aiRequestStatus !== "loading" && !notebookInteractionBusy && !isCsvUploadOpen}
+            interactionBusy={aiRequestStatus === "loading" || notebookInteractionBusy || isCsvUploadOpen}
+            onClose={closeFilesPanel} onImport={(files = []) => { setComposerImportFiles(files); setIsCsvUploadOpen(true); }}
+            onPreview={(result) => handleUseProjectTable(result, "preview")} onWorkbook={handleOpenOriginalWorkbook}
+            onBrowseData={() => handleNavigationAction("data")} onConnections={() => { closeFilesPanel(); handleNavigationAction("connections"); }} /> : <>
           <button ref={sidebarPanelCloseRef} type="button" className="workspace-sidebar-collapse" aria-label="收起侧边栏" onClick={collapsePagesPanel}>‹</button>
-          <button type="button" className="compact-panel-close" aria-label="关闭页面与结构面板" onClick={() => closeCompactPanel(true)}>×</button>
           <PageStructurePanel
             dataBrowserPanel={<button type="button" className="data-browser-launch" disabled={aiRequestStatus === "loading" || notebookInteractionBusy || isCsvUploadOpen} onClick={() => setDataBrowserOpen(true)}><span>▦</span><span>Data Browser<small>{localProject.session?.manifest.name ?? "打开本地项目与数据资源库"}</small></span></button>}
             semanticModelsPanel={<SemanticModelSection models={semantic.models} selectedId={semantic.selected?.id}
@@ -1114,7 +1156,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             dataProduct={dataProduct}
             appSpec={renderedSpec}
             activePageId={activePageId}
-            onPageChange={(pageId) => { handlePageChange(pageId); closeCompactPanel(); }}
+            onPageChange={handlePageChange}
             onCreateInterface={() => {
               const blankCount = interfaces.filter((item) => item.label.startsWith("空白工作界面")).length;
               handleCreateInterface(`空白工作界面 ${blankCount + 1}`);
@@ -1123,14 +1165,15 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             onRenamePage={handleRenamePage}
             onDeletePage={handleDeletePage}
             activeDataSourceId={activeDataSource?.id ?? ""}
-            onOpenDataSource={(dataSourceId) => { setActiveDataSourceId(dataSourceId); setIsDataSourceOpen(true); closeCompactPanel(); }}
-            onUploadCsv={() => { setIsCsvUploadOpen(true); closeCompactPanel(); }}
+            onOpenDataSource={(dataSourceId) => { setActiveDataSourceId(dataSourceId); setIsDataSourceOpen(true); }}
+            onUploadCsv={() => setIsCsvUploadOpen(true)}
             originalWorkbooks={activeOriginalWorkbooks}
             originalWorkbookButtonRef={originalWorkbookButtonRef}
-            onOpenOriginalWorkbook={(workbookId) => { handleOpenOriginalWorkbook(workbookId); closeCompactPanel(); }}
+            onOpenOriginalWorkbook={handleOpenOriginalWorkbook}
             onAnalyzeDataSource={(dataSourceId) => { handleWorkspaceModeChange("agent"); handleAnalyzeDataSource(dataSourceId); }}
             analysisRunning={aiRequestStatus === "loading"}
           />
+          </>}
         </div>
         <DataProductCanvas
           hidden={workspaceMode !== "canvas"}
@@ -1139,7 +1182,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           role={role}
           appSpecRevision={formalAppSpecRevision}
           activePageId={activePageId}
-          device={device}
           isPreviewing={Boolean(execution.preview)}
           canUndo={role !== "viewer" && execution.history.length > 0}
           mode={canvasMode}
@@ -1154,6 +1196,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           spreadsheetRecipe={activeDataSource ? dataProduct.recipes.find((recipe) => recipe.sourceDatasetId === activeDataSource.id) : undefined}
           spreadsheetAiResult={harnessTasks.find((task) => task.tableArtifact?.sourceDataSourceId === activeDataSource?.id)?.tableArtifact}
           spreadsheetResultFocusRevision={spreadsheetResultFocusRevision}
+          showSpreadsheetResult={spreadsheetResultPageId === activePageId}
           spreadsheetExportArtifact={harnessTasks.find((task) => task.exportArtifact)?.exportArtifact}
           onUndo={handleUndo}
           onModeChange={handleCanvasModeChange}
@@ -1167,12 +1210,14 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           onOpenSpreadsheetSource={() => { if (activeDataSource) setIsDataSourceOpen(true); }}
           onQueryExecuted={handleQueryExecuted}
         />
-        <NotebookPanel key={activePageId} hidden={workspaceMode !== "notebook"} document={notebookDocument} pageId={activePageId}
+        <NotebookPanel key={`${localProject.session?.handle ?? "local"}:${activePageId}`} hidden={workspaceMode !== "notebook"} document={notebookDocument} pageId={activePageId}
+          files={activeOriginalWorkbooks.map((workbook) => workbook.file)}
           onInteractionChange={setNotebookInteractionBusy}
           sources={notebookSources} models={semantic.models} draft={notebookDraft} canEdit={role !== "viewer"} externalBusy={aiRequestStatus === "loading"}
           onChange={handleNotebookChange} onImport={() => setIsCsvUploadOpen(true)} onSnapshot={handleNotebookSnapshot} onDataset={handleNotebookDataset}
-          onAskAi={() => { setAiInstruction("请基于当前 Notebook 和已导入的数据，生成可运行的分析步骤草稿；先汇总关键指标，再生成图表和结果表，保留已有相关步骤，不修改正式看板。"); setCompactPanel("assistant"); }} />
-        <div ref={assistantPanelSlotRef} className={`workspace-panel-slot assistant-panel-slot${compactPanel === "assistant" ? " open" : ""}`}>
+          instruction={aiInstruction} onInstructionChange={setAiInstruction} onBrowseData={() => handleNavigationAction("data")}
+          onAskAi={() => { if (!aiInstruction.trim()) setAiInstruction("请基于当前 Notebook 和已导入的数据，生成可运行的分析步骤草稿；先汇总关键指标，再生成图表和结果表，保留已有相关步骤，不修改正式看板。"); openAssistantPanel(); }} />
+        <div id="studio-assistant-panel" inert={workspaceMode !== "agent" && assistantCollapsed} ref={assistantPanelSlotRef} className="workspace-panel-slot assistant-panel-slot">
           <div
             className="assistant-resize-handle"
             role="separator"
@@ -1191,8 +1236,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             onDoubleClick={() => setAssistantPanelWidth(null)}
             onKeyDown={handleAssistantResizeKeyDown}
           />
-          <button type="button" className="compact-panel-close" aria-label="关闭 AI 助手面板" onClick={() => closeCompactPanel(true)}>×</button>
           <AiBuilderAssistant
+            settingsInNavigation
             presentation={workspaceMode === "agent" ? "workspace" : "sidebar"}
             dataSources={workspaceDatasets.map(({ id, name, rowCount, columnCount }) => ({ id, name, detail: `${rowCount.toLocaleString("zh-CN")} 行 · ${columnCount} 列` }))}
             workspaces={interfaces.map(({ id, label, description }) => ({ id, name: label, detail: description }))}
@@ -1223,18 +1268,19 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             requestStatus={aiRequestStatus}
             requestError={aiRequestError}
             canRetry={Boolean(lastSubmittedInstruction && aiRequestError)}
-            harnessTask={isLocalAssistantReply ? null : harnessTasks[0] ?? null}
+            harnessTask={isLocalAssistantReply ? null : harnessTasks.find((task) => task.id === lastHarnessTaskId) ?? null}
             harnessTasks={harnessTasks}
             conversationTurns={assistantConversation}
+            conversationSwitcher={{ sessions: assistantSessions, projectName: localProject.session?.manifest.name ?? "当前临时项目",
+              disabledReason: conversationDisabledReason, onSelect: handleSelectAssistantSession, onNew: handleNewAssistantSession }}
             pendingInstruction={aiRequestStatus === "loading" ? lastSubmittedInstruction : ""}
             dataAnalysisMode={Boolean(edsWorkspace && activePageId === EDS_WORKSPACE_PAGE_ID)}
-            rawDataAccessEnabled={activeOriginalWorkbook?.aiRawAccess ?? false}
+            rawDataAccessEnabled={Boolean(activeOriginalWorkbook)}
             imageAttachments={aiImageAttachments}
             onInstructionChange={setAiInstruction}
             onImageAttachmentsChange={handleImageAttachmentsChange}
             onGenerate={() => { void handleGenerateAiPlan(); }}
             onCancelRequest={handleCancelAiRequest}
-            onClearConversation={handleClearAssistantConversation}
             onRetry={handleRetryAiRequest}
             onPreview={handlePreview}
             onApply={handleApply}
@@ -1242,37 +1288,37 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           />
         </div>
       </div>
-      {compactPanel && <button type="button" className="compact-panel-scrim" aria-label="关闭侧栏" onClick={() => closeCompactPanel(true)} />}
+      <AiApiSettings hideTrigger open={settingsPanel === "api"} onOpenChange={open => { setSettingsPanel(open ? "api" : null); if (!open) historyButtonRef.current?.focus(); }} />
+      <WecomSettings hideTrigger open={settingsPanel === "wecom"} onOpenChange={open => { setSettingsPanel(open ? "wecom" : null); if (!open) historyButtonRef.current?.focus(); }} onSuggestion={instruction => { setAiInstruction(instruction); handleWorkspaceModeChange("agent"); }} />
       {isDataSourceOpen && activeDataSource && (
         <DataSourceDetailsPanel
           key={activeDataSource.id}
           source={activeDataSource}
           rows={dataRuntime.rowsByDataSourceId[activeDataSource.id] ?? []}
           recipe={dataProduct.recipes.find((recipe) => recipe.sourceDatasetId === activeDataSource.id)}
-          queryRecords={queryRecords}
           onPreviewRecipeBinding={handlePreviewRecipeBinding}
           onConfirmAiAccess={activeDataSource.sourceType === "csv" ? handleConfirmDatasetAiAccess : undefined}
-          onDelete={activeDataSource.sourceType === "csv" ? async () => { await localProject.flush(); await handleDeleteDataset(); } : undefined}
+          onDelete={activeDataSource.sourceType === "csv" ? async () => { await localProject.flush(); await handleDeleteDataset(); setImportedFiles((items) => items.filter((item) => item.datasetId !== activeDataSource.id)); } : undefined}
           onClose={() => setIsDataSourceOpen(false)}
         />
       )}
       {isCsvUploadOpen && <CsvUploadDialog
         initialFiles={composerImportFiles}
-        onUploaded={handleCsvUploaded}
-        onClose={() => { setIsCsvUploadOpen(false); setComposerImportFiles([]); }}
+        onUploaded={(result, workbook, destination, file) => { handleCsvUploaded(result, workbook, destination); if (file) setImportedFiles((current) => [...current.filter((item) => item.datasetId !== result.dataset.datasetId), { file, datasetId: result.dataset.datasetId, importedAt: new Date().toISOString() }]); }}
+        onClose={() => { setIsCsvUploadOpen(false); setComposerImportFiles([]); setFilesRefreshVersion((value) => value + 1); }}
         workspaceOptions={interfaces.map(({ id, label }) => ({ id, label }))}
         activeWorkspaceId={activePageId}
         onOpenEdsImport={handleOpenEdsAnalysis}
       />}
-      {dataBrowserOpen && <DataBrowser onClose={() => setDataBrowserOpen(false)} onImport={() => setIsCsvUploadOpen(true)}
-        onUse={useProjectTable} onRemoved={removeProjectTable} models={semantic.models} canEdit={role !== "viewer"} preview={execution.preview?.appSpec}
+      {dataBrowserOpen && <DataBrowser initialCategory={dataBrowserCategory} onClose={() => { setDataBrowserOpen(false); setDataBrowserCategory(undefined); setFilesRefreshVersion((value) => value + 1); }} onImport={() => setIsCsvUploadOpen(true)}
+        onFileRemoved={removeOriginalFile}
+        onUse={handleUseProjectTable} onRemoved={removeProjectTable} models={semantic.models} canEdit={role !== "viewer" && aiRequestStatus !== "loading" && !notebookInteractionBusy && !isCsvUploadOpen} preview={execution.preview?.appSpec}
         onModel={(id) => semantic.setEditor({ modelId: id })} />}
       {isEdsAnalysisOpen && <EdsAnalysisDialog onCreateWorkspace={handleCreateEdsWorkspace} onClose={handleCloseEdsAnalysis} />}
       {openOriginalWorkbook && (
         <OriginalWorkbookDialog
           file={openOriginalWorkbook.file}
           sheetNames={openOriginalWorkbook.sheetNames}
-          aiRawAccess={openOriginalWorkbook.aiRawAccess}
           onClose={() => {
             setOpenOriginalWorkbookId(null);
             requestAnimationFrame(() => restoreDialogTrigger(originalWorkbookTriggerRef.current ?? originalWorkbookButtonRef.current));

@@ -10,7 +10,7 @@ test("architecture guard detects drift and ignores tests and line ending changes
   const temporaryRoot = resolve(tmpdir());
   const fixture = await mkdtemp(join(temporaryRoot, "agent-architecture-check-"));
   try {
-    for (const scope of ["scripts", "docs/architecture", "core/harness", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/visualization-lab", "app/api/ai/visualization-lab"]) {
+    for (const scope of ["scripts", "docs/architecture", "core/harness", "core/ai/server", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/visualization-lab", "app/api/ai/visualization-lab"]) {
       await mkdir(join(fixture, scope), { recursive: true });
     }
     const script = join(fixture, "scripts/check-agent-architecture.mjs");
@@ -19,6 +19,9 @@ test("architecture guard detects drift and ignores tests and line ending changes
     await writeFile(document, `# Architecture\n<!-- agent-architecture-source-sha256: ${"0".repeat(64)} -->\n`);
     const source = join(fixture, "core/harness/runtime.ts");
     await writeFile(source, "export const version = 1;\n");
+    for (const name of ["python-runtime-lock.json", "setup-python-runtime.mjs", "copy-notebook-runtime.mjs"]) {
+      await writeFile(join(fixture, "scripts", name), "initial runtime asset contract\n");
+    }
     const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8", windowsHide: true });
     assert.equal(run().status, 1);
     assert.equal(run("--sync").status, 0);
@@ -27,6 +30,15 @@ test("architecture guard detects drift and ignores tests and line ending changes
     await writeFile(source, "export const version = 1;\r\n");
     assert.equal(run().status, 0);
     await writeFile(source, "export const version = 2;\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "core/ai/server/deepseek-harness-model.ts"), "export const modelVersion = 1;\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "core/metadata/catalog-service.ts"), "export const catalogVersion = 1;\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "scripts/python-runtime-lock.json"), "changed runtime asset contract\n");
     assert.equal(run().status, 1);
     await writeFile(document, "# Missing fingerprint\n");
     assert.equal(run("--sync").status, 1);

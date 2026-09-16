@@ -80,7 +80,7 @@ export function createHarnessAnalysisPlanArtifact(
 
     if (step.kind === "text") continue;
     const upstream = step.dependsOn.map((id) => outputs.get(id)!);
-    if (upstream.some((output) => !["data", "semanticQuery", "sql", "warehouseSql", "transform"].includes(output.kind))) {
+    if (upstream.some((output) => !["data", "semanticQuery", "sql", "python", "warehouseSql", "transform"].includes(output.kind))) {
       throw new StudioValidationError("Analysis Plan 校验失败", [`步骤“${step.title}”只能依赖产生表格数据的步骤。`]);
     }
     const upstreamSourceIds = new Set(upstream.flatMap((output) => [...output.sourceDataSourceIds]));
@@ -99,7 +99,7 @@ export function createHarnessAnalysisPlanArtifact(
       continue;
     }
 
-    if (step.kind === "sql" || step.kind === "transform") {
+    if (step.kind === "sql" || step.kind === "python" || step.kind === "transform") {
       outputs.set(step.id, { kind: step.kind, fields: null, sourceDataSourceIds: upstreamSourceIds });
       continue;
     }
@@ -108,7 +108,7 @@ export function createHarnessAnalysisPlanArtifact(
     else requireFields(step.title, upstream[0].fields, [step.categoryField, ...step.valueFields]);
   }
 
-  if (!usedSourceIds.size && !usedConnectionIds.size) throw new StudioValidationError("Analysis Plan 校验失败", ["分析计划至少需要一个当前工作界面的 Data 或已授权数据库查询步骤。"]);
+  if (!usedSourceIds.size && !usedConnectionIds.size && !draft.steps.some((step) => step.kind === "python")) throw new StudioValidationError("Analysis Plan 校验失败", ["分析计划至少需要一个当前工作界面的 Data 或已授权数据库查询步骤。"]);
   const kinds = new Set(draft.steps.map((step) => step.kind));
   const missingDeliverable = draft.deliverables.find((deliverable) => (
     deliverable === "chart" ? !kinds.has("chart") : deliverable === "table" ? !kinds.has("table") : !kinds.has("text")
@@ -128,7 +128,7 @@ export function createHarnessAnalysisPlanArtifact(
 }
 
 function notebookDependencies(cell: HarnessNotebookCell): string[] {
-  if (cell.kind === "sql") return cell.inputCellIds;
+  if (cell.kind === "sql" || cell.kind === "python") return cell.inputCellIds;
   if ("inputCellId" in cell) return [cell.inputCellId];
   return [];
 }

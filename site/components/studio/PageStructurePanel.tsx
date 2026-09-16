@@ -7,7 +7,6 @@ interface OriginalWorkbookItem {
   id: string;
   datasetId: string;
   file: File;
-  aiRawAccess: boolean;
 }
 
 interface PageStructurePanelProps {
@@ -64,7 +63,7 @@ export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageC
               <div className="quality"><span>数据质量</span><b>{dataset.qualityScore}%</b></div>
               <div className="quality-bar"><i style={{ width: `${dataset.qualityScore}%` }} /></div>
               {dataset.ephemeral && <small className="dataset-retention">临时数据 · {dataset.expiresAt ? `${new Date(dataset.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 到期` : "服务重启后失效"}</small>}
-              <span className="data-card-open-label">查看字段、预览与记录 →</span>
+              <span className="data-card-open-label">查看字段、预览与配方 →</span>
             </button>
             <button type="button" className="data-card-ai-action" disabled={analysisRunning} onClick={() => onAnalyzeDataSource(dataset.id)}>{analysisRunning && activeDataSourceId === dataset.id ? "AI 分析中…" : "✦ AI 数据分析"}</button>
           </article>
@@ -77,9 +76,7 @@ export function PageStructurePanel({ dataProduct, appSpec, activePageId, onPageC
         {originalWorkbooks.map((workbook, index) => (
           <section className="original-workbook-card attached" aria-label={`原始表格 ${workbook.file.name}`} key={workbook.id}>
             <div><span className="original-workbook-icon">XLSX</span><div><b>{workbook.file.name}</b><small>{(workbook.file.size / 1024).toFixed(1)} KiB · 仅当前会话</small></div></div>
-            <p>{workbook.aiRawAccess
-              ? "可分页查看；AI 完整扫描已开放，相关提问会覆盖全部数据行。"
-              : "可分页查看；AI 完整扫描未授权，原文件不进入本地持久化。"}</p>
+            <p>可分页查看；AI 可按需查询完整工作簿。</p>
             <div><button type="button" disabled={analysisRunning} onClick={() => onAnalyzeDataSource(workbook.datasetId)}>{analysisRunning && activeDataSourceId === workbook.datasetId ? "AI 分析中…" : "✦ AI 数据分析"}</button><button ref={index === 0 ? originalWorkbookButtonRef : undefined} type="button" onClick={() => onOpenOriginalWorkbook(workbook.id)}>打开原始表格</button></div>
           </section>
         ))}

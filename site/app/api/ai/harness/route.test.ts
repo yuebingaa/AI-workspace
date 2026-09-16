@@ -26,7 +26,11 @@ import {
   type EdsWorkspaceSnapshot,
 } from "@/core/eds";
 import { POST } from "./route";
+import { POST as streamPOST } from "./stream/route";
+import { readHarnessStream } from "@/core/harness/stream";
+import { harnessResponseSchema } from "@/core/harness/contracts";
 import { semanticFixture } from "@/core/semantic/test-fixture";
+import * as inputInspector from "@/core/harness/input-inspector";
 
 function stream(text: string) {
   return new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } });
@@ -74,8 +78,83 @@ describe("Harness 上传数据隐私门", () => {
     vi.stubEnv("DEEPSEEK_MODEL", "");
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it.each(["json", "sse"])("%s 普通对话先经 Agent 判断，跳过 Inspector 并保留唯一最终回执", async (transport) => {
+    if (!demoFixtureResult.success) throw new Error("fixtures unavailable");
+    const inspection = vi.spyOn(inputInspector, "inspectHarnessInput");
+    vi.stubEnv("HARNESS_MCP_ENABLED", "false");
+    vi.stubEnv("HARNESS_MULTI_AGENT_MODE", "single");
+    vi.stubEnv("DEEPSEEK_API_KEY", "mock-input-gate-key");
+    vi.stubEnv("DEEPSEEK_MODEL", "mock-input-gate-model");
+    const turns = [semanticIntent({ mode: "conversation", wantsData: false }), dynamicPlan([]),
+      { type: "complete", message: "你好，我可以帮你分析数据。" }];
+    let call = 0;
+    const modelFetch = vi.fn<typeof fetch>(async (_url, init) => {
+      expect(inspection).not.toHaveBeenCalled();
+      expect(JSON.parse(JSON.parse(String(init?.body)).messages[1].content).inputInspection).toBeUndefined();
+      return new Response(JSON.stringify({ model: "mock-input-gate-model",
+        choices: [{ message: { content: JSON.stringify(turns[call++]) } }],
+        usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
+      }), { headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", modelFetch);
+    const input = { idempotencyKey: `input_gate_${transport}`, instruction: "你好", pageId: "page_home",
+      appSpec: demoFixtureResult.data.dataProduct.appSpec, recipes: [], notebookContext: {
+        sourceIds: ["dataset_retail_orders"], document: { name: "已有分析", revision: 1, cells: [
+          { id: "data", kind: "data", title: "销售数据", sourceDataSourceId: "dataset_retail_orders", outputName: "sales_data" },
+        ] },
+      } };
+    const response = await (transport === "sse" ? streamPOST : POST)(new Request(`http://localhost/api/ai/harness${transport === "sse" ? "/stream" : ""}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input),
+    }));
+    expect(response.status).toBe(200);
+    const body = transport === "sse" ? await readHarnessStream(response, new AbortController().signal) : await response.json();
+    const task = harnessResponseSchema.parse(body).task;
+    expect(task.state, task.error).toBe("completed");
+    expect(task.counters).toMatchObject({ modelCallCount: 3, toolCallCount: 0 });
+    expect(task.trace?.filter((event) => event.type === "completed")).toHaveLength(1);
+    expect(task.trace?.some((event) => event.message.includes("跳过输入检查"))).toBe(true);
+    expect(task.trace?.some((event) => event.message.includes("输入检查完成"))).toBe(false);
+    expect(inspection).not.toHaveBeenCalled();
+    expect(modelFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["json", "sse"])("普通 %s API 不再恢复旧环境模型配额，同时保留实际用量", async (transport) => {
+    if (!demoFixtureResult.success) throw new Error("fixtures unavailable");
+    vi.stubEnv("HARNESS_MCP_ENABLED", "false");
+    vi.stubEnv("HARNESS_MULTI_AGENT_MODE", "single");
+    vi.stubEnv("HARNESS_MAX_MODEL_CALLS", "1");
+    vi.stubEnv("HARNESS_MAX_TOTAL_INPUT_CHARS", "1");
+    vi.stubEnv("HARNESS_MAX_TOTAL_PROMPT_TOKENS", "1");
+    vi.stubEnv("DEEPSEEK_API_KEY", "mock-quota-key");
+    vi.stubEnv("DEEPSEEK_MODEL", "mock-quota-model");
+    const turns = [semanticIntent(), dynamicPlan(["inspectDataset"]),
+      { type: "callTool", message: "检查合成数据", toolCallId: "quota_read", name: "inspectDataset", arguments: { dataSourceId: "dataset_retail_orders" } },
+      { type: "complete", message: "已核对数据源，共 48 行，字段可用于后续分析。" }];
+    let call = 0;
+    const modelFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ model: "mock-quota-model",
+      choices: [{ message: { content: JSON.stringify(turns[call++]) } }],
+      usage: { prompt_tokens: 16_000, completion_tokens: 3_000, total_tokens: 19_000 },
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", modelFetch);
+    const input = { idempotencyKey: `unlimited_route_${transport}`, instruction: "检查 retail_orders 数据集是否可用", pageId: "page_home",
+      appSpec: demoFixtureResult.data.dataProduct.appSpec, recipes: demoFixtureResult.data.dataProduct.recipes };
+    const response = await (transport === "sse" ? streamPOST : POST)(new Request(`http://localhost/api/ai/harness${transport === "sse" ? "/stream" : ""}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input),
+    }));
+    expect(response.status).toBe(200);
+    const body = transport === "sse" ? await readHarnessStream(response, new AbortController().signal) : await response.json();
+    const task = harnessResponseSchema.parse(body).task;
+    expect(task.state, task.error).toBe("completed");
+    expect(task.counters).toMatchObject({ modelCallCount: 4, toolCallCount: 1 });
+    expect(task.contextUsage).toMatchObject({ totalPromptTokens: 64_000,
+      limits: { maxRequestInputChars: null, maxTotalInputChars: null, maxTotalPromptTokens: null } });
+    expect(modelFetch).toHaveBeenCalledTimes(4);
+    for (const [, init] of modelFetch.mock.calls) expect(JSON.parse(String(init?.body))).not.toHaveProperty("max_tokens");
   });
 
   it("语义模型数据源错配、失效字段和任意 SQL 在调用模型前被拒绝", async () => {
@@ -182,10 +261,25 @@ describe("Harness 上传数据隐私门", () => {
     expect(outbound).toContain("飞达工位超时");
     expect(outbound).toContain("session-memory-cache");
     expect(outbound).toContain("scanComplete");
+    const firstInputs = modelFetch.mock.calls.slice(0, 3).map((invocation) => {
+      const sent = JSON.parse(String(invocation[1]?.body));
+      return JSON.parse(sent.messages[1].content);
+    });
+    expect(firstInputs[0].inputInspection).toBeUndefined();
+    for (const input of firstInputs.slice(1)) {
+      expect(input.inputInspection).toMatchObject({ basis: "entryMetadataOnly", workbook: {
+        status: "parsedAttachment", fileName: "EDS原始数据.xlsx", sheetCount: 1,
+        sheets: [{ name: "白班明细", rowCount: 2, columnCount: 3 }],
+      } });
+      // Structure is known before the first tool; workbook values still aren't.
+      expect(JSON.stringify(input.inputInspection)).not.toContain("A5FNL01");
+      expect(JSON.stringify(input.inputInspection)).not.toContain("飞达工位超时");
+    }
     expect(JSON.stringify(body.task)).not.toContain("EDS原始数据.xlsx");
   });
 
   it("接收用户图片、调用视觉模型，并只把结构化图片证据交给 Harness", async () => {
+    const inspection = vi.spyOn(inputInspector, "inspectHarnessInput");
     if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
     const fixture = demoFixtureResult.data.dataProduct;
     const form = new FormData();
@@ -212,6 +306,7 @@ describe("Harness 上传数据隐私门", () => {
     const modelFetch = vi.fn<typeof fetch>(async (_url, init) => {
       const outbound = JSON.parse(String(init?.body)) as { model: string };
       if (outbound.model === "vision-test") {
+        expect(inspection).not.toHaveBeenCalled();
         return new Response(JSON.stringify({
           choices: [{ message: { content: JSON.stringify({
             summary: "右侧面板遮挡数据健康度卡片。",
@@ -235,6 +330,7 @@ describe("Harness 上传数据隐私门", () => {
 
     expect(response.status).toBe(200);
     expect(body.task).toMatchObject({ state: "completed", resultMessage: "图片显示右侧面板遮挡了数据健康度卡片。" });
+    expect(inspection).not.toHaveBeenCalled();
     const outboundBodies = modelFetch.mock.calls.map((call) => String(call[1]?.body));
     expect(outboundBodies.find((item) => item.includes('"model":"vision-test"'))).toContain("data:image/jpeg;base64");
     const harnessBodies = outboundBodies.filter((item) => item.includes('"model":"deepseek-chat"')).join("\n");

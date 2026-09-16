@@ -7,7 +7,8 @@ describe("WorkspaceSidebarRail", () => {
   it("折叠时只提供真实可执行的工作区快捷入口", () => {
     const html = renderToStaticMarkup(<WorkspaceSidebarRail
       toggleButtonRef={createRef<HTMLButtonElement>()}
-      hasOriginalWorkbook={false}
+      filesOpen={false}
+      filesButtonRef={createRef<HTMLButtonElement>()}
       onExpand={() => undefined}
       onUploadCsv={() => undefined}
       onOpenOriginalWorkbook={() => undefined}
@@ -16,20 +17,23 @@ describe("WorkspaceSidebarRail", () => {
     expect(html).toContain('aria-label="打开侧边栏"');
     expect(html).not.toContain('aria-label="EDS 分析"');
     expect(html).toContain('aria-label="导入表格"');
-    expect(html).toContain('aria-label="放置原始表格"');
+    expect(html).toContain('aria-label="原始文件"');
+    expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("disabled");
   });
 
-  it("原始工作簿存在时把快捷入口改为打开操作", () => {
+  it("文件面板展开时暴露选中状态和面板关联", () => {
     const html = renderToStaticMarkup(<WorkspaceSidebarRail
       toggleButtonRef={createRef<HTMLButtonElement>()}
-      hasOriginalWorkbook
+      filesOpen
+      filesButtonRef={createRef<HTMLButtonElement>()}
       onExpand={() => undefined}
       onUploadCsv={() => undefined}
       onOpenOriginalWorkbook={() => undefined}
     />);
 
-    expect(html).toContain('aria-label="打开原始表格"');
-    expect(html).not.toContain('aria-label="放置原始表格"');
+    expect(html).toContain('aria-label="原始文件"');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-controls="studio-files-panel"');
   });
 });

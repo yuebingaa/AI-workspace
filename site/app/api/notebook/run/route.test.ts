@@ -26,6 +26,23 @@ function document(id: string, sql: string): NotebookDocument {
 }
 describe("local Notebook API", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.put.mockImplementation(async (_identity, payload) => datasetUploadResponseSchema.parse(payload)); });
+  it("Python 原件结果保存为 Dataset 时记录代码 / 文件来源并重新确认 AI 使用", async () => {
+    const form = new FormData();
+    form.append("file", new File(["station,seconds\nEDS,60\nCoat,120"], "raw.csv"));
+    const code = "result = pd.read_csv(files['raw.csv']).assign(minutes=lambda df: df.seconds / 60)";
+    form.set("payload", JSON.stringify({ pageId: "test", action: "dataset", targetCellId: "python", document: { name: "Python 来源", revision: 4, cells: [
+      { id: "python", title: "处理", kind: "python", inputCellIds: [], fileNames: ["raw.csv"], outputName: "result", code },
+    ] } }));
+    const response = await POST(new Request("http://127.0.0.1:3001/api/notebook/run", { method: "POST", body: form }));
+    const payload = await response.json() as { snapshot: DatasetUploadResponse };
+    expect(response.status, JSON.stringify(payload)).toBe(200);
+    expect(payload.snapshot.rows.map((row) => row.minutes)).toEqual([1, 2]);
+    expect(payload.snapshot.dataset.aiAccessPolicy).toBe("pending");
+    const lineage = payload.snapshot.dataset.provenance?.lineage;
+    expect(lineage).toMatchObject({ sourceFiles: [{ name: "raw.csv", sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) }], complete: true });
+    expect(JSON.parse(lineage!.steps[0].definition)).toMatchObject({ kind: "python", code });
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+  }, 30_000);
   it("rejects cross-origin, non-JSON, forged identity and client-supplied rows", async () => {
     expect((await POST(request({}, { origin: "https://untrusted.example" }))).status).toBe(403);
     expect((await POST(request({}, { "content-type": "text/plain" }))).status).toBe(415);
@@ -82,6 +99,9 @@ describe("local Notebook API", () => {
     const payload = await response.json() as { run: { runId: string }; snapshot: DatasetUploadResponse };
     expect(payload.snapshot.rows).toHaveLength(700);
     expect(payload.snapshot.dataset.provenance).toMatchObject({ kind: "notebook", runId: payload.run.runId, cellId: "sql", revision: 0, connectionIds: [] });
+    expect(payload.snapshot.dataset.provenance?.lineage).toMatchObject({ complete: true, rowCount: 700, sourceDatasetIds: [uploaded.dataset.datasetId], accessMode: "user" });
+    expect(payload.snapshot.dataset.provenance?.lineage?.steps.map((step) => step.cellId)).toEqual(["source", "sql"]);
+    expect(JSON.parse(payload.snapshot.dataset.provenance!.lineage!.steps[1].definition).sql).toBe(doc.cells[1].kind === "sql" ? doc.cells[1].sql : "");
     expect(mocks.put).toHaveBeenCalledTimes(1);
   }, 15_000);
 });

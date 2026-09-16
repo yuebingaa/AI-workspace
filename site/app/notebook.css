@@ -78,7 +78,6 @@
 .notebook-draft li { margin-bottom:12px; }
 .notebook-assistant-artifact { border:1px solid var(--studio-border); border-radius:10px; padding:14px; margin:12px 0; background:var(--studio-surface); }
 .notebook-assistant-artifact p { color:var(--studio-secondary); font-size:11px; line-height:1.8; }
-@media (max-width:700px) { .notebook-panel { padding:18px 12px 40px; } .notebook-heading h1 { font-size:19px; } .notebook-editor fieldset { grid-template-columns:1fr; } .notebook-empty { padding:38px 4px; } .notebook-empty h2 { font-size:18px; } .notebook-cell>header { padding:12px; } .notebook-cell-tools { padding-inline:12px; } }
 @media (prefers-reduced-motion:reduce) { .notebook-panel button { transition:none; } }
 .notebook-recipe-steps { display: grid; gap: 12px; }
 .notebook-recipe-step { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; padding: 14px; border: 1px solid var(--studio-border); border-radius: 8px; }
@@ -89,3 +88,18 @@
 .notebook-connections { padding: 16px; margin: 12px 0; border: 1px solid var(--studio-border); border-radius: 10px; }
 .notebook-connection { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 0; }
 .notebook-connections button { padding: 6px 10px; border: 1px solid var(--studio-border); border-radius: 6px; }
+.connection-catalog { min-width: 0; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--studio-border); }
+.connection-catalog-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.connection-catalog p { color: var(--studio-secondary); line-height: 1.8; font-size: 12px; }
+.connection-catalog :is(td,th) { font-size: 12px; }
+.connection-catalog td > small { display: block; color: var(--studio-secondary); font-size: 11px; margin-bottom: 3px; }
+.connection-catalog label { display: grid; gap: 6px; margin-top: 12px; }
+.connection-catalog input { width: 100%; min-width: 0; box-sizing: border-box; background: var(--studio-surface); color: var(--studio-ink); border: 1px solid var(--studio-border); border-radius: 5px; padding: 9px 10px; font: inherit; }
+.dataset-provenance { min-width: 0; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--studio-border); border-radius: 5px; background: var(--studio-surface); color: var(--studio-secondary); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.dataset-provenance summary { cursor: pointer; color: var(--studio-ink); }
+.dataset-provenance ol { padding-left: 22px; }
+.dataset-provenance li { padding: 8px 0; border-bottom: 1px solid var(--studio-border); }
+.dataset-provenance li > p { margin: 4px 0; }
+.dataset-provenance pre { max-height: 220px; overflow: auto; white-space: pre-wrap; background: var(--studio-paper); padding: 10px; color: var(--studio-ink); }
+.dataset-provenance button { background: var(--studio-surface); border: 1px solid var(--studio-border); border-radius: 5px; padding: 6px 10px; color: var(--studio-ink); font: inherit; cursor: pointer; }
+.dataset-provenance :is(button,summary):focus-visible { outline: 2px solid var(--studio-border-strong); outline-offset: 3px; }

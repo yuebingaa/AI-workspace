@@ -7,14 +7,8 @@ export interface AssistantPanelWidthBounds {
 }
 
 export function getAssistantPanelWidthBounds(viewportWidth: number, pagesExpanded: boolean): AssistantPanelWidthBounds {
-  const safeViewportWidth = Math.max(0, Math.round(viewportWidth));
-  if (safeViewportWidth <= 960) {
-    const maximum = Math.max(0, safeViewportWidth - 44);
-    return {
-      minimum: Math.min(ASSISTANT_PANEL_MIN_WIDTH, maximum),
-      maximum,
-    };
-  }
+  // Keep the same minimum desktop width as .compact-studio in studio-layout.css.
+  const safeViewportWidth = Math.max(1024, Math.round(viewportWidth));
 
   const compactDesktop = safeViewportWidth <= 1200;
   const pagesWidth = pagesExpanded

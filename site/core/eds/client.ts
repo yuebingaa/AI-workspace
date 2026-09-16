@@ -1,4 +1,4 @@
-import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/bounded-body";
 import {
   EDS_MAX_RESPONSE_BYTES,
   edsAnalysisResponseSchema,

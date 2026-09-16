@@ -20,7 +20,8 @@ await context.route(/\/api\/ai\/harness(?:\/|$)/, (route) => route.abort());
 page.on("dialog", (dialog) => dialog.accept());
 const dialog = () => page.getByRole("dialog", { name: "Data Browser 数据浏览器" });
 async function openBrowser() {
-  await page.getByRole("button", { name: /打开 Data Browser 数据浏览器|Data Browser打开本地项目|Data Browser合成验收项目/ }).first().click();
+  await page.getByRole("button", { name: "打开工作区菜单", exact: true }).click();
+  await page.getByRole("navigation", { name: "工作区功能菜单" }).getByRole("button", { name: "数据浏览器", exact: true }).click();
   await dialog().waitFor({ state: "visible" });
   if (!(await dialog().innerText()).includes("尚未打开本地项目")) await page.waitForFunction(() => Number(document.querySelector('.data-browser-body nav button:last-of-type small')?.textContent) > 0);
 }

@@ -6,6 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "python:setup": "node scripts/setup-python-runtime.mjs",
     "docs:agent:check": "node scripts/check-agent-architecture.mjs",
     "docs:agent:test": "node --test scripts/check-agent-architecture.test.mjs",
     "docs:agent:sync": "node scripts/check-agent-architecture.mjs --sync",

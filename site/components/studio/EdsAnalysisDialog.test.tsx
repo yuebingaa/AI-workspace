@@ -125,7 +125,7 @@ describe("EdsAnalysisDialog", () => {
     expect(html).toContain("高级验收");
     expect((html.match(/type="file"/gu) ?? [])).toHaveLength(1);
     expect(html).toContain("accept=\".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\"");
-    expect(html).toContain("不进入 AI 上下文");
+    expect(html).toContain("导入后可直接分析完整工作簿");
     expect(html).toContain("导入并自动分析");
     expect(html).toContain('aria-label="选择输入工作簿"');
     expect(html).toContain('aria-labelledby="eds-dialog-title"');
@@ -189,10 +189,8 @@ describe("EdsAnalysisDialog", () => {
     mountedRoots.push(root);
     act(() => root.render(<EdsAnalysisDialog onClose={() => undefined} onCreateWorkspace={onCreateWorkspace} />));
     const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
-    const rawAccess = container.querySelector<HTMLInputElement>('.eds-ai-raw-access input[type="checkbox"]')!;
 
     act(() => {
-      rawAccess.click();
       Object.defineProperty(input, "files", { configurable: true, value: [new File(["source"], "input.xlsx")] });
       input.dispatchEvent(new Event("change", { bubbles: true }));
     });
@@ -202,11 +200,11 @@ describe("EdsAnalysisDialog", () => {
     });
     const createButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "生成 EDS 分析看板")!;
     expect(createButton).toBeDefined();
-    expect(container.textContent).toContain("AI 原始数据完整扫描已授权");
+    expect(container.textContent).toContain("AI 可按需分析完整原始数据");
 
     act(() => createButton.click());
     expect(onCreateWorkspace).toHaveBeenCalledTimes(1);
-    expect(onCreateWorkspace).toHaveBeenCalledWith([standardResult], 0, expect.objectContaining({ name: "input.xlsx" }), true);
+    expect(onCreateWorkspace).toHaveBeenCalledWith([standardResult], 0, expect.objectContaining({ name: "input.xlsx" }));
   });
 
   it("零值柱不伪造可见宽度并提供机器可读数值语义", () => {
@@ -338,7 +336,7 @@ describe("EdsAnalysisDialog", () => {
     const createButton = Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent === "生成可切换的 EDS 看板（2 份）")!;
     act(() => createButton.click());
-    expect(onCreateWorkspace).toHaveBeenCalledWith([whiteResult, nightResult], 1, expect.objectContaining({ name: "multi-shift.xlsx" }), false);
+    expect(onCreateWorkspace).toHaveBeenCalledWith([whiteResult, nightResult], 1, expect.objectContaining({ name: "multi-shift.xlsx" }));
   });
 
   it("真实文件 change 事件中的无效替换会移除旧文件并禁用分析", () => {

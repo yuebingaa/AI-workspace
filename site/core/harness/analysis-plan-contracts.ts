@@ -47,6 +47,11 @@ const warehouseSqlStepSchema = z.object({
   connectionId: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,99}$/u),
   transformation: z.string().trim().min(1).max(800),
 }).strict();
+const pythonStepSchema = z.object({
+  id: identifierSchema, kind: z.literal("python"), title: titleSchema, objective: objectiveSchema,
+  dependsOn: z.array(identifierSchema).max(10).refine((items) => new Set(items).size === items.length, "依赖步骤不能重复"),
+  transformation: z.string().trim().min(1).max(800),
+}).strict();
 
 const tableStepSchema = z.object({
   id: identifierSchema,
@@ -88,6 +93,7 @@ export const harnessAnalysisStepSchema = z.discriminatedUnion("kind", [
   semanticQueryStepSchema,
   sqlStepSchema,
   warehouseSqlStepSchema,
+  pythonStepSchema,
   transformStepSchema,
   tableStepSchema,
   chartStepSchema,

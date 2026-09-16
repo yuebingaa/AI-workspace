@@ -29,11 +29,10 @@ export function formatOriginalWorkbookCell(value: unknown): string {
 interface OriginalWorkbookDialogProps {
   file: File;
   sheetNames: string[];
-  aiRawAccess?: boolean;
   onClose: () => void;
 }
 
-export function OriginalWorkbookDialog({ file, sheetNames, aiRawAccess = false, onClose }: OriginalWorkbookDialogProps) {
+export function OriginalWorkbookDialog({ file, sheetNames, onClose }: OriginalWorkbookDialogProps) {
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
   const [sheetState, setSheetState] = useState<{ sheetName: string; rows: SheetData; error: string | null }>({ sheetName: "", rows: [], error: null });
   const [page, setPage] = useState(0);
@@ -88,9 +87,7 @@ export function OriginalWorkbookDialog({ file, sheetNames, aiRawAccess = false, 
           <div><small>SESSION ORIGINAL WORKBOOK</small><h2 id="original-workbook-title">原始表格</h2><p>{file.name} · {(file.size / 1024).toFixed(1)} KiB</p></div>
           <div><button type="button" onClick={() => triggerBrowserDownload(file, file.name)}>下载原文件</button><button type="button" aria-label="关闭原始表格" onClick={onClose}>×</button></div>
         </header>
-        <div className="original-workbook-privacy"><b>{aiRawAccess ? "AI 完整扫描已开放" : "只读会话预览"}</b><span>{aiRawAccess
-          ? "相关提问会把原文件随该次请求发送到服务端，完整扫描全部数据行并执行结构化查询，只向 DeepSeek 提供统计结果和少量可溯源记录；相同文件的解析索引可在服务端内存中复用，30 分钟无访问自动失效，不写入磁盘、localStorage、工作区备份或审计正文；AI 回答仍会保留在对话中。"
-          : "AI 完整扫描未授权；原文件不进入 AI 上下文、localStorage、工作区备份或审计正文，刷新后需重新导入。"}预览显示工作簿存储的单元格值，不运行宏。</span></div>
+        <div className="original-workbook-privacy"><b>完整工作簿可用</b><span>AI 可按需查询全部工作表和数据行，预览按页显示。预览显示工作簿存储的单元格值，不运行宏。</span></div>
         <div className="original-workbook-tabs" role="tablist" aria-label="原始工作簿工作表">
           {sheetNames.map((sheetName, index) => (
             <button type="button" role="tab" aria-selected={activeSheetIndex === index} key={sheetName} onClick={() => { setActiveSheetIndex(index); setPage(0); }}>{sheetName}</button>

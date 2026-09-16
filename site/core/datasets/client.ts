@@ -5,7 +5,7 @@ import {
   type DatasetUploadResponse,
   type UploadedDatasetDescriptor,
 } from "./contracts";
-import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/bounded-body";
 import { projectHeaders } from "@/core/projects/client";
 
 export type CsvUploadPhase = "uploading" | "parsing" | "validating";
@@ -184,6 +184,8 @@ export async function deleteUploadedDataset(datasetId: string): Promise<void> {
     network: "删除上传数据集时网络连接失败。",
     response: "删除上传数据集的服务端响应过大或无效。",
   });
-  if (response.status === 204 || response.status === 404) return;
+  // An empty 404 means the table is already absent. A project error also uses
+  // 404, but includes a body and must not remove the browser's remaining copy.
+  if (response.status === 204 || (response.status === 404 && !response.text.trim())) return;
   throw new DatasetClientError(response.status, errorMessage(response.text, "删除上传数据集失败。"));
 }

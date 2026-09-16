@@ -44,6 +44,7 @@ next-env.d.ts
 /evidence/
 /.runtime/
 /mcp.config.json
+/vendor/python/
 
 # Tencent Cloud EdgeOne
 .env

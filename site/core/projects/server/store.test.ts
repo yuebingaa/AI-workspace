@@ -23,6 +23,63 @@ afterEach(() => {
 });
 
 describe("local project persistence", () => {
+  it("archives an original atomically while preserving referenced data and restores its exact bytes", async () => {
+    const saved = store.putTable(await projectUpload()), id = saved.dataset.datasetId;
+    const bytes = Buffer.from("category,amount\nAlpha,10");
+    const file = store.saveOriginal("synthetic.csv", bytes, id), state = projectState(saved);
+    state.dataProduct.notebooks = { [INITIAL_WORKSPACE_PAGE_ID]: { name: "分析", revision: 1, cells: [{ id: "data_input", kind: "data", title: "原始表", sourceDataSourceId: id, outputName: "input" }] } };
+    store.saveState(state, 0);
+    const before = store.read();
+    store.archiveOriginal(file.id);
+    const reopened = new LocalProjectStore(store.root), archived = reopened.read();
+    expect(archived.files[0].deletedAt).toBeTruthy();
+    expect(archived.tables).toEqual(before.tables); expect(archived.state).toEqual(before.state);
+    expect(archived.stateRevision).toBe(before.stateRevision); expect(reopened.getTable(id)).toEqual(saved);
+    expect(() => reopened.getOriginal(file.id)).toThrow(/不存在/);
+    expect(readFileSync(join(store.root, "files", file.file))).toEqual(bytes);
+    reopened.archiveOriginal(file.id); expect(reopened.read().files[0].deletedAt).toBe(archived.files[0].deletedAt);
+    reopened.restoreOriginal(file.id); expect(reopened.getOriginal(file.id)).toEqual({ entry: file, bytes });
+  });
+  it("handles orphan originals independently of table trash and preserves their associations", async () => {
+    const saved = store.putTable(await projectUpload()), id = saved.dataset.datasetId;
+    const file = store.saveOriginal("orphan.csv", Buffer.from("a\n1"), id);
+    store.deleteTable(id); store.archiveOriginal(file.id);
+    expect(store.read().files[0].datasetIds).toEqual([id]);
+    store.restoreTable(id); expect(() => store.getOriginal(file.id)).toThrow();
+    store.restoreOriginal(file.id); expect(store.getOriginal(file.id).entry).toEqual(file);
+  });
+  it("preserves file archival across a queued definition save without creating a revision conflict", async () => {
+    const saved = store.putTable(await projectUpload()), state = projectState(saved);
+    const file = store.saveOriginal("synthetic.csv", Buffer.from("a\n1"), saved.dataset.datasetId);
+    const revision = store.saveState(state, 0);
+    const pending = structuredClone(state); pending.dataProduct.name = "待保存的分析";
+    store.archiveOriginal(file.id);
+    expect(store.saveState(pending, revision)).toBe(revision + 1);
+    expect(store.read().files[0].deletedAt).toBeTruthy();
+    expect(store.read().state?.dataProduct.name).toBe(pending.dataProduct.name);
+    expect(store.getTable(saved.dataset.datasetId)).toEqual(saved);
+  });
+  it("does not restore a modified original or alter the trash entry after failure", async () => {
+    const saved = store.putTable(await projectUpload());
+    const file = store.saveOriginal("synthetic.csv", Buffer.from("a\n1"), saved.dataset.datasetId);
+    store.archiveOriginal(file.id); const before = store.read();
+    writeFileSync(join(store.root, "files", file.file), "a\n2");
+    expect(() => store.restoreOriginal(file.id)).toThrow(/校验失败/);
+    expect(store.read()).toEqual(before);
+    expect(() => store.archiveOriginal("unknown")).toThrow(/不存在/);
+    expect(() => store.restoreOriginal("unknown")).toThrow(/不存在/);
+  });
+  it("restores a re-imported original without duplicating it or dropping other worksheets", async () => {
+    const a = store.putTable(await projectUpload()), b = store.putTable(await projectUpload());
+    const bytes = Buffer.from("PKsynthetic-workbook");
+    const file = store.saveOriginal("synthetic.xlsx", bytes, a.dataset.datasetId);
+    store.archiveOriginal(file.id);
+    const restored = store.saveOriginal("synthetic.xlsx", bytes, b.dataset.datasetId);
+    expect(restored.id).toBe(file.id); expect(restored.deletedAt).toBeUndefined();
+    expect(store.read().files).toHaveLength(1);
+    expect(restored.datasetIds).toEqual([a.dataset.datasetId, b.dataset.datasetId]);
+    expect(store.getOriginal(file.id).bytes).toEqual(bytes);
+  });
   it("creates an empty project and refuses to overwrite a nonempty folder", () => {
     expect(store.read()).toMatchObject({ state: null, tables: [], files: [], stateRevision: 0 });
     expect(() => LocalProjectStore.create(store.root, "覆盖")).toThrow(/空文件夹/);

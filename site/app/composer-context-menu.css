@@ -33,7 +33,6 @@
 .context-menu-chevron { margin-left: auto; color: var(--studio-muted); font-size: 17px; line-height: 1; }
 .composer-context-submenu { display: flex; flex-direction: column; }
 .context-submenu-heading { display: flex; align-items: center; gap: 6px; padding: 4px 7px 7px; color: var(--studio-secondary); font-size: 10px; }
-.context-submenu-heading button { width: 24px; height: 24px; border: 0; background: var(--studio-paper); color: var(--studio-secondary); font-size: 20px; border-radius: 4px; }
 .context-menu-search { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 6px 8px; margin: 0 3px 5px; border: 1px solid var(--studio-border); border-radius: 3px; }
 .context-menu-search:focus-within { border-color: var(--studio-border-strong); box-shadow: 0 0 0 2px color-mix(in srgb, var(--studio-ink) 10.2%, transparent); }
 .context-menu-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--studio-ink); font: inherit; font-size: 11px; }
@@ -70,8 +69,3 @@
 .right-panel .prompt-box .context-plus-trigger { width: 25px; height: 25px; border: 0; border-radius: 4px; background: var(--studio-paper); color: var(--studio-secondary); font-size: 20px; }
 .right-panel .prompt-box .context-plus-trigger[aria-expanded="true"] { background: var(--studio-soft); color: var(--studio-secondary); }
 .right-panel .prompt-box .composer-attachment-error { margin: 0 0 8px; color: #a64237; font-size: 11px; }
-@media (max-width: 600px) {
-  .composer-context-placeholder { font-size: 10px; }
-  .composer-context-menu > button { min-height: 38px; }
-  .composer-context-submenu.compact { box-shadow: 0 8px 30px color-mix(in srgb, var(--studio-ink) 12.55%, transparent); }
-}

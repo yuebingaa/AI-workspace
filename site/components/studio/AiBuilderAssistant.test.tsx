@@ -66,7 +66,6 @@ function render(
     onImageAttachmentsChange={() => {}}
     onGenerate={() => {}}
     onCancelRequest={() => {}}
-    onClearConversation={() => {}}
     onRetry={() => {}}
     onPreview={() => {}}
     onApply={() => {}}
@@ -168,7 +167,7 @@ describe("AI 助手 Harness 状态", () => {
     const html = render("success", task("completed"), null, true);
     expect(html).toContain("AI 数据分析与看板助手");
     expect(html).toContain("看板变更需确认");
-    expect(html).toContain("不会获得原始工作簿或逐行明细");
+    expect(html).toContain("若需查询完整原始工作簿，请重新导入 XLSX");
     expect(html).toContain("增加 B5FSL01 异常类型柱状图");
   });
 
@@ -189,12 +188,12 @@ describe("AI 助手 Harness 状态", () => {
     }];
     const html = render("success", task("completed"), null, true, conversationTurns);
 
-    expect(html).toContain("对话上下文");
-    expect(html).toContain("已保留 2 轮");
+    expect(html).not.toContain('class="conversation-heading"');
+    expect(html).not.toContain("已保留 2 轮");
     expect(html.indexOf("先分析 B5FSL01")).toBeLessThan(html.indexOf("好的"));
     expect(html).toContain("已回复 · Harness");
     expect(html).toContain("已回复 · 本地回复");
-    expect(html).toContain("清除上下文");
+    expect(html).not.toContain("清除上下文");
     expect(html).not.toContain("运行详情");
     expect(html).not.toContain("assistant-diagnostics");
     expect(html).not.toContain("测试指令</div>");

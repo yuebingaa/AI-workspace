@@ -53,8 +53,6 @@
 .canvas-area[hidden] { display: none; }
 .workspace.workspace-agent { grid-template-columns: 56px minmax(0, 1fr); background: var(--studio-surface); }
 .workspace.workspace-agent.pages-expanded { grid-template-columns: 250px minmax(0, 1fr); }
-.workspace-agent .assistant-panel-slot > .assistant-resize-handle,
-.workspace-agent .assistant-panel-slot > .compact-panel-close { display: none; }
 .assistant-head .assistant-expand-button { padding: 2px 5px; border-radius: 6px; color: var(--studio-secondary); font-size: 19px; }
 .assistant-head .assistant-expand-button:hover { color: var(--studio-secondary); background: var(--studio-paper); }
 .workspace-agent .agent-workspace-panel { border-left: 0; background: var(--studio-surface); }
@@ -107,36 +105,4 @@
 @media (max-width: 1200px) {
   .workspace.workspace-agent { grid-template-columns: 52px minmax(0, 1fr); }
   .workspace.workspace-agent.pages-expanded { grid-template-columns: 210px minmax(0, 1fr); }
-}
-@media (max-width: 960px) {
-  .with-workspace-modes .workspace-panel-slot { top: 116px; }
-  .with-workspace-modes .compact-panel-scrim { top: 116px; }
-  .workspace.workspace-agent, .workspace.workspace-agent.pages-expanded { grid-template-columns: minmax(0, 1fr); }
-  .workspace-agent .assistant-panel-slot { position: relative; top: auto; bottom: auto; right: auto; z-index: 1; width: 100%; height: 100%; transform: none; box-shadow: none; }
-  .has-site-compliance-footer .workspace-agent .assistant-panel-slot { bottom: auto; }
-  .workspace-modebar { padding-inline: 14px; }
-  .workspace-mode-hint { display: none; }
-}
-@media (max-width: 600px) {
-  .workspace-modebar { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding-inline: 12px; }
-  .workspace-mode-context { font-size: 10px; }
-  .workspace-mode-tabs button { padding-inline: 11px; font-size: 11px; }
-  .workspace-agent .agent-workspace-panel .assistant-head { height: 54px; padding: 9px 16px; }
-  .agent-workspace-panel .conversation { padding: 8px 16px 16px; }
-  .agent-workspace-welcome { padding-block: 12px 20px; }
-  .agent-welcome-art { width: 135px; height: 104px; margin-bottom: 12px; }
-  .agent-welcome-eyebrow { font-size: 10px; }
-  .agent-workspace-welcome h1 { font-size: 21px; }
-  .agent-welcome-description { margin-block: 11px 18px; font-size: 11px; }
-  .agent-suggestions { gap: 6px; }
-  .agent-suggestions button { gap: 7px; padding: 9px; font-size: 10px; }
-  .agent-workspace-panel > .assistant-flow,
-  .agent-workspace-panel .agent-context-bar,
-  .agent-workspace-panel .prompt-box { width: calc(100% - 28px); }
-  .agent-workspace-panel .prompt-box { padding: 12px; margin-bottom: 14px; }
-  .agent-workspace-panel .prompt-box textarea { min-height: 58px; font-size: 13px; }
-  .agent-workspace-panel .prompt-shortcuts { display: none; }
-  .agent-context-source label { display: block; }
-  .agent-context-source select { display: block; padding-left: 0; }
-  .agent-context-bar { gap: 6px; }
 }

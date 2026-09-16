@@ -52,13 +52,12 @@ export function VisualizationLab() {
   const [running, setRunning] = useState(false);
   const [events, setEvents] = useState<HarnessTraceEvent[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
-  const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [tab, setTab] = useState<"chart" | "data" | "config">("chart");
   const [renderObservation, setRenderObservation] = useState<{ key: string; status: "rendered" | "failed" } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const activeRun = runs.find((run) => run.id === selectedId);
-  const renderKey = `${activeRun?.id ?? "empty"}:${device}`;
+  const renderKey = activeRun?.id ?? "empty";
   const renderState = renderObservation?.key === renderKey ? renderObservation.status : "pending";
   const currentTask = activeRun?.task;
   const currentCaseId = activeRun?.caseId;
@@ -189,14 +188,13 @@ export function VisualizationLab() {
       <div className={styles.mainColumn}>
         <section className={styles.previewPanel} aria-label="可视化测试结果">
           <div className={styles.previewHeading}><div><small>03 — 生成与观察</small><h2>{running ? "Agent 正在处理" : activeRun ? visualizationCases.find((item) => item.id === activeRun.caseId)?.name ?? "测试结果" : "图表预览"}</h2></div>
-            <div className={styles.deviceButtons} aria-label="预览尺寸"><button type="button" aria-pressed={device === "desktop"} onClick={() => setDevice("desktop")}>桌面</button><button type="button" aria-pressed={device === "mobile"} onClick={() => setDevice("mobile")}>窄屏</button></div>
           </div>
           <div className={styles.tabs} role="tablist" aria-label="查看测试内容">{([['chart', '图表'], ['data', '示例数据'], ['config', '生成配置']] as const).map(([value, label]) => <button key={value} type="button" id={`viz-tab-${value}`} role="tab" aria-selected={tab === value} aria-controls="viz-panel" onClick={() => setTab(value)}>{label}</button>)}
             {activeRun && <button type="button" className={styles.export} onClick={downloadReport}>下载报告 ↓</button>}</div>
           <div id="viz-panel" role="tabpanel" aria-labelledby={`viz-tab-${tab}`} className={styles.resultContent}>
             {tab === "chart" && <>
               {running ? <div className={styles.empty} role="status"><span className={styles.pulse}><ChartIcon /></span><h3>正在把问题转成图表</h3><p>{statusMessage}</p></div>
-                : evaluation?.preview ? <div ref={canvasRef} className={`${styles.canvas} ${device === "mobile" ? styles.mobileCanvas : ""}`}>
+                : evaluation?.preview ? <div ref={canvasRef} className={styles.canvas}>
                   <PreviewBoundary key={activeRun!.id} onFailure={() => setRenderObservation({ key: renderKey, status: "failed" })}><AppSpecRenderer node={evaluation.preview.pages[0].root} context={{ dataSources: evaluation.preview.dataSources, dataRuntime: demoLocalDataRuntime, pageId: LAB_PAGE_ID, queryRevision: activeRun!.id }} /></PreviewBoundary>
                 </div>
                   : <div className={styles.empty}><span className={styles.emptyIcon}><ChartIcon /></span><h3>{activeRun ? activeRun.cancelled ? "测试已取消" : "本轮没有生成图表" : "第一张图，从一个问题开始"}</h3><p>{activeRun?.error ?? activeRun?.task?.resultMessage ?? "左侧选择测试题，点击开始。这里将展示 Agent 实际生成的结果。"}</p>{!activeRun && <small>示例：{selectedCase.name} · {retailOrderRows.length} 行零售数据</small>}</div>}
