@@ -1,4 +1,5 @@
-import { datasetRepository, type DatasetRepository } from "@/core/datasets/server/dataset-repository";
+import { datasetRepository } from "@/core/datasets/server/dataset-repository";
+import type { DatasetRepository } from "@/core/datasets/repository";
 import type { HarnessExcelExporter } from "@/core/harness/tool-registry";
 import type { OwnershipScope } from "@/core/identity/ownership";
 import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";

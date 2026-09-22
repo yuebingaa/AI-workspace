@@ -2,6 +2,8 @@ import type { DataRow, DataSourceDefinition } from "@/core/models";
 import type { SemanticModel } from "@/core/semantic/contracts";
 import type { NotebookDocument, NotebookSqlTable, NotebookTable } from "./contracts";
 import type { CatalogReference } from "@/core/metadata/contracts";
+import type { NotebookResultPublisher } from "./result-access";
+import type { NotebookCapabilities } from "./capabilities";
 
 export interface NotebookSource { source: DataSourceDefinition; rows: DataRow[] }
 
@@ -43,6 +45,10 @@ export interface NotebookQueryLogEntry {
 export interface NotebookExecutionDependencies {
   query: NotebookQueryExecutor;
   python?: (signal: AbortSignal) => Promise<NotebookPythonSession>;
+  /** Runtime gates are checked independently of the persisted Notebook definition. */
+  capabilities?: NotebookCapabilities;
+  /** Save-only, current target handoff; successful run and cleanup precede publication. */
+  publishResult?: NotebookResultPublisher;
   // Synchronous by contract: a failed receipt write must still reject the run.
   log: (entry: NotebookQueryLogEntry) => void;
 }

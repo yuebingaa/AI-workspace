@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal, flushSync } from "react-dom";
+// Share the browser-safe selection limit; the menu never imports Notebook execution.
+import { MAX_NOTEBOOK_CONTEXT_SELECTION } from "@/core/notebook/context-selection";
+import { NotebookContextOptions, type NotebookContextOption } from "./notebook/NotebookContextSelection";
 
 export interface ComposerDataOption { id: string; name: string; detail?: string }
 export interface ComposerResultOption extends ComposerDataOption { kind: "recipe" | "artifact" }
-type MenuSection = "data" | "results" | "connections" | "semantic";
+type MenuSection = "data" | "results" | "connections" | "semantic" | "notebook";
 
 interface ComposerContextMenuProps {
   anchor: HTMLElement;
@@ -22,6 +25,11 @@ interface ComposerContextMenuProps {
   onSelectWorkspace: (id: string) => void;
   onSelectDataSource: (id: string) => void;
   onSelectResult: (result: ComposerResultOption) => void;
+  notebookOptions?: NotebookContextOption[];
+  selectedNotebookCellIds?: string[];
+  notebookContextDisabled?: boolean;
+  onToggleNotebookCell?: (id: string) => void;
+  onOpenNotebook?: () => void;
 }
 
 function menuPosition(anchor: HTMLElement) {
@@ -37,16 +45,16 @@ function menuPosition(anchor: HTMLElement) {
   };
 }
 
-function ContextIcon({ kind }: { kind: "file" | "data" | "results" | "connections" | "search" | "semantic" }) {
+function ContextIcon({ kind }: { kind: "file" | "data" | "results" | "connections" | "search" | "semantic" | "notebook" }) {
   return <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
     {kind === "file" ? <path d="m7 11 5-5a2 2 0 0 1 3 3l-7 7a4 4 0 0 1-6-6l8-8m-5 10 7-7" />
       : kind === "data" || kind === "search" ? <><circle cx="8.5" cy="8.5" r="5.5" /><path d="m13 13 4 4" /></>
-        : kind === "results" ? <><rect x="5" y="3" width="12" height="11" rx="1" /><path d="M3 6H2v11h12v-1M8 7h6m-6 3h6m-3-5v7" /></>
+        : kind === "results" || kind === "notebook" ? <><rect x="5" y="3" width="12" height="11" rx="1" /><path d="M3 6H2v11h12v-1M8 7h6m-6 3h6m-3-5v7" /></>
           : <><ellipse cx="10" cy="4" rx="6" ry="2.5" /><path d="M4 4v11c0 3.3 12 3.3 12 0V4M4 9.5c0 3.3 12 3.3 12 0" /></>}
   </svg>;
 }
 
-export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dataSources, activeDataSourceId, results, semanticModels = [], activeSemanticModelId, onSelectSemanticModel, onManageSemanticModels, onClose, onChooseFiles, onImportData, onSelectWorkspace, onSelectDataSource, onSelectResult }: ComposerContextMenuProps) {
+export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dataSources, activeDataSourceId, results, semanticModels = [], activeSemanticModelId, onSelectSemanticModel, onManageSemanticModels, onClose, onChooseFiles, onImportData, onSelectWorkspace, onSelectDataSource, onSelectResult, notebookOptions = [], selectedNotebookCellIds = [], notebookContextDisabled = false, onToggleNotebookCell, onOpenNotebook }: ComposerContextMenuProps) {
   const [position, setPosition] = useState(() => menuPosition(anchor));
   const [section, setSection] = useState<MenuSection | null>(null);
   const [query, setQuery] = useState("");
@@ -114,7 +122,7 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
       returnToRoot();
     } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       event.preventDefault();
-      const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role^="menuitem"]'));
+      const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role^="menuitem"]:not(:disabled)'));
       const current = buttons.indexOf(target as HTMLButtonElement);
       const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
         : current < 0 ? (event.key === "ArrowUp" ? buttons.length - 1 : 0)
@@ -130,7 +138,7 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
     });
   }
 
-  const title = section === "data" ? "工作界面与数据表" : section === "results" ? "处理配方或结果" : section === "semantic" ? "语义模型" : "数据连接";
+  const title = section === "data" ? "工作界面与数据表" : section === "results" ? "处理配方或结果" : section === "semantic" ? "语义模型" : section === "notebook" ? "Notebook 参数与单元" : "数据连接";
   const pick = (action: () => void) => { action(); onClose(true); };
 
   return createPortal(<>
@@ -148,6 +156,7 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
       {([
         ["data", "选择工作界面与数据表"],
         ["results", "添加处理配方或结果"],
+        ["notebook", "选择 Notebook 参数与单元"],
         ["semantic", "选择语义模型"],
         ["connections", "选择数据连接"],
       ] as const).map(([id, label]) => <button
@@ -175,15 +184,17 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
           {filteredResults.map((result) => <button key={`${result.kind}:${result.id}`} type="button" role="menuitem" onClick={() => pick(() => onSelectResult(result))}><span className="context-option-symbol">▤</span><span><b>{result.name}</b><small>{result.detail}</small></span><em>{result.kind === "recipe" ? "引用" : "查看"}</em></button>)}
           {!filteredResults.length && <div className="context-menu-empty">{query ? "没有匹配的配方或结果" : "暂无处理配方或结果"}<small>导入表格或完成 AI 数据处理后，会显示在这里。</small></div>}
         </>}
+        {section === "notebook" && <NotebookContextOptions options={notebookOptions} selectedIds={selectedNotebookCellIds}
+          limit={MAX_NOTEBOOK_CONTEXT_SELECTION} disabled={notebookContextDisabled || !onToggleNotebookCell} query={query} onToggle={(id) => onToggleNotebookCell?.(id)} />}
         {section === "semantic" && <>
           {filteredModels.map((model) => <button key={model.id} type="button" role="menuitemradio" aria-checked={model.id === activeSemanticModelId} onClick={() => pick(() => onSelectSemanticModel?.(model.id))}><span className="context-option-symbol">◇</span><span><b>{model.name}</b><small>{model.detail}</small></span>{model.id === activeSemanticModelId && <i>✓</i>}</button>)}
           {!filteredModels.length && <div className="context-menu-empty">{query ? "没有匹配的语义模型" : "当前工作界面暂无语义模型"}<small>先导入数据，再定义业务维度和指标口径。</small></div>}
           {activeSemanticModelId && <button type="button" role="menuitem" onClick={() => pick(() => onSelectSemanticModel?.(null))}>不使用语义模型</button>}
           {onManageSemanticModels && <button type="button" role="menuitem" onClick={() => pick(onManageSemanticModels)}>创建 / 管理语义模型</button>}
         </>}
-        {section === "connections" && <div className="context-menu-empty context-connections-empty"><ContextIcon kind="connections" /><b>{query ? "没有匹配的数据连接" : "暂无已连接的数据库"}</b><small>数据库连接功能尚未接入。你可以先添加本地 CSV 或 Excel 表格。</small><button type="button" onClick={() => pick(onImportData)}>导入本地表格</button></div>}
+        {section === "connections" && <div className="context-menu-empty context-connections-empty"><ContextIcon kind="connections" /><b>在 Notebook 中查看数据连接</b><small>此菜单暂不列出连接；已有连接请从 Notebook 的连接目录查看，选择上下文不会授予数据库权限。</small>{onOpenNotebook && <button type="button" onClick={() => pick(onOpenNotebook)}>打开 Notebook</button>}</div>}
       </div>
-      <p className="context-menu-footnote">{section === "data" ? "选择数据表会更新分析对象；选择界面会同步切换看板。" : section === "results" ? "引用配方会填入分析问题；AI 处理结果可在看板中查看。" : section === "semantic" ? "选择模型会同步分析数据表；指标遵循已保存的计算口径。" : "连接入口已预留"}</p>
+      <p className="context-menu-footnote">{section === "data" ? "选择数据表会更新分析对象；选择界面会同步切换看板。" : section === "results" ? "引用配方会填入分析问题；AI 处理结果可在看板中查看。" : section === "semantic" ? "选择模型会同步分析数据表；指标遵循已保存的计算口径。" : section === "notebook" ? `已选 ${selectedNotebookCellIds.length}/${MAX_NOTEBOOK_CONTEXT_SELECTION}；仅指定关注对象，不自动读取、运行或改变权限。切换工作界面或会话后清除。` : "连接目录与权限沿用 Notebook 现有入口。"}</p>
     </div>}
   </>, document.body);
 }

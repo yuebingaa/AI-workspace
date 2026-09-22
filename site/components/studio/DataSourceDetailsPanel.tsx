@@ -16,6 +16,7 @@ import type {
   DataRow,
   DataSourceDefinition,
 } from "@/core/models";
+import { DatasetQualityProfile } from "./datasets/DatasetQualityProfile";
 
 type DataSourceTab = "overview" | "fields" | "preview" | "recipe";
 
@@ -169,11 +170,12 @@ export function DataSourceDetailsPanel({
               <article><span>数据源名称</span><b>{source.name}</b><small>{source.id}</small></article>
               <article><span>数据规模</span><b>{source.rowCount.toLocaleString("zh-CN")} 行</b><small>{source.columnCount} 个字段</small></article>
               <article><span>更新时间</span><b>{new Date(source.updatedAt).toLocaleString("zh-CN")}</b><small>{source.sourceType === "csv" ? "上传解析时间" : "数据更新时间"}</small></article>
-              <article><span>数据质量</span><b>{source.qualityScore}%</b><small>{source.quality ? `空值率 ${(source.quality.nullRate * 100).toFixed(1)}% · 重复行 ${source.quality.duplicateRowCount}` : "通过本地结构校验"}</small></article>
+              <article><span>导入 / 来源质量摘要</span><b>{source.qualityScore}%</b><small>{source.quality ? `空值率 ${(source.quality.nullRate * 100).toFixed(1)}% · 重复行 ${source.quality.duplicateRowCount}` : "通过本地结构校验"}</small></article>
               <article><span>数据类型</span><b>{sourceTypeLabels[source.sourceType]}</b><small>{source.ephemeral ? "服务端临时存储" : source.sourceType === "csv" ? "本地项目持久存储" : source.sourceType === "bi" ? "外部同步数据" : "阶段 A 本地数据"}</small></article>
               {source.expiresAt && <article><span>保留时间</span><b>{new Date(source.expiresAt).toLocaleString("zh-CN")}</b><small>到期必定失效；重启恢复取决于本地持久化配置</small></article>}
             </div>
-            {source.quality && <div className="dataset-quality-summary"><span>类型冲突 <b>{source.quality.typeConflictCount}</b></span><span>异常提示 <b>{source.quality.anomalies.length}</b></span><span>重复行 <b>{source.quality.duplicateRowCount}</b></span></div>}
+            {source.quality && <div className="dataset-quality-summary" aria-label="导入 / 来源质量提示"><span>类型冲突 <b>{source.quality.typeConflictCount}</b></span><span>异常提示 <b>{source.quality.anomalies.length}</b></span><span>重复行 <b>{source.quality.duplicateRowCount}</b></span></div>}
+            <DatasetQualityProfile source={source} rows={rows} />
             {source.ephemeral && <div className="dataset-ephemeral-notice">上传数据不会写入浏览器 localStorage；服务端最多保留 30 分钟，未启用本地持久化时重启失效。</div>}
             {source.sourceType === "csv" && !source.ephemeral && <div className="dataset-ephemeral-notice">数据已保存到本地项目文件夹，不按临时保留期过期。请定期备份整个项目。</div>}
             {source.fields.some((field) => field.sensitiveCategories?.length) && (
@@ -187,6 +189,7 @@ export function DataSourceDetailsPanel({
             </div>
           )}
           {tab === "fields" && (
+            <div><p className="dataset-field-statistics-note">字段统计基于当前可用数据：空值仅指 null 或缺失，与“当前数据统计”一致；唯一值排除空值。</p>
             <div className="source-table-scroll"><table className="source-fields-table">
               <thead><tr><th>字段 / 中文标签</th><th>类型</th><th>空值</th><th>唯一值</th><th>数值统计</th><th>示例值</th></tr></thead>
               <tbody>{analyses.map((analysis) => (
@@ -199,7 +202,7 @@ export function DataSourceDetailsPanel({
                   <td>{analysis.samples.map(displayValue).join("、") || "—"}</td>
                 </tr>
               ))}</tbody>
-            </table></div>
+            </table></div></div>
           )}
           {tab === "preview" && (
             <div className="source-preview-layout">

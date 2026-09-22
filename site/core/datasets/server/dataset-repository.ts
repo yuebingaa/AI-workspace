@@ -1,8 +1,12 @@
 import { z } from "zod";
-import type { DataRow, DatasetAiAccessPolicy } from "@/core/models";
+import type { DatasetAiAccessPolicy } from "@/core/models";
 import { ownershipNamespace, type OwnershipScope } from "@/core/identity/ownership";
 import { configuredSnapshotAdapter, type SnapshotAdapter } from "@/core/persistence/server/json-file-snapshot";
 import { StudioValidationError } from "@/core/schemas";
+import { DatasetAiAccessPolicyConflictError, DatasetAiAccessRevokedError, type DatasetRepository, type StoredDataset } from "../repository";
+// Compatibility for existing server consumers; the public port has no startup effects.
+export { DatasetAiAccessPolicyConflictError, DatasetAiAccessRevokedError } from "../repository";
+export type { DatasetRepository, StoredDataset } from "../repository";
 import {
   CSV_UPLOAD_LIMITS,
   datasetUploadResponseSchema,
@@ -10,24 +14,6 @@ import {
   type DatasetUploadResponse,
   type UploadedDatasetDescriptor,
 } from "../contracts";
-
-export interface StoredDataset {
-  ownership: OwnershipScope;
-  descriptor: UploadedDatasetDescriptor;
-  rows: DataRow[];
-}
-
-export interface DatasetRepository {
-  put(ownership: OwnershipScope, dataset: DatasetUploadResponse): Promise<StoredDataset>;
-  get(ownership: OwnershipScope, datasetId: string): Promise<StoredDataset | null>;
-  list(ownership: OwnershipScope): Promise<UploadedDatasetDescriptor[]>;
-  setAiAccessPolicy(
-    ownership: OwnershipScope,
-    datasetId: string,
-    policy: Extract<DatasetAiAccessPolicy, "masked" | "exclude-sensitive-samples">,
-  ): Promise<UploadedDatasetDescriptor>;
-  delete(ownership: OwnershipScope, datasetId: string): Promise<boolean>;
-}
 
 export interface MemoryDatasetRepositoryOptions {
   maxDatasets?: number;
@@ -66,20 +52,6 @@ export interface DatasetRepositoryHealth {
   capacity: number;
   utilization: number;
   warning: string | null;
-}
-
-export class DatasetAiAccessPolicyConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "DatasetAiAccessPolicyConflictError";
-  }
-}
-
-export class DatasetAiAccessRevokedError extends Error {
-  constructor(readonly datasetId: string) {
-    super(`上传数据集 ${datasetId} 已被删除、过期或更改 AI 数据处理方式`);
-    this.name = "DatasetAiAccessRevokedError";
-  }
 }
 
 export class MemoryDatasetRepository implements DatasetRepository {

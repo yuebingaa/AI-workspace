@@ -4,15 +4,26 @@ import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { datasetUploadResponseSchema, type DatasetUploadResponse } from "@/core/datasets/contracts";
-import { DatasetAiAccessPolicyConflictError, DatasetAiAccessRevokedError, type DatasetRepository } from "@/core/datasets/server/dataset-repository";
+import { DatasetAiAccessPolicyConflictError, DatasetAiAccessRevokedError, type DatasetRepository } from "@/core/datasets/repository";
 import type { OwnershipScope } from "@/core/identity/ownership";
-import { JsonFileSnapshotAdapter, configuredSnapshotAdapter } from "@/core/persistence/server/json-file-snapshot";
-import { loadStudioStateSafely, parseStudioPersistedState, type StudioPersistedState } from "@/core/repository/studio-repository";
-import { PROJECT_FORMAT, PROJECT_LIMITS, projectManifestSchema, type ProjectFile, type ProjectManifest, type ProjectSession } from "../contracts";
+import { JsonFileSnapshotAdapter, configuredSnapshotAdapter, type SnapshotSchema } from "@/core/persistence/server/json-file-snapshot";
+import { loadStudioStateSafely, parseStudioPersistedState, STUDIO_STORAGE_VERSION, type StudioPersistedState } from "@/core/repository/studio-repository";
+import { PROJECT_FORMAT, PROJECT_LIMITS, projectManifestSchema, type ProjectFile, type ProjectManifest, type ProjectSession, type ProjectTable } from "../contracts";
 import { projectDatasetReferences } from "../references";
+import { normalizeProjectStateForStorage } from "../state-normalization";
+import { semanticModelReferences } from "@/core/semantic/model-references";
+import { detectProjectCompatibility, projectCompatibilityMessage, type ProjectCompatibility } from "../compatibility";
+import type { ProjectInspection } from "../inspection";
+import { inspectProjectManifest } from "./inspection";
 
 export class ProjectError extends Error {
   constructor(message: string, readonly status = 400) { super(message); this.name = "ProjectError"; }
+}
+export class ProjectCompatibilityError extends ProjectError {
+  constructor(readonly compatibility: ProjectCompatibility) {
+    super(projectCompatibilityMessage(compatibility), 409);
+    this.name = "ProjectCompatibilityError";
+  }
 }
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const manifestName = "agentcanvas.project.json";
@@ -48,20 +59,60 @@ export class LocalProjectStore {
     checkedProjectPath(this.root);
     const stat = lstatSync(this.root);
     if (stat.dev !== this.rootIdentity.dev || stat.ino !== this.rootIdentity.ino) throw new ProjectError("项目文件夹已被替换，请重新打开项目", 409);
-    for (const folder of ["tables", "files"]) checkedProjectPath(join(this.root, folder));
+    for (const folder of ["tables", "files"]) {
+      try { checkedProjectPath(join(this.root, folder)); }
+      catch { throw new ProjectError(`项目数据目录不可用：${folder}/。请核对完整项目备份与文件夹权限；目录不能是符号链接或目录联接。`, 409); }
+    }
   }
-  private adapter() {
+  private adapter(schema: SnapshotSchema<ProjectManifest> = projectManifestSchema) {
     this.check();
-    return new JsonFileSnapshotAdapter({ rootDirectory: this.root, fileName: manifestName, schema: projectManifestSchema, maxBytes: PROJECT_LIMITS.manifestBytes });
+    return new JsonFileSnapshotAdapter({ rootDirectory: this.root, fileName: manifestName, schema, maxBytes: PROJECT_LIMITS.manifestBytes });
+  }
+  private loadManifest() {
+    // The generic adapter deliberately wraps schema errors. Capture only the
+    // typed diagnostic observed by this individual, bounded load, not its text.
+    let incompatible: ProjectCompatibilityError | undefined;
+    const adapter = this.adapter({ parse(value) {
+      const issue = detectProjectCompatibility(value, { projectFormat: PROJECT_FORMAT, workspaceVersion: STUDIO_STORAGE_VERSION });
+      if (issue) { incompatible = new ProjectCompatibilityError(issue); throw incompatible; }
+      return projectManifestSchema.parse(value);
+    } });
+    try { return { adapter, manifest: adapter.load() }; }
+    catch (error) { throw incompatible ?? error; }
   }
   read(): ProjectManifest {
-    const result = this.adapter().load();
+    const { manifest: result } = this.loadManifest();
     if (!result) throw new ProjectError("该文件夹不是 AgentCanvas 项目，缺少项目清单", 404);
     return result;
   }
+  /** Standalone display-only inspection; never register, normalize or save it. */
+  inspect(): ProjectInspection {
+    this.check();
+    let refusal: ProjectError | undefined;
+    const adapter = new JsonFileSnapshotAdapter({
+      rootDirectory: this.root, fileName: manifestName, maxBytes: PROJECT_LIMITS.manifestBytes,
+      schema: { parse(value: unknown) {
+        const issue = detectProjectCompatibility(value, { projectFormat: PROJECT_FORMAT, workspaceVersion: STUDIO_STORAGE_VERSION });
+        if (issue && issue.reason !== "notebook-cells") {
+          refusal = new ProjectCompatibilityError(issue);
+          throw refusal;
+        }
+        try { return inspectProjectManifest(value); }
+        catch {
+          refusal = new ProjectError("项目包含无法安全预览的定义，已拒绝读取；请使用兼容版本或核对完整项目备份。原项目文件未被修改。", 409);
+          throw refusal;
+        }
+      } },
+    });
+    try {
+      const inspection = adapter.load();
+      if (!inspection) throw new ProjectError("该文件夹不是 AgentCanvas 项目，缺少项目清单", 404);
+      this.check();
+      return inspection;
+    } catch (error) { throw refusal ?? error; }
+  }
   private edit<T>(change: (manifest: ProjectManifest) => T): T {
-    const adapter = this.adapter();
-    const manifest = adapter.load();
+    const { adapter, manifest } = this.loadManifest();
     if (!manifest) throw new ProjectError("项目清单不存在", 404);
     const result = change(manifest);
     manifest.updatedAt = new Date().toISOString();
@@ -86,6 +137,14 @@ export class LocalProjectStore {
     if (!loadStudioStateSafely({ load: () => state, save: () => {}, clear: () => {} }, state.dataProduct).restored) throw new ProjectError("工作台定义或变更历史校验失败，未覆盖已有项目", 409);
     return this.edit((manifest) => {
       if (manifest.stateRevision !== expectedRevision) throw new ProjectError("项目已被另一窗口修改，已保留当前未保存内容；请重新打开项目后再操作", 409);
+      const nextModelIds = new Set(state.dataProduct.semanticLayer?.models.map((model) => model.id));
+      // Validate this deletion, not every legacy missing-model definition. Removing
+      // the affected cells and model together is an explicit, valid operation.
+      for (const model of manifest.state?.dataProduct.semanticLayer?.models ?? []) {
+        if (!nextModelIds.has(model.id) && semanticModelReferences(state.dataProduct, model.id).length) {
+          throw new ProjectError(`语义模型“${model.name}” (${model.id}) 仍被 Notebook 引用，未保存删除；请先移除或更换引用该模型的单元。`, 409);
+        }
+      }
       const live = new Map(manifest.tables.filter((table) => !table.deletedAt).map((table) => [table.descriptor.datasetId, table.descriptor]));
       for (const source of state.appSpec.dataSources) if (source.sourceType === "csv" && !live.has(source.id)) throw new ProjectError("项目定义引用了不存在或已移入回收站的数据，请刷新数据目录", 409);
       const known = new Set(state.appSpec.dataSources.map((source) => source.id));
@@ -95,13 +154,7 @@ export class LocalProjectStore {
         ...state.dataProduct.recipes.map((recipe) => recipe.sourceDatasetId),
       ];
       if (references.some((id) => !known.has(id))) throw new ProjectError("Notebook、语义模型或配方引用的数据不在当前项目中", 409);
-      state.appSpec.dataSources = state.appSpec.dataSources.map((source) => live.get(source.id)?.source ?? source);
-      state.dataProduct.appSpec = state.appSpec;
-      state.dataProduct.datasets = state.dataProduct.datasets.map((entry) => {
-        const descriptor = live.get(entry.id);
-        return descriptor ? { ...entry, name: descriptor.source.name, ephemeral: false, expiresAt: undefined, shared: true } : entry;
-      });
-      manifest.state = state;
+      manifest.state = normalizeProjectStateForStorage(state, manifest.tables);
       manifest.stateRevision += 1;
       return manifest.stateRevision;
     });
@@ -110,23 +163,33 @@ export class LocalProjectStore {
     this.check();
     if (basename(name) !== name || name.includes("..")) throw new ProjectError("项目文件路径无效");
     const path = join(this.root, folder, name);
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > max) throw new ProjectError("项目文件不是安全的普通文件或超过大小限制");
-    const fd = openSync(path, "r");
+    const location = `${folder}/${name}`;
     try {
-      const opened = fstatSync(fd);
-      if (!opened.isFile() || opened.size > max || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new ProjectError("项目文件在读取时发生变化", 409);
-      // Bounded even if another process grows the file after stat().
-      const bytes = Buffer.alloc(opened.size + 1);
-      let length = 0;
-      while (length < bytes.length) {
-        const count = readSync(fd, bytes, length, bytes.length - length, length);
-        if (!count) break;
-        length += count;
+      const stat = lstatSync(path);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > max) throw new ProjectError(`项目文件不是安全的普通文件或超过大小限制：${location}。未读取文件内容。`);
+      const fd = openSync(path, "r");
+      try {
+        const opened = fstatSync(fd);
+        if (!opened.isFile() || opened.size > max || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new ProjectError(`项目文件在读取时发生变化：${location}。请停止外部修改后重试。`, 409);
+        // Bounded even if another process grows the file after stat().
+        const bytes = Buffer.alloc(opened.size + 1);
+        let length = 0;
+        while (length < bytes.length) {
+          const count = readSync(fd, bytes, length, bytes.length - length, length);
+          if (!count) break;
+          length += count;
+        }
+        if (length !== opened.size) throw new ProjectError(`项目文件在读取时发生变化：${location}。请停止外部修改后重试。`, 409);
+        this.check(); return bytes.subarray(0, length);
+      } finally { closeSync(fd); }
+    } catch (error) {
+      if (error instanceof ProjectError) throw error;
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        throw new ProjectError(`项目文件缺失：${location}。请从完整项目备份恢复到原位置后重试；现有目录记录和引用未删除。`, 409);
       }
-      if (length !== opened.size) throw new ProjectError("项目文件在读取时发生变化", 409);
-      this.check(); return bytes.subarray(0, length);
-    } finally { closeSync(fd); }
+      throw new ProjectError(`无法读取项目文件：${location}。请检查访问权限、文件占用或磁盘状态后重试；现有文件未被修改。`, 500);
+    }
   }
   private writeBytes(folder: "tables" | "files", name: string, bytes: Buffer) {
     this.check();
@@ -137,10 +200,23 @@ export class LocalProjectStore {
   getTable(id: string): DatasetUploadResponse | null {
     const entry = this.read().tables.find((table) => table.descriptor.datasetId === id && !table.deletedAt);
     if (!entry) return null;
+    return this.readTableEntry(entry);
+  }
+  /** Reading and restoration use the same checks, before any catalog mutation. */
+  private readTableEntry(entry: ProjectTable): DatasetUploadResponse {
     const bytes = this.readBytes("tables", entry.file, PROJECT_LIMITS.tableBytes);
-    if (digest(bytes) !== entry.sha256) throw new ProjectError("数据表内容被外部修改，请重新导入；不会使用不匹配的数据", 409);
-    const payload = datasetUploadResponseSchema.parse(JSON.parse(bytes.toString("utf8")));
-    return datasetUploadResponseSchema.parse({ dataset: entry.descriptor, rows: payload.rows });
+    if (digest(bytes) !== entry.sha256) throw new ProjectError(`数据表内容被外部修改或损坏：tables/${entry.file}。请从完整项目备份恢复后重试；重新导入不会自动修复原数据引用。`, 409);
+    try {
+      const payload = datasetUploadResponseSchema.parse(JSON.parse(bytes.toString("utf8")));
+      return datasetUploadResponseSchema.parse({ dataset: entry.descriptor, rows: payload.rows });
+    } catch {
+      throw new ProjectError(`数据表格式无效：tables/${entry.file}。请从完整项目备份核对并恢复；未使用文件内容。`, 409);
+    }
+  }
+  private readOriginalBytes(entry: ProjectFile): Buffer {
+    const bytes = this.readBytes("files", entry.file, PROJECT_LIMITS.fileBytes);
+    if (digest(bytes) !== entry.sha256) throw new ProjectError(`原始文件校验失败：files/${entry.file}。请从完整项目备份恢复后重试；未使用或恢复不匹配的文件。`, 409);
+    return bytes;
   }
   putTable(input: DatasetUploadResponse, kind: "table" | "result" = "table"): DatasetUploadResponse {
     const payload = datasetUploadResponseSchema.parse(input);
@@ -190,12 +266,13 @@ export class LocalProjectStore {
     });
   }
   restoreTable(id: string) {
-    this.edit((manifest) => {
+    return this.edit((manifest) => {
       const table = manifest.tables.find((entry) => entry.descriptor.datasetId === id && entry.deletedAt);
       if (!table) throw new ProjectError("回收站中没有该数据表", 404);
+      const payload = this.readTableEntry(table);
       delete table.deletedAt;
+      return payload;
     });
-    return this.getTable(id)!;
   }
   consent(id: string, policy: "masked" | "exclude-sensitive-samples") {
     return this.edit((manifest) => {
@@ -218,8 +295,7 @@ export class LocalProjectStore {
       const existing = manifest.files.find((entry) => entry.sha256 === hash && entry.name === name);
       if (existing) {
         // Re-importing an archived original explicitly restores that file.
-        const saved = this.readBytes("files", existing.file, PROJECT_LIMITS.fileBytes);
-        if (digest(saved) !== existing.sha256) throw new ProjectError("原始文件校验失败", 409);
+        this.readOriginalBytes(existing);
         delete existing.deletedAt;
         existing.datasetIds = [...new Set([...existing.datasetIds, datasetId])]; return existing;
       }
@@ -233,9 +309,7 @@ export class LocalProjectStore {
   getOriginal(id: string) {
     const entry = this.read().files.find((file) => file.id === id && !file.deletedAt);
     if (!entry) throw new ProjectError("原始文件不存在", 404);
-    const bytes = this.readBytes("files", entry.file, PROJECT_LIMITS.fileBytes);
-    if (digest(bytes) !== entry.sha256) throw new ProjectError("原始文件校验失败", 409);
-    return { entry, bytes };
+    return { entry, bytes: this.readOriginalBytes(entry) };
   }
   archiveOriginal(id: string) {
     this.edit((manifest) => {
@@ -248,12 +322,11 @@ export class LocalProjectStore {
     this.edit((manifest) => {
       const entry = manifest.files.find((file) => file.id === id);
       if (!entry) throw new ProjectError("原始文件不存在", 404);
-      const bytes = this.readBytes("files", entry.file, PROJECT_LIMITS.fileBytes);
-      if (digest(bytes) !== entry.sha256) throw new ProjectError("原始文件校验失败，未恢复", 409);
+      this.readOriginalBytes(entry);
       delete entry.deletedAt;
     });
   }
-  datasets(ownership: OwnershipScope): DatasetRepository & { assertAiAccessPolicies: (owner: OwnershipScope, expected: ReadonlyArray<{ datasetId: string; policy: string }>) => void } {
+  datasets(ownership: OwnershipScope): DatasetRepository {
     const checkOwner = (owner: OwnershipScope) => { if (owner.ownerId !== ownership.ownerId || owner.tenantId !== ownership.tenantId) throw new ProjectError("项目所有者不匹配", 403); };
     return {
       put: async (owner, value) => { checkOwner(owner); const saved = this.putTable(value); return { ownership: owner, descriptor: saved.dataset, rows: saved.rows }; },
@@ -272,9 +345,11 @@ export class LocalProjectStore {
   }
 }
 
-const indexSchema = z.object({ version: z.literal(1), entries: z.array(z.object({ handle: z.string().uuid(), path: z.string().max(2_000), name: z.string().max(100) }).strict()).max(100) }).strict();
+// Registry metadata only: this does not raise any individual project's data limits.
+export const PROJECT_REGISTRY_LIMITS = { entries: 1_000, bytes: 5 * 1024 * 1024 } as const;
+const indexSchema = z.object({ version: z.literal(1), entries: z.array(z.object({ handle: z.string().uuid(), path: z.string().max(2_000), name: z.string().max(100) }).strict()).max(PROJECT_REGISTRY_LIMITS.entries) }).strict();
 function projectIndex() {
-  const adapter = configuredSnapshotAdapter("local-projects.json", indexSchema, 512 * 1024);
+  const adapter = configuredSnapshotAdapter("local-projects.json", indexSchema, PROJECT_REGISTRY_LIMITS.bytes);
   if (!adapter) throw new ProjectError("本地项目模式需要配置持久化运行目录，请通过 site:* 管理的本机网站使用", 503);
   return adapter;
 }
@@ -284,7 +359,7 @@ export function recentProjects() { return projectIndex().load()?.entries ?? []; 
 export function openProject(input: string, createName?: string): ProjectSession {
   const index = projectIndex();
   const saved = index.load() ?? { version: 1 as const, entries: [] };
-  if (saved.entries.length >= 100 && !saved.entries.some((entry) => entry.path.toLowerCase() === resolve(input).toLowerCase())) throw new ProjectError("最近项目数量达到 100 个上限");
+  if (saved.entries.length >= PROJECT_REGISTRY_LIMITS.entries && !saved.entries.some((entry) => entry.path.toLowerCase() === resolve(input).toLowerCase())) throw new ProjectError(`最近项目数量达到 ${PROJECT_REGISTRY_LIMITS.entries} 个上限`);
   let path = input;
   if (createName && !path) {
     const documents = checkedProjectPath(join(homedir(), "Documents"), true);
@@ -297,7 +372,7 @@ export function openProject(input: string, createName?: string): ProjectSession 
   const store = createName ? LocalProjectStore.create(root, createName) : new LocalProjectStore(root);
   const manifest = store.read();
   const handle = saved.entries.find((entry) => entry.path.toLowerCase() === root.toLowerCase())?.handle ?? randomUUID();
-  if (!saved.entries.some((entry) => entry.handle === handle) && saved.entries.length >= 100) throw new ProjectError("最近项目数量达到 100 个上限");
+  if (!saved.entries.some((entry) => entry.handle === handle) && saved.entries.length >= PROJECT_REGISTRY_LIMITS.entries) throw new ProjectError(`最近项目数量达到 ${PROJECT_REGISTRY_LIMITS.entries} 个上限`);
   saved.entries = [{ handle, path: root, name: manifest.name }, ...saved.entries.filter((entry) => entry.handle !== handle)];
   index.save(saved); stores.set(handle, store);
   return { handle, path: root, manifest };

@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { runNotebook } from "@/core/notebook/server/runtime";
 import { notebookPythonRuntimeInfo } from "@/core/notebook/server/python-runtime";
+import { getNotebookCapabilities } from "@/core/notebook/server/available-capabilities";
 import {
   HarnessIdempotencyConflictError,
   HarnessIdempotencyStore,
   HarnessRequestError,
 } from "@/core/harness/runtime";
-import { CoordinatedHarness } from "@/core/harness/agents/coordinator";
+import { executeAgent } from "@/core/agent-engines/server/executor";
+import { agentEngineSelection } from "@/core/agent-engines/server/selection";
+import { configuredDshExecutionPolicy } from "@/core/agent-engines/server/execution-policy";
 import { configureDeepSeekHarness } from "@/core/ai/server/harness-composition";
 import {
   MAX_HARNESS_REQUEST_BYTES,
@@ -75,7 +78,6 @@ const noStoreHeaders = {
   "x-content-type-options": "nosniff",
   ...DEMO_IDENTITY_RESPONSE_HEADERS,
 };
-const harness = new CoordinatedHarness();
 const idempotencyStore = new HarnessIdempotencyStore();
 
 function positiveInteger(value: string | undefined, fallback: number): number {
@@ -376,6 +378,13 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
       datasetId: dataset.descriptor.datasetId,
       policy: dataset.descriptor.aiAccessPolicy,
     }));
+    const assertCurrentAiAccess = () => {
+      if (expectedAiAccessPolicies.length > 0) datasetRepository.assertAiAccessPolicies(identity, expectedAiAccessPolicies);
+      const expected = publicRequest.notebookContext?.connections ?? [];
+      if (expected.length && JSON.stringify(listConnections(projectHandle, true)) !== JSON.stringify(expected)) {
+        throw new Error("数据库连接的 Agent 授权已变化，请重新发起任务");
+      }
+    };
     // The studio capture service opens a fresh workbench, not this candidate.
     // Lab candidates are rendered and assessed in the browser; never attach unrelated screenshot evidence.
     const visualVerifier = visualizationLab ? undefined : configuredVisualVerifier(request);
@@ -389,16 +398,21 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
         timestamp: new Date().toISOString(), type: "task_started", taskState: "planning",
         message: "正在判断本次请求的处理方式。",
       };
-      onEvent?.(preparing);
       const sequenceEvent = (event: HarnessTraceEvent): HarnessTraceEvent => ({ ...event,
         id: `${event.taskId}:${event.sequence + 1}`, sequence: event.sequence + 1,
         type: event.type === "task_started" ? "status_update" : event.type,
       });
-      const conversation = harnessConversationStore.begin(serverRequest, conversationNamespace);
+      const lease = agentEngineSelection.acquire(liveEvaluation || visualizationLab ? "harness" : undefined);
+      let conversation: ReturnType<typeof harnessConversationStore.begin> | undefined;
       let mcpRuntime;
       try {
-        mcpRuntime = liveEvaluation || visualizationLab ? undefined : await createRequestMcpRuntime(request, signal);
-        const imageEvidence = uploadedImages.length && visualVerifier
+        const dshPolicy = lease.engine === "dsh" ? configuredDshExecutionPolicy() : undefined;
+        if (dshPolicy) preparing.clientTimeoutMs = dshPolicy.totalExecutionTimeoutMs + 5_000;
+        onEvent?.(preparing);
+        conversation = harnessConversationStore.begin(serverRequest, conversationNamespace);
+        const notebookCapabilities = getNotebookCapabilities();
+        mcpRuntime = liveEvaluation || visualizationLab || lease.engine === "dsh" ? undefined : await createRequestMcpRuntime(request, signal);
+        const imageEvidence = lease.engine !== "dsh" && uploadedImages.length && visualVerifier
           ? await visualVerifier.inspectUploadedImages({
               instruction: serverRequest.instruction,
               images: uploadedImages,
@@ -411,7 +425,7 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
           ...(imageEvidence ? { userImageEvidence: imageEvidence } : {}),
           ...(mcpRuntime?.catalog().length ? { mcpTools: mcpRuntime.catalog() } : {}),
         });
-        const task = await harness.run(effectiveRequest, {
+        const task = await executeAgent(lease.engine, effectiveRequest, {
           agentMode: !liveEvaluation && !visualizationLab && process.env.HARNESS_MULTI_AGENT_MODE === "data" ? "data" : "single",
           ...configureDeepSeekHarness({
             dataRuntime,
@@ -433,24 +447,21 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
               connectionQuery: (connectionId, sql, signal) => executeConnectionSql({ connectionId, sql, signal, project: projectHandle, forAi: true }),
               forAi: true, signal: context.signal, userId: identity.ownerId, taskId: `harness_${context.request.idempotencyKey}` }),
             pythonRuntimeInfo: notebookPythonRuntimeInfo,
+            notebookCapabilities,
             ...(rawWorkbook ? { rawWorkbook: { fileName: rawWorkbook.fileName, contentHash: rawWorkbook.contentHash, sheets: rawWorkbook.sheets } } : {}),
             ...(mcpRuntime ? { mcpRuntime } : {}),
             ...(visualVerifier ? {
               visualVerifier,
               visualVerificationTimeoutMs: positiveInteger(process.env.HARNESS_VISUAL_VERIFICATION_TIMEOUT_MS, 35_000),
             } : {}),
-            authorizeModelCall: () => {
-              if (expectedAiAccessPolicies.length > 0) datasetRepository.assertAiAccessPolicies(identity, expectedAiAccessPolicies);
-              const expected = publicRequest.notebookContext?.connections ?? [];
-              if (expected.length && JSON.stringify(listConnections(projectHandle, true)) !== JSON.stringify(expected)) {
-                throw new Error("数据库连接的 Agent 授权已变化，请重新发起任务");
-              }
-            },
-            bounds: {
+            authorizeModelCall: assertCurrentAiAccess,
+            bounds: dshPolicy ?? {
               maxModelCalls: liveEvaluation?.limits.maxModelCalls ?? null,
               maxToolCalls: liveEvaluation?.limits.maxToolCalls ?? positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
               modelRequestTimeoutMs: positiveInteger(process.env.HARNESS_MODEL_REQUEST_TIMEOUT_MS, 25_000),
-              toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 10_000),
+              ...(positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 0) > 0 ? {
+                toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 0),
+              } : {}),
               totalExecutionTimeoutMs: liveEvaluation?.limits.activeElapsedReservationMs
                 ?? positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
             },
@@ -466,14 +477,27 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
         conversation.commit(task);
         return task;
       } finally {
-        conversation.release();
-        await mcpRuntime?.close();
+        try { conversation?.release(); await mcpRuntime?.close(); }
+        finally { lease.release(); }
       }
     };
     // Live 评测使用一次性 run ID 且不写入常规幂等任务缓存；普通工作台请求保持原行为。
-    const execute = (signal: AbortSignal, onEvent?: (event: HarnessTraceEvent) => void) => liveEvaluation
-      ? runHarness(signal, onEvent)
-      : idempotencyStore.execute(serverRequest, (emit) => runHarness(signal, emit), conversationNamespace, onEvent, signal);
+    const execute = async (signal: AbortSignal, onEvent?: (event: HarnessTraceEvent) => void) => {
+      const task = await (liveEvaluation
+        ? runHarness(signal, onEvent)
+        : idempotencyStore.execute(serverRequest, (emit) => runHarness(signal, emit), conversationNamespace, onEvent, signal));
+      if (!task.notebookDiagnostics) return task;
+      // Cached/shared tasks do not re-enter the runtime's authorization boundary.
+      // Filter this response only; never mutate the shared cached receipt or its original outcome.
+      try {
+        signal.throwIfAborted();
+        assertCurrentAiAccess();
+        if (task.state === "failed" || task.state === "blocked") return task;
+      } catch { /* Withhold transient source when its current authorization cannot be established. */ }
+      const withoutDiagnostics = { ...task };
+      delete withoutDiagnostics.notebookDiagnostics;
+      return withoutDiagnostics;
+    };
     if (streaming) return createHarnessStreamResponse(request.signal, async (signal, emit) => {
       try { return await execute(signal, emit); }
       catch (caught) {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DEEPSEEK_CHAT_COMPLETIONS_URL, MAX_DEEPSEEK_RESPONSE_BYTES } from "./deepseek-endpoint";
 import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
+import { NOTEBOOK_CONTEXT_SELECTION_RULE } from "@/core/notebook/context-selection";
 import {
   harnessSemanticIntentDecisionSchema, harnessDynamicPlanDecisionSchema,
   type HarnessModel, type HarnessSemanticIntentInput, type HarnessSemanticIntentResult,
@@ -108,6 +109,7 @@ export class DeepSeekHarnessModel implements HarnessModel {
     const payload = {
       instruction: input.instruction,
       hasNotebookContext: input.hasNotebookContext ?? false,
+      ...(input.notebookSelection ? { notebookSelection: input.notebookSelection, notebookSelectionRule: NOTEBOOK_CONTEXT_SELECTION_RULE } : {}),
       ...(input.previousInstruction ? { previousInstruction: input.previousInstruction } : {}),
       ...(input.previousAssistantMessage ? { previousAssistantMessage: input.previousAssistantMessage } : {}),
       ...(input.conversationBrief ? { conversationBrief: input.conversationBrief } : {}),

@@ -26,6 +26,11 @@ describe("隔离的真实 Python Runtime", () => {
       { id: "chart", title: "图表", kind: "chart", inputCellId: "sql", chartType: "bar", categoryField: "group", valueFields: ["total"] },
     ] }, sources: [], log: () => {} });
     expect(run.status, JSON.stringify(run)).toBe("success");
+    expect(run.cells[0].timing?.preparationMs).toBeGreaterThan(0);
+    expect(run.cells[0].timing?.executionMs).toBeGreaterThan(0);
+    expect(run.cells[0].timing?.failurePhase).toBeUndefined();
+    expect(run.cells[1].timing?.preparationMs).toBe(0);
+    expect(run.cells[1].timing?.executionMs).toBeGreaterThan(0);
     expect(run.cells[0].table?.rows).toHaveLength(1000);
     expect(run.cells[0].resultRef).toMatchObject({ complete: true, rowCount: 1200 });
     expect(run.cells[2].table?.rows).toEqual([{ group: "all", records: 1200, total: 719400 }]);
@@ -77,6 +82,7 @@ describe("隔离的真实 Python Runtime", () => {
       ] }, log: () => {} });
     expect(run.cells.map((cell) => cell.status)).toEqual(["success", "failure", "blocked"]);
     expect(run.cells[1]).toMatchObject({ stdout: "safe input\n", error: "ValueError: expected" });
+    expect(run.cells[1].timing).toMatchObject({ failurePhase: "execution", termination: "error" });
     expect(run.cells[1].resultRef).toBeUndefined();
     expect(JSON.stringify(run)).not.toContain("华东");
   }, 30_000);
@@ -85,7 +91,7 @@ describe("隔离的真实 Python Runtime", () => {
     const signal = new AbortController().signal;
     const session = await createNotebookPythonSession(signal);
     try {
-      await expect(session.execute({ code: "while True: pass", outputName: "result", tables: [], files: [] }, signal)).rejects.toThrow("超过 10 秒");
+      await expect(session.execute({ code: "while True: pass", outputName: "result", tables: [], files: [] }, signal)).rejects.toMatchObject({ name: "TimeoutError", message: expect.stringContaining("超过 10 秒") });
       await expect(session.execute({ code: "pass", outputName: "result", tables: [], files: [] }, signal)).rejects.toThrow("会话已结束");
     } finally { await session.close(); }
     const controller = new AbortController();

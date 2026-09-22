@@ -7,13 +7,23 @@ import { RecipeStepsEditor } from "./RecipeStepsEditor";
 import type { ConnectionDescriptor } from "@/core/connections/contracts";
 import { NotebookCodeEditor } from "./NotebookSource";
 import { applyRecipeSource } from "./cell-source";
+import { NotebookParameterEditor } from "./NotebookParameterEditor";
+import { NotebookTextEditor } from "./NotebookTextEditor";
 
-export function NotebookCellEditor({ cell, previous, sources, models, connections = [], disabled, codeMode = false, onSave, onCancel }: {
-  cell: NotebookCell; previous: NotebookCell[]; sources: DataSourceDefinition[]; models: SemanticModel[];
+type NotebookCellEditorProps = {
+  cell: NotebookCell; availableInputs: NotebookCell[]; sources: DataSourceDefinition[]; models: SemanticModel[];
   disabled: boolean; onSave: (cell: NotebookCell) => void; onCancel: () => void;
   connections?: ConnectionDescriptor[];
   codeMode?: boolean;
-}) {
+};
+
+export function NotebookCellEditor(props: NotebookCellEditorProps) {
+  if (props.cell.kind === "parameter") return <NotebookParameterEditor cell={props.cell} disabled={props.disabled} onSave={props.onSave} onCancel={props.onCancel} />;
+  if (props.cell.kind === "text") return <NotebookTextEditor cell={props.cell} availableInputs={props.availableInputs} disabled={props.disabled} onSave={props.onSave} onCancel={props.onCancel} />;
+  return <NotebookStandardCellEditor {...props} />;
+}
+
+function NotebookStandardCellEditor({ cell, availableInputs, sources, models, connections = [], disabled, codeMode = false, onSave, onCancel }: NotebookCellEditorProps) {
   const [draft, setDraft] = useState(cell);
   const [error, setError] = useState("");
   const [recipeCode, setRecipeCode] = useState(codeMode);
@@ -21,7 +31,7 @@ export function NotebookCellEditor({ cell, previous, sources, models, connection
   const [lists, setLists] = useState({ dimensions: cell.kind === "semanticQuery" ? cell.dimensions.join(", ") : "",
     measures: cell.kind === "semanticQuery" ? cell.measures.join(", ") : "", columns: cell.kind === "table" ? cell.columns.join(", ") : "",
     valueFields: cell.kind === "chart" ? cell.valueFields.join(", ") : "" });
-  const outputs = notebookOutputCells(previous);
+  const outputs = notebookOutputCells(availableInputs);
   const patch = (value: Partial<NotebookCell>) => setDraft({ ...draft, ...value } as NotebookCell);
   const list = (value: string) => value.split(/[,，]/u).map((item) => item.trim()).filter(Boolean);
   function submit(event: FormEvent) {
@@ -42,6 +52,7 @@ export function NotebookCellEditor({ cell, previous, sources, models, connection
   const model = draft.kind === "semanticQuery" ? models.find((item) => item.id === draft.modelId) : undefined;
   return <form className="notebook-editor" onSubmit={submit}>
     <fieldset disabled={disabled}>
+      {(draft.kind === "sql" || draft.kind === "python" || "inputCellId" in draft) && <small className="notebook-wide">按依赖关系运行，不受页面排列限制；输入不能选择自身或下游单元。</small>}
       <label>单元名称<input value={draft.title} maxLength={120} required onChange={(event) => patch({ title: event.target.value })} /></label>
       {"outputName" in draft && <label>输出表名（SQL 中使用）<input value={draft.outputName} required pattern="[A-Za-z][A-Za-z0-9_]*" maxLength={120} onChange={(event) => patch({ outputName: event.target.value })} /></label>}
       {draft.kind === "data" && <label>数据源<select aria-label="数据源" value={draft.sourceDataSourceId} onChange={(event) => patch({ sourceDataSourceId: event.target.value })}>
@@ -96,7 +107,6 @@ export function NotebookCellEditor({ cell, previous, sources, models, connection
         <label>分类字段<input value={draft.categoryField} required onChange={(event) => patch({ categoryField: event.target.value })} /></label>
         <label>数值字段（逗号分隔，最多 4 个）<input value={lists.valueFields} required onChange={(event) => setLists({ ...lists, valueFields: event.target.value })} /></label>
       </>}
-      {draft.kind === "text" && <label className="notebook-wide">分析说明<textarea aria-label="分析说明" value={draft.markdown} maxLength={4_000} required rows={6} onChange={(event) => patch({ markdown: event.target.value })} /></label>}
     </fieldset>
     {error && <p role="alert">{error}</p>}
     <footer><button type="button" onClick={onCancel}>取消编辑</button><button type="submit" className="notebook-primary" disabled={disabled}>保存单元</button></footer>

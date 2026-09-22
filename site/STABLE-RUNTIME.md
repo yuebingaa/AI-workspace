@@ -32,7 +32,9 @@ npm run site:rollback
 
 ## 首次安装和更新管理器
 
-首次安装或从源码迁移到另一台电脑，在依赖准备好后先执行 `npm run python:setup`。它按 `scripts/python-runtime-lock.json` 的固定版本与 SHA-256 下载约 22 MiB 的 Python / pandas / NumPy / openpyxl 资源到 `vendor/python`；再次执行会校验并复用完整文件。运行分析时离线加载，不需要 AI API Key。构建与发布会把资源复制进独立运行目录，缺少资源会明确终止构建。
+默认完整安装或从源码迁移到另一台电脑，在依赖准备好后先执行 `npm run python:setup`。它按 `scripts/python-runtime-lock.json` 的固定版本与 SHA-256 下载约 22 MiB 的 Python / pandas / NumPy / openpyxl 资源到 `vendor/python`；再次执行会校验并复用完整文件。运行分析时离线加载，不需要 AI API Key。默认构建与发布会把资源复制进独立运行目录，缺少资源会明确终止构建。
+
+可选无 Python 资源产物：为构建进程显式设置 `NOTEBOOK_PYTHON_ENABLED=false` 后运行 `npm run build`，可跳过安装 / 复制 `vendor/python`。此命令的复制步骤仅读取进程环境，不自动读取源码 `.env`；完成后恢复原环境值。`site:publish` 则以稳定站私有配置叠加进程环境的值决定资源复制，仍须用户明确要求发布。省略模式若目标已含 Python 目录 / 文件 / 链接会拒绝，不自动清理；使用全新构建输出。未安装资源的运行端保留旧 Python 定义且禁用执行，SQL 等独立能力继续可用。恢复需安装固定资源或换完整产物；若部署配置仍为 false，还需显式恢复该配置。Playwright 为截图等共用依赖仍保留，不是卸载全部 Python 相关代码。详见 [Python Runtime](docs/python-runtime.md)。
 
 Python 单元另需本机 Microsoft Edge / Chrome / Chromium；常见安装路径自动识别，也可通过 `NOTEBOOK_PYTHON_BROWSER` 指定可执行文件。Windows 通常可直接使用系统 Edge。不能把本机 Python 或 `node_modules` 的存在当成此环境已安装；用 `GET /api/notebook/python` 查看资源校验与浏览器可用状态。具体能力和限制见 [Python Runtime](docs/python-runtime.md)。
 

@@ -5,9 +5,14 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const document = join(root, "docs/architecture/agent-architecture.md");
-const scopes = ["core/harness", "core/ai/server", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/visualization-lab", "app/api/ai/visualization-lab"];
+const scopes = ["core/harness", "core/ai/server", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/sql", "core/changesets", "core/visualization-lab", "app/api/ai/visualization-lab", "core/agent-engines", "app/api/settings/agent-engine"];
 const marker = /<!-- agent-architecture-source-sha256: [a-f0-9]{64} -->/;
-const runtimeFiles = ["scripts/python-runtime-lock.json", "scripts/setup-python-runtime.mjs", "scripts/copy-notebook-runtime.mjs"];
+// Runtime dependencies are an explicit source contract, never a recursive scan
+// of the isolated install, generated sessions or third-party node_modules.
+const runtimeFiles = ["scripts/python-runtime-lock.json", "scripts/setup-python-runtime.mjs", "scripts/copy-notebook-runtime.mjs", "scripts/runtime/site-runtime.mjs",
+  "scripts/setup-dsh-runtime.mjs", "runtime/dsh/driver.mjs", "runtime/dsh/driver.d.mts", "runtime/dsh/controlled-plugin.mjs",
+  "runtime/dsh/wire-policy.mjs", "runtime/dsh/policy.mjs", "runtime/dsh/policy.d.mts", "runtime/dsh/installation.mjs", "runtime/dsh/tool-diagnostics.mjs",
+  "runtime/dsh/tool-diagnostics.d.mts", "runtime/dsh/package.json", "runtime/dsh/package-lock.json"];
 
 async function sourceFiles(directory) {
   const files = [];

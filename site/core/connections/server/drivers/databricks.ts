@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
-import { NOTEBOOK_LIMITS } from "@/core/notebook/contracts";
 import { readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 import type { ConnectionConfig } from "../../configuration";
 import { CONNECTION_QUERY_LIMITS, ConnectionQueryError, type ConnectionDriver } from "../query-contracts";
 import { tableFromText } from "../result-table";
+import { resolveConnectionCredential } from "../local-config";
 
 const LIMIT = CONNECTION_QUERY_LIMITS.rows;
 const TIMEOUT = CONNECTION_QUERY_LIMITS.timeoutMs;
@@ -29,7 +29,7 @@ export class DatabricksDriver implements ConnectionDriver {
 
   async execute(sql: string, signal: AbortSignal) {
     const config = this.config;
-    const token = process.env[config.tokenEnv];
+    const token = resolveConnectionCredential(config);
     if (!token) throw new ConnectionQueryError("连接的服务端 Token 尚未配置");
     const base = `${config.host.replace(/\/$/u, "")}/api/2.0/sql/statements`;
     const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
@@ -45,7 +45,7 @@ export class DatabricksDriver implements ConnectionDriver {
         warehouse_id: config.warehouseId, catalog: config.catalog, schema: config.schema,
         statement: `SELECT * FROM (\n${sql}\n) AS agentcanvas_result LIMIT ${LIMIT + 1}`,
         format: "JSON_ARRAY", disposition: "INLINE", wait_timeout: "0s",
-        row_limit: LIMIT + 1, byte_limit: NOTEBOOK_LIMITS.outputBytes,
+        row_limit: LIMIT + 1, byte_limit: CONNECTION_QUERY_LIMITS.outputBytes,
       }) }, signal);
       id = response.statement_id;
       while (["PENDING", "RUNNING"].includes(response.status.state)) {

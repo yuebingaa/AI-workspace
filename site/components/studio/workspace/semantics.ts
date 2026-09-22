@@ -57,8 +57,10 @@ export function createStudioSemanticActions(context: SemanticActionsContext) {
       const latest = context.latestDatasetWorkspaceRef.current;
       const model = semanticModelsForWorkspace(latest.dataProduct, context.pageId).find((item) => item.id === modelId);
       if (!model) throw new Error("当前界面没有这个语义模型。");
-      const next = deleteSemanticModel(latest.dataProduct, modelId, context.role);
-      if (!window.confirm(`确定删除语义模型“${model.name}”吗？\n\n仅删除模型定义和选择状态；原始表格、已有图表及历史分析结果都会保留。`)) return false;
+      deleteSemanticModel(latest.dataProduct, modelId, context.role);
+      if (!window.confirm(`确定删除语义模型“${model.name}”吗？\n\n仅删除模型定义和选择状态；原始表格、已有图表及历史分析结果都会保留。未采用的旧草稿若依赖此模型，需要重新生成。`)) return false;
+      assertIdle();
+      const next = deleteSemanticModel(context.latestDatasetWorkspaceRef.current.dataProduct, modelId, context.role);
       commit(next, "语义模型已删除");
       return true;
     },

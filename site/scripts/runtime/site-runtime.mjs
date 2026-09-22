@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import { atomicJson, health, portFree, readEnvironment, readJson, sleep, stopChild } from './common.mjs';
 import { copyWecomCli } from '../copy-wecom-cli.mjs';
-import { copyNotebookRuntime } from '../copy-notebook-runtime.mjs';
+import { copyNotebookRuntime, notebookPythonBuildEnabled } from '../copy-notebook-runtime.mjs';
 import { buildRuntimeHosts } from './build-task-host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -97,6 +97,9 @@ async function updateManager() {
   console.log('Background manager updated; previously enabled services are ready.');
 }
 async function snapshot(id) {
+  // Match the stable worker's environment precedence; do not infer deployment
+  // capabilities from the developer's shell alone or copy private config to output.
+  const pythonEnabled = notebookPythonBuildEnabled({ ...process.env, ...readEnvironment(join(root, 'config')) });
   const work = join(root, 'builds', id);
   const excluded = new Set(['node_modules', 'dist', '.next', '.git', '.runtime', '.wrangler', '.vinext', '.studio-data', 'evidence', 'outputs', 'work', 'coverage', '.edgeone', '.tef_dist']);
   await cp(source, work, { recursive: true, filter: (path) => {
@@ -114,7 +117,7 @@ async function snapshot(id) {
   const app = join(root, 'releases', id, 'app');
   await cp(join(work, 'dist/standalone'), app, { recursive: true, dereference: true });
   await copyWecomCli(source, app);
-  await copyNotebookRuntime(source, app);
+  await copyNotebookRuntime(source, app, { pythonEnabled });
   // vinext beta omits these runtime peers from standalone output (also needed by portable packaging).
   for (const name of ['react', 'react-dom', 'react-server-dom-webpack', 'playwright-core']) {
     await cp(join(source, 'node_modules', name), join(app, 'node_modules', name), { recursive: true, dereference: true });

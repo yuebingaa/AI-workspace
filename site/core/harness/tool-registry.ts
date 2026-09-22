@@ -11,6 +11,17 @@ import {
 import { BAR_CHART_COLORS, CHART_TYPES } from "@/core/models";
 import type { AppNode, DataRecipe, LocalDataRuntime } from "@/core/models";
 import { studioCapabilities } from "@/core/permissions";
+import { profileDatasetRows } from "@/core/datasets/quality-profile";
+import { requiresSuccessfulNotebookTrial } from "@/core/notebook/cell-catalog";
+import {
+  DEFAULT_NOTEBOOK_CAPABILITIES,
+  isNotebookCellCapabilityEnabled,
+  notebookCapabilityMutationIssue,
+  notebookCapabilityReason,
+  type NotebookCapabilities,
+} from "@/core/notebook/capabilities";
+import { captureNotebookRunExpectation, parseNotebookRunReceipt } from "@/core/notebook/run-receipt";
+import { notebookTextResults, preserveNotebookTextResultMetadata } from "./notebook-text-results";
 import { StudioValidationError } from "@/core/schemas";
 import { semanticQuerySchema } from "@/core/semantic/contracts";
 import { compileSemanticQuery } from "@/core/semantic/model";
@@ -26,7 +37,7 @@ import type {
   HarnessToolName,
 } from "./contracts";
 import { jsonByteLength, sanitizeHarnessText } from "./security";
-import { shareToolSchemaPatterns } from "./tool-schema";
+import { shareToolSchemaPatterns, summarizeToolArgumentIssues, toolInputSchema } from "./tool-schema";
 import { resolveHarnessPageDataSourceIds } from "./context-selector";
 import {
   indexRawWorkbook,
@@ -42,7 +53,7 @@ import type { NotebookRun } from "@/core/notebook/contracts";
 import { harnessAnalysisPlanDraftSchema, type HarnessAnalysisPlanArtifact } from "./analysis-plan-contracts";
 import { createHarnessAnalysisPlanArtifact } from "./analysis-planner";
 import type { ConnectionSchema } from "@/core/connections/contracts";
-import { cellSearch, cellSearchSchema, editNotebookCells, editNotebookCellsSchema, createPythonCell, createPythonCellSchema, wantsNotebookPython,
+import { cellSearch, cellSearchSchema, editNotebookCells, editNotebookCellsSchema, createPythonCell, createPythonCellSchema, wantsNotebookPython, wantsNotebookParameters,
   runNotebookCells, submitNotebookDraft, notebookSessionVersionSchema, type NotebookCellSession } from "./notebook-cell-tools";
 
 export const MAX_HARNESS_TOOL_RESULT_BYTES = 6_000;
@@ -71,9 +82,12 @@ export interface HarnessToolContext {
   excelExporter?: HarnessExcelExporter;
   notebookRunner?: (artifact: HarnessNotebookArtifact, context: HarnessToolContext) => Promise<NotebookRun>;
   pythonRuntimeInfo?: () => Promise<Record<string, unknown>>;
+  /** Server-owned execution policy. Missing means the backwards-compatible default. */
+  notebookCapabilities?: NotebookCapabilities;
   connectionInspector?: (connectionId: string, signal?: AbortSignal) => Promise<ConnectionSchema>;
   analysisPlanStore?: Map<string, HarnessAnalysisPlanArtifact>;
   notebookCellSession?: NotebookCellSession;
+  notebookDiagnostics?: import("./notebook-diagnostics").NotebookDiagnosticSession;
   rawWorkbook?: HarnessRawWorkbook;
   mcpRuntime?: HarnessMcpRuntime;
   signal?: AbortSignal;
@@ -272,7 +286,7 @@ const scanEdsRawWorkbook = defineTool({
   execute: (_args, context) => {
     const index = indexedRawWorkbook(context);
     return {
-      summary: `已完整扫描 ${index.sheets.length} 张工作表、${index.scannedDataRowCount} 条数据行和 ${index.scannedCellCount} 个数据单元格；结果绑定数据版本 ${index.datasetVersion.slice(0, 16)}。`,
+      summary: `已扫描 ${index.sheets.length} 张工作表，自动表头后排除全空白行的 ${index.scannedDataRowCount} 条记录、${index.scannedCellCount} 个单元格；不据此推断原文件空行数。数据版本 ${index.datasetVersion.slice(0, 16)}。`,
       data: publicRawWorkbookProfile(index),
     };
   },
@@ -336,7 +350,7 @@ const queryEdsRawWorkbook = defineTool({
     try {
       const result = queryRawWorkbook(index, args);
       return {
-        summary: `已在 ${result.sheets.length} 张工作表中完整检查 ${result.scannedDataRowCount} 条数据行，命中 ${result.matchedRowCount} 条，返回 ${result.returnedCount} 条${result.mode === "aggregate" ? "聚合结果" : "可溯源原始记录"}。`,
+        summary: `已检查 ${result.sheets.length} 张表自动表头后排除全空白行的 ${result.scannedDataRowCount} 条记录，命中 ${result.matchedRowCount} 条，返回 ${result.returnedCount} 条${result.mode === "aggregate" ? "聚合结果" : "可溯源原始记录"}；不代表原文件空行统计。`,
         data: result,
       };
     } catch (error) {
@@ -427,13 +441,14 @@ const inspectDataset = defineTool({
   execute: ({ dataSourceId }, context) => {
     const { source, rows } = sourceAndRows(context, dataSourceId);
     return {
-      summary: `数据源“${source.name}”包含 ${rows.length} 行、${source.fields.length} 个字段，质量 ${source.qualityScore}%。`,
+      summary: `当前数据集行集“${source.name}”包含 ${rows.length} 行、${source.fields.length} 个字段，导入/来源质量 ${source.qualityScore}%；不代表原文件空行统计。`,
       data: {
         id: source.id,
         name: source.name,
         rowCount: rows.length,
         columnCount: source.fields.length,
         qualityScore: source.qualityScore,
+        qualityProfile: profileDatasetRows(source, rows),
         fields: source.fields.map((field) => ({ name: field.name, label: field.label, type: field.type })),
         fieldCount: source.fields.length,
       },
@@ -548,8 +563,23 @@ const createNotebookDraft = defineTool({
       ...(analysisPlan ? { analysisPlan } : {}),
     });
     if (context.request.notebookContext) artifact.baseRevision = context.request.notebookContext.document.revision;
-    const run = context.notebookRunner ? await context.notebookRunner(artifact, context) : undefined;
-    if (draft.cells.some((cell) => cell.kind === "sql" || cell.kind === "python" || cell.kind === "transform" || cell.kind === "warehouseSql") && !run) throw new StudioValidationError("Notebook SQL / Python / DataRecipe 运行时未配置", ["不能仅凭生成步骤就报告验证通过"]);
+    const expected = captureNotebookRunExpectation({ name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells }, "ai");
+    const diagnosticGeneration = context.notebookDiagnostics?.begin(artifact);
+    // An adapter receives its own copy; its mutations cannot replace the reviewed draft.
+    const runner = context.notebookRunner;
+    const rawRun = runner ? await runner(structuredClone(artifact), context) : undefined;
+    context.signal?.throwIfAborted();
+    let run: NotebookRun | undefined;
+    if (runner) {
+      try { run = parseNotebookRunReceipt(rawRun, expected); }
+      catch { throw new StudioValidationError("Notebook 草稿校验失败", ["执行回执与本次草稿不一致，不能作为验证证据。"]); }
+    }
+    if (run && diagnosticGeneration !== undefined) context.notebookDiagnostics?.recordRun(diagnosticGeneration, run);
+    if (draft.cells.some(requiresSuccessfulNotebookTrial) && !run) throw new StudioValidationError(
+      draft.cells.some((cell) => cell.kind === "text" && cell.references?.length) ? "Notebook 文本引用运行时未配置"
+        : draft.cells.some((cell) => cell.kind === "parameter") ? "Notebook 计算 / 参数运行时未配置" : "Notebook SQL / Python / DataRecipe 运行时未配置",
+      ["不能仅凭生成步骤就报告验证通过"],
+    );
     if (run?.status === "failure") throw new StudioValidationError("Notebook 试运行失败", run.cells.filter((cell) => cell.status !== "success").map((cell) => `${cell.cellId}: ${cell.error}`));
     if (run) artifact.executionEvidence = { runId: run.runId, status: run.status,
       completedCellIds: run.cells.filter((cell) => cell.status === "success").map((cell) => cell.cellId),
@@ -566,7 +596,7 @@ const createNotebookDraft = defineTool({
         lineage: artifact.lineage,
         sourceDataSourceIds: artifact.sourceDataSourceIds,
         ...(artifact.analysisPlanId ? { analysisPlanId: artifact.analysisPlanId } : {}),
-        ...(run ? { execution: artifact.executionEvidence, notice: run.notice,
+        ...(run ? { execution: artifact.executionEvidence, notice: run.notice, ...notebookTextResults(run),
           results: run.cells.filter((cell) => cell.table && draft.cells.find((item) => item.id === cell.cellId)?.kind !== "data")
             .slice(-3).map((cell) => ({ cellId: cell.cellId, resultRef: cell.resultRef, rows: cell.table!.rows.slice(0, 5), fields: cell.table!.fields,
               returnedRows: cell.table!.rows.length, truncated: cell.table!.truncated })) } : {}),
@@ -603,7 +633,14 @@ const inspectFields = defineTool({
             : [];
         return { ...analysis, samples, sensitiveCategories: sensitive };
       });
-    return { summary: `已分析 ${analyses.length} 个字段，输入 ${rows.length} 行。`, data: { dataSourceId, fields: analyses } };
+    return { summary: `已分析当前数据集行集的 ${analyses.length} 个字段，输入 ${rows.length} 行；空值仅 null/缺失，不代表原文件统计。`, data: {
+      dataSourceId,
+      rowCount: rows.length,
+      fieldCount: analyses.length,
+      rules: { scope: "current-dataset-rows", nulls: "null-or-missing", blankStrings: "not-null",
+        denominator: "rows-per-field", originalFile: "not-measured" },
+      fields: analyses,
+    } };
   },
 });
 
@@ -1010,11 +1047,11 @@ const callMcpTool = defineTool({
 });
 
 const cellSearchTool = defineTool({ name: "cellSearch", mode: "readOnly", schema: cellSearchSchema,
-  description: "CellSearch：Notebook 结构化检索。query 搜名称/输入输出变量；searchIn=source 搜定义内容；kind 筛类型。cellId 或 variable 定位（互斥），direction=upstream/downstream/both 按 depth 遍历声明依赖，保留锚点。view=summary/source/lineage/output，默认 source。offset/sourceOffset/linkOffset/rowOffset/fieldOffset 按返回 next* 续读，并带 editVersion，输出带 runId。output 仅读本次有效 AI 运行缓存，无运行或过期不等于空表；输出分页与长值截断会注明。无 Python 变量解析。", execute: cellSearch });
+  description: "query 搜名称/声明变量；searchIn=source 搜源码；kind 筛类型。cellId/variable 互斥，非 self 遍历须锚点。分页带 editVersion 和返回的 next*，output 再带 runId。output 只读本任务有效 AI 回执：未运行/过期不是空表，截断有标记，不解析 Python 变量。默认值/范围见 Schema。", execute: cellSearch });
 const editNotebookCellsTool = defineTool({ name: "editNotebookCells", mode: "readOnly", schema: editNotebookCellsSchema,
-  description: "按 editVersion 批量创建或替换单元（同 ID 完整替换，新 ID 创建），保留其他单元。afterCellId 控制新增位置，null 放开头，省略追加。仅按用户明确要求填写 removeCellIds。SQL 只查询 inputCellIds 的 outputName，可同批建 data→sql→chart。Python 优先使用 createPythonCell。修改仅在任务草稿中，接着 runNotebookCells，成功后 submitNotebookDraft。", execute: editNotebookCells });
+  description: "按 editVersion 编辑任务草稿：同 ID 完整替换，新 ID 新增，其他单元保留。afterCellId 指定新增位置（null=开头，省略=末尾）；removeCellIds 仅响应明确删除要求。SQL 只读 inputCellIds 对应 outputName，可同批创建依赖链，数组引用不得重复。改输出名时结构化 ID 引用保留，SQL/Python 不自动改写；按回执 outputRenames.codeChecks 检查输入引用和 Python 输出赋值。Python 用专用工具。编辑后须试运行成功再提交；不改正式文档。", execute: editNotebookCells });
 const createPythonCellTool = defineTool({ name: "createPythonCell", mode: "readOnly", schema: createPythonCellSchema,
-  description: "CreatePythonCell：按 editVersion 在任务草稿创建或更新一个 Python 单元。cell 含 id/kind=python/title/inputCellIds/fileNames/outputName/code。输入表按 outputName 成为 pandas DataFrame；pd、np 已提供。结果必须赋给输出名并为 DataFrame。fileNames 只能选本次附件，files[文件名] 给出虚拟路径供 pd.read_excel 使用。保存后仍须 runNotebookCells、submitNotebookDraft，不自动采用。", execute: createPythonCell });
+  description: "CreatePythonCell：按 editVersion 在任务草稿创建或更新一个 Python 单元。cell 含 id/kind=python/title/inputCellIds/fileNames/outputName/code。输入表按 outputName 成为 pandas DataFrame；pd、np 已提供。结果必须赋给输出名并为 DataFrame。改输出名时检查回执 outputRenames.codeChecks，代码不会自动改写。fileNames 只能选本次附件，files[文件名] 给出虚拟路径供 pd.read_excel 使用。保存后仍须 runNotebookCells、submitNotebookDraft，不自动采用。", execute: createPythonCell });
 const getKernelPackagesInfoTool = defineTool({ name: "getKernelPackagesInfo", mode: "readOnly", schema: z.object({}).strict(),
   description: "GetKernelPackagesInfo：查询本机 Python Runtime、Python 版本、固定包版本及运行限制。不安装包或执行代码。pandas、numpy、openpyxl 已预置；不支持在分析中联网 pip 安装。",
   execute: async (_args, context) => {
@@ -1025,7 +1062,7 @@ const getKernelPackagesInfoTool = defineTool({ name: "getKernelPackagesInfo", mo
 const runNotebookCellsTool = defineTool({ name: "runNotebookCells", mode: "readOnly", schema: notebookSessionVersionSchema,
   description: "按 editVersion 实际试运行当前整个草稿，等待执行器返回，提供状态、错误、有限结果和来源。failure 时用 editNotebookCells 修正并重新运行；success 后用 submitNotebookDraft 提交。受现有任务/工具超时限制，不是后台任务。", execute: runNotebookCells });
 const submitNotebookDraftTool = defineTool({ name: "submitNotebookDraft", mode: "readOnly", schema: notebookSessionVersionSchema,
-  description: "提交当前 editVersion 的草稿至用户修改对照界面。要求所有单元已实际试运行成功，编辑会使旧证据失效。提交后任务等待用户采用，不自动保存或更改看板。", execute: submitNotebookDraft });
+  description: "提交当前 editVersion 草稿供用户采用；要求全部单元试运行成功且未再编辑，不自动保存或修改看板。", execute: submitNotebookDraft });
 
 export const harnessToolRegistry = {
   cellSearch: cellSearchTool,
@@ -1064,6 +1101,8 @@ interface HarnessToolCatalogOptions {
   request?: HarnessRequest;
   semanticIntent?: HarnessSemanticIntentDecision;
   mcpTools?: HarnessMcpToolSummary[];
+  analysisPlan?: HarnessAnalysisPlanArtifact;
+  notebookCapabilities?: NotebookCapabilities;
 }
 
 function scopedMcpToolParameters(tools: HarnessMcpToolSummary[]): Record<string, unknown> {
@@ -1434,19 +1473,11 @@ function compactChangePreviewSchema(options: HarnessToolCatalogOptions): Record<
   };
 }
 
-function compactNotebookToolSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(compactNotebookToolSchema);
-  if (!value || typeof value !== "object") return value;
-  // Identifier patterns are essential generation rules, not optional verbosity.
-  // Detailed size bounds remain enforced by the canonical execution schema.
-  const omitted = new Set(["$schema", "minLength", "maxLength", "minItems", "maxItems", "minimum", "maximum", "default"]);
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !omitted.has(key)).map(([key, item]) => [key, compactNotebookToolSchema(item)]));
-}
 function scopedToolParameters(tool: (typeof harnessToolRegistry)[HarnessToolName], options: HarnessToolCatalogOptions) {
-  if (tool.name === "cellSearch" || tool.name === "createPythonCell") return compactNotebookToolSchema(z.toJSONSchema(tool.schema)) as Record<string, unknown>;
+  if (["cellSearch", "createPythonCell", "getKernelPackagesInfo", "runNotebookCells", "submitNotebookDraft"].includes(tool.name)) return toolInputSchema(tool.schema);
   if (tool.name === "editNotebookCells") {
-    const schema = z.toJSONSchema(tool.schema) as Record<string, unknown>;
-    const draftSchema = scopedToolParameters(harnessToolRegistry.createNotebookDraft, options) as {
+    const schema = toolInputSchema(tool.schema);
+    const draftSchema = scopedToolParameters(harnessToolRegistry.createNotebookDraft, { ...options, analysisPlan: undefined }) as {
       properties: { cells: { items: { oneOf: Array<{ properties: { kind: { const: string } } }> } } }
     };
     // DataRecipe's nested schema is large. Offer it when the task or existing
@@ -1457,47 +1488,41 @@ function scopedToolParameters(tool: (typeof harnessToolRegistry)[HarnessToolName
       .filter((variant) => variant.properties.kind.const !== "transform");
     // Python has a focused creation tool; avoid sending its schema twice per turn.
     draftSchema.properties.cells.items.oneOf = draftSchema.properties.cells.items.oneOf.filter((variant) => variant.properties.kind.const !== "python");
-    (schema.properties as Record<string, unknown>).cells = draftSchema.properties.cells;
-    return compactNotebookToolSchema(schema) as Record<string, unknown>;
+    // Editing allows 0..10 cells (including removal-only batches); creating a
+    // draft requires 1..30. Scope the items without borrowing the draft bounds.
+    const cells = (schema.properties as Record<string, Record<string, unknown>>).cells;
+    cells.items = draftSchema.properties.cells.items;
+    return schema;
   }
-  const availableNotebookKind = (kind: unknown) => kind === "python" ? Boolean(options.request && wantsNotebookPython(options.request))
+  const capabilities = options.notebookCapabilities ?? DEFAULT_NOTEBOOK_CAPABILITIES;
+  const availableNotebookKind = (kind: unknown) => kind === "python"
+    ? isNotebookCellCapabilityEnabled(capabilities, "python") && Boolean(options.request && wantsNotebookPython(options.request))
+    : kind === "parameter" ? parametersAvailable(options)
     : kind === "warehouseSql" ? Boolean(options.request?.notebookContext?.connections?.length)
     : kind === "semanticQuery" ? Boolean(options.request?.semanticModel)
       : kind === "data" && options.request?.notebookContext ? options.request.notebookContext.sourceIds.length > 0 : true;
   if (tool.name === "createAnalysisPlan") {
-    const schema = z.toJSONSchema(tool.schema) as Record<string, unknown>;
+    const schema = toolInputSchema(tool.schema);
     const properties = schema.properties as Record<string, Record<string, unknown>>;
     const steps = properties.steps.items as { oneOf: Array<{ properties: Record<string, Record<string, unknown>> }> };
     steps.oneOf = steps.oneOf.filter((variant) => availableNotebookKind(variant.properties.kind.const));
-    return compactNotebookToolSchema(schema) as Record<string, unknown>;
+    return schema;
   }
   if (tool.name === "createNotebookDraft") {
-    const schema = z.toJSONSchema(tool.schema) as Record<string, unknown>;
-    // The execution schema remains the strict discriminated union. Present the
-    // recipe fields once to the model rather than repeating them in eight unions.
+    const schema = toolInputSchema(tool.schema);
     const properties = schema.properties as Record<string, Record<string, unknown>>;
     const cells = properties.cells.items as { oneOf: Array<{ properties: Record<string, Record<string, unknown>> }> };
     cells.oneOf = cells.oneOf.filter((variant) => availableNotebookKind(variant.properties.kind.const));
-    const transform = cells.oneOf.find((variant) => variant.properties.kind.const === "transform");
-    if (transform) {
-      const string = { type: "string" };
-      const strings = { type: "array", items: string };
-      const operand = { type: "object", additionalProperties: false, required: ["kind"], properties: { kind: { enum: ["field", "literal"] }, field: string, value: { type: "number" } } };
-      transform.properties.steps = { type: "array", minItems: 1, maxItems: 50, items: {
-        type: "object", additionalProperties: false, required: ["id", "type"],
-        description: "只填写所选 type 的字段：selectFields(fields); filter(field,operator,value); renameField(field,newName,newLabel?); castField(field,to); deriveField(field,label,operator,left,right); groupAggregate(groupBy,aggregations); sort(by); limit(count)。operand 按 kind 二选一：field 或 value。",
-        properties: { id: string, type: { enum: ["selectFields", "filter", "renameField", "castField", "deriveField", "groupAggregate", "sort", "limit"] },
-          fields: strings, field: string, newName: string, newLabel: string, label: string,
-          to: { enum: ["string", "number", "date", "boolean"] },
-          operator: { enum: ["equals", "notEquals", "contains", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "add", "subtract", "multiply", "divide"] },
-          value: { type: ["string", "number", "boolean"] }, left: operand, right: operand,
-          groupBy: strings, aggregations: { type: "array", items: { type: "object", additionalProperties: false, required: ["field", "aggregation", "as", "label"], properties: { field: string, aggregation: { enum: ["sum", "average", "count", "countDistinct", "min", "max"] }, as: string, label: string } } },
-          by: { type: "array", items: { type: "object", additionalProperties: false, required: ["field", "direction"], properties: { field: string, direction: { enum: ["asc", "desc"] } } } },
-          count: { type: "integer", minimum: 1, maximum: 10000 },
-        },
-      } };
+    // A validated plan already fixes the draft's kinds. Keep its canonical
+    // variants, not unrelated recipe/code branches. Replanning changes this
+    // scope next turn; incremental editing does not inherit an old plan scope.
+    if (options.analysisPlan?.steps.length) {
+      const plannedKinds = new Set<unknown>(options.analysisPlan.steps.map((step) => step.kind));
+      cells.oneOf = cells.oneOf.filter((variant) => plannedKinds.has(variant.properties.kind.const));
+      properties.analysisPlanId = { ...properties.analysisPlanId, const: options.analysisPlan.id };
+      schema.required = [...new Set([...(schema.required as string[]), "analysisPlanId"])];
     }
-    return compactNotebookToolSchema(schema) as Record<string, unknown>;
+    return schema;
   }
   if (tool.name === "querySemanticModel" && options.request?.semanticModel) {
     const model = options.request.semanticModel;
@@ -1768,17 +1793,76 @@ function scopedToolParameters(tool: (typeof harnessToolRegistry)[HarnessToolName
   return z.toJSONSchema(tool.schema) as Record<string, unknown>;
 }
 
+function parametersAvailable(options: HarnessToolCatalogOptions): boolean {
+  return Boolean(options.analysisPlan?.steps.some((step) => step.kind === "parameter")
+    || (options.request && wantsNotebookParameters(options.request)));
+}
+
+function harnessToolRequestsPython(name: HarnessToolName, args: unknown): boolean {
+  if (name === "createPythonCell" || name === "getKernelPackagesInfo") return true;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+  const candidate = args as { cells?: unknown; steps?: unknown };
+  const entries = Array.isArray(candidate.cells) ? candidate.cells : Array.isArray(candidate.steps) ? candidate.steps : [];
+  return entries.some((entry) => Boolean(entry && typeof entry === "object" && !Array.isArray(entry)
+    && (entry as { kind?: unknown }).kind === "python"));
+}
+
+function disabledNotebookMutationIssue(
+  name: HarnessToolName,
+  args: unknown,
+  context: HarnessToolContext,
+  capabilities: NotebookCapabilities,
+): string | undefined {
+  if (isNotebookCellCapabilityEnabled(capabilities, "python")) return undefined;
+  const current = context.notebookCellSession?.document.cells
+    ?? context.request.notebookContext?.document.cells
+    ?? [];
+  const lockedIds = new Set(current.filter((cell) => !isNotebookCellCapabilityEnabled(capabilities, cell.kind))
+    .map((cell) => cell.id));
+  if (name === "createNotebookDraft") {
+    const draft = harnessNotebookDraftSchema.safeParse(args);
+    if (draft.success) return notebookCapabilityMutationIssue(capabilities, current, draft.data.cells);
+  }
+  if (name === "editNotebookCells" && args && typeof args === "object" && !Array.isArray(args)) {
+    const value = args as { cells?: unknown; removeCellIds?: unknown };
+    const removed = new Set(Array.isArray(value.removeCellIds) ? value.removeCellIds : []);
+    const upserts = Array.isArray(value.cells) ? value.cells : [];
+    if ([...lockedIds].some((id) => removed.has(id)
+      || upserts.some((cell) => Boolean(cell && typeof cell === "object" && !Array.isArray(cell)
+        && (cell as { id?: unknown }).id === id)))) {
+      return "能力关闭期间不能通过 Agent 修改或移除已有 Python 单元；原配置与依赖必须保留。";
+    }
+  }
+  if (["runNotebookCells", "submitNotebookDraft"].includes(name) && lockedIds.size) {
+    return "当前草稿含有已关闭的 Python 单元，不能由 Agent 试运行或提交整稿；请手动处理独立分支，或恢复 Python 能力。";
+  }
+  return undefined;
+}
+
+// Offer optional instructions with their schema, not in unrelated SQL edits.
+const parameterToolGuidance = "另支持 parameter：parameter.type/value，select 加非空唯一 options 且 value 属于其中。无依赖，输出一行 value 列的 outputName 表，计划与草稿配置一致。用 inputCellIds 传给 SQL/Python，不拼 SQL、不绑定 warehouseSql；SQL 日期显式 CAST(value AS DATE)，Python 为日期列。值会保存并进入上下文，勿放密码或密钥。";
+const textReferenceGuidance = "text 可选 references:[{key,cellId,field}]，最多10个唯一ASCII key，markdown用{{key}}。引用本次成功、完整且恰好1行的参数/汇总表；先聚合，不取首行、不执行表达式。计划dependsOn与去重引用ID及草稿references一致；须真实试运行。无references的旧文本不插值。";
+
 export function harnessToolCatalog(options: HarnessToolCatalogOptions = {}) {
   const names = options.names ? new Set(options.names) : null;
+  const capabilities = options.notebookCapabilities ?? DEFAULT_NOTEBOOK_CAPABILITIES;
+  const pythonEnabled = isNotebookCellCapabilityEnabled(capabilities, "python");
+  const hasDisabledPython = !pythonEnabled
+    && Boolean(options.request?.notebookContext?.document.cells.some((cell) => cell.kind === "python"));
   return Object.values(harnessToolRegistry).filter((tool) => (
     (!names || names.has(tool.name))
+    && (pythonEnabled || !["createPythonCell", "getKernelPackagesInfo"].includes(tool.name))
+    && (!hasDisabledPython || tool.name !== "createNotebookDraft")
     && (tool.name !== "callMcpTool" || Boolean(options.mcpTools?.length))
     && (tool.name !== "querySemanticModel" || Boolean(options.request?.semanticModel))
     && (tool.name !== "inspectConnectionSchema" || Boolean(options.request?.notebookContext?.connections?.some((connection) => connection.allowAi)))
     && (!["cellSearch", "editNotebookCells", "createPythonCell", "getKernelPackagesInfo", "runNotebookCells", "submitNotebookDraft"].includes(tool.name) || Boolean(options.request?.notebookContext))
   )).map((tool) => ({
     name: tool.name,
-    description: tool.description,
+    description: tool.description + (parametersAvailable(options) && ["createAnalysisPlan", "createNotebookDraft", "editNotebookCells"].includes(tool.name)
+      ? parameterToolGuidance : "") + (["createAnalysisPlan", "createNotebookDraft", "editNotebookCells"].includes(tool.name)
+        ? textReferenceGuidance : "") + (!pythonEnabled && ["createAnalysisPlan", "createNotebookDraft", "editNotebookCells", "runNotebookCells"].includes(tool.name)
+        ? ` 当前部署已关闭 Python 能力：不能规划、创建、编辑或运行 Python 单元；已有 Python 定义只读保留。${notebookCapabilityReason(capabilities, "python") ?? ""}` : ""),
     mode: tool.mode,
     parameters: tool.name === "createChangeSetPreview" && options.editableNodes
       ? compactChangePreviewSchema(options)
@@ -1810,16 +1894,41 @@ export function compactHarnessToolResult(
   result: HarnessToolExecutionResult,
   maxChars = MAX_HARNESS_TOOL_RESULT_BYTES,
   maxEntries = DEFAULT_HARNESS_TOOL_RESULT_ENTRIES,
+  preservation: { keys?: readonly string[]; atomicArrays?: readonly string[]; textResults?: boolean } = {},
 ): HarnessToolExecutionResult {
   if (JSON.stringify(result.data).length <= maxChars) return result;
-  let data = compactValue(result.data, maxEntries);
+  const preserveTextResults = preservation.textResults === true && result.data !== null
+    && typeof result.data === "object" && !Array.isArray(result.data)
+    && "textResults" in result.data && Array.isArray(result.data.textResults);
+  // Counting rules and their scalar profile are atomic evidence: never leave
+  // behind a number while silently removing the population/denominator.
+  const preserved = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+    ? Object.fromEntries(Object.entries(result.data).filter(([key]) => preservation.keys?.includes(key)))
+    : {};
+  const atomicArrays = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+    ? Object.entries(result.data).filter(([key, value]) => preservation.atomicArrays?.includes(key) && Array.isArray(value))
+      .map(([key, values]) => [key, (values as unknown[]).map((value) => (
+        value && typeof value === "object" && !Array.isArray(value)
+          ? Object.fromEntries(Object.entries(value).filter(([field]) => field !== "samples")) : value
+      ))] as const)
+    : [];
+  const retain = (value: unknown, limit: number) => {
+    const retained = value && typeof value === "object" && !Array.isArray(value) ? { ...value, ...preserved,
+      ...Object.fromEntries(atomicArrays.map(([key, values]) => [key, values.slice(0, limit)])),
+      ...(atomicArrays.length ? { truncated: true } : {}),
+    } : value;
+    return preserveTextResults ? preserveNotebookTextResultMetadata(result.data, retained) : retained;
+  };
+  let data = retain(compactValue(result.data, maxEntries), maxEntries);
   let pass = 0;
   while (JSON.stringify(data).length > maxChars && pass < 3) {
-    data = compactValue(data, Math.max(2, Math.floor(maxEntries / (2 ** (pass + 1)))));
+    const limit = Math.max(2, Math.floor(maxEntries / (2 ** (pass + 1))));
+    data = retain(compactValue(data, limit), limit);
     pass += 1;
   }
   if (JSON.stringify(data).length > maxChars) {
-    data = { truncated: true, summaryOnly: truncateString(result.summary, Math.max(80, maxChars - 80)) };
+    const fallback = { truncated: true, summaryOnly: truncateString(result.summary, Math.max(preserveTextResults ? 0 : 80, maxChars - (preserveTextResults ? 160 : 80))) };
+    data = preserveTextResults ? preserveNotebookTextResultMetadata(result.data, fallback) : fallback;
   }
   if (JSON.stringify(data).length > maxChars) {
     throw new StudioValidationError("Harness 工具结果过大", ["工具结果压缩后仍超过上下文预算"]);
@@ -1847,19 +1956,22 @@ export async function executeHarnessTool(
   const run = async <Args>(definition: HarnessToolDefinition<HarnessToolName, Args>) => {
     const parsed = definition.schema.safeParse(rawArguments);
     if (!parsed.success) {
-      const issueSummary = parsed.error.issues.slice(0, 6).map((issue) => {
-        const path = sanitizeHarnessText(issue.path.length > 0 ? issue.path.map(String).join(".") : "$").slice(0, 100);
-        // Use only schema-owned constraints, never rejected values or arbitrary
-        // refinement messages (which may contain private inputs).
-        const expected = issue.code === "invalid_format" && issue.format === "regex" && issue.pattern
-          ? `；要求 ${issue.pattern}` : "";
-        const fieldHint = expected && /(?:columns|categoryField|valueFields)(?:\.\d+)?$/u.test(path)
-          ? "；用上游 fields.name 或已定义输出别名，不用 label；中文放 title"
-          : expected && /(?:dimensions|measures)\.\d+$/u.test(path)
-            ? "；用已选语义模型的 dimensions/measures.key，不用 label" : "";
-        return `${path}:${issue.code}${expected}${fieldHint}`.slice(0, 240);
-      });
+      const issueSummary = summarizeToolArgumentIssues(parsed.error.issues);
       throw new HarnessToolArgumentsError(name, issueSummary);
+    }
+    const capabilities = context.notebookCapabilities ?? DEFAULT_NOTEBOOK_CAPABILITIES;
+    if (!isNotebookCellCapabilityEnabled(capabilities, "python") && harnessToolRequestsPython(name, parsed.data)) {
+      throw new StudioValidationError("Notebook 能力已关闭", [
+        notebookCapabilityReason(capabilities, "python") ?? "Python Notebook 能力已关闭",
+        "已有 Python 单元定义会保留，但当前任务不能创建、编辑、检查运行环境或执行 Python。",
+      ]);
+    }
+    const mutationIssue = disabledNotebookMutationIssue(name, parsed.data, context, capabilities);
+    if (mutationIssue) {
+      throw new StudioValidationError("Notebook 能力已关闭", [
+        mutationIssue,
+        notebookCapabilityReason(capabilities, "python") ?? "Python Notebook 能力已关闭",
+      ]);
     }
     return definition.execute(parsed.data, context);
   };
@@ -1898,6 +2010,10 @@ export async function executeHarnessTool(
     result,
     context.resultBudgetChars ?? MAX_HARNESS_TOOL_RESULT_BYTES,
     context.resultBudgetEntries ?? DEFAULT_HARNESS_TOOL_RESULT_ENTRIES,
+    name === "inspectDataset" ? { keys: ["qualityProfile"] }
+      : name === "inspectFields" ? { keys: ["rules", "rowCount", "fieldCount"], atomicArrays: ["fields"] }
+        : name === "scanEdsRawWorkbook" || name === "queryEdsRawWorkbook" ? { keys: ["rules"] }
+          : name === "runNotebookCells" || name === "createNotebookDraft" ? { textResults: true } : {},
   );
   if (jsonByteLength(compacted.data) > (context.resultBudgetChars ?? MAX_HARNESS_TOOL_RESULT_BYTES) * 4) {
     throw new StudioValidationError("Harness 工具结果过大", [`工具 ${name} 的结果压缩后仍超过安全字节限制`]);

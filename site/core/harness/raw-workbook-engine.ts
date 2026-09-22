@@ -5,6 +5,20 @@ const MAX_TOP_VALUES = 5;
 const RAW_INDEX_CACHE_TTL_MS = 30 * 60 * 1_000;
 const RAW_INDEX_CACHE_MAX_ENTRIES = 4;
 
+// These describe the existing parser/index population, not Excel's physical
+// grid or a new whole-file empty-row / duplicate-row measurement.
+const rawWorkbookCountingRules = {
+  scope: "parsed-workbook",
+  rowCount: "parsed-rows-including-header-and-preamble",
+  header: "heuristic-first-20-rows",
+  dataRows: "after-header-excluding-normalized-blank-rows",
+  emptyCells: "nfkc-trim-empty-within-data-rows",
+  denominator: "data-rows-times-sheet-columns",
+  distinctValues: "typed-nfkc-trim-casefold",
+  emptyRowCount: "not-reported",
+  duplicateRows: "not-measured",
+} as const;
+
 export type RawWorkbookScalar = string | number | boolean | null;
 
 export interface RawWorkbookColumnProfile {
@@ -74,6 +88,7 @@ export interface RawWorkbookQuery {
 }
 
 export interface RawWorkbookQueryResult {
+  rules: typeof rawWorkbookCountingRules;
   datasetVersion: string;
   scanComplete: true;
   mode: "rows" | "aggregate";
@@ -407,6 +422,7 @@ export function queryRawWorkbook(index: RawWorkbookIndex, query: RawWorkbookQuer
     const rows = records.slice(offset, offset + limit);
     return {
       datasetVersion: index.datasetVersion,
+      rules: { ...rawWorkbookCountingRules },
       scanComplete: true,
       mode: "rows",
       sheets: sheets.map((sheet) => sheet.name),
@@ -464,6 +480,7 @@ export function queryRawWorkbook(index: RawWorkbookIndex, query: RawWorkbookQuer
   const selected = records.slice(offset, offset + limit);
   return {
     datasetVersion: index.datasetVersion,
+    rules: { ...rawWorkbookCountingRules },
     scanComplete: true,
     mode: "aggregate",
     sheets: sheets.map((sheet) => sheet.name),
@@ -479,6 +496,7 @@ export function queryRawWorkbook(index: RawWorkbookIndex, query: RawWorkbookQuer
 export function publicRawWorkbookProfile(index: RawWorkbookIndex) {
   return {
     datasetVersion: index.datasetVersion.slice(0, 16),
+    rules: { ...rawWorkbookCountingRules },
     scanComplete: true as const,
     scannedRowCount: index.scannedRowCount,
     scannedDataRowCount: index.scannedDataRowCount,

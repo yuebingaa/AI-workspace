@@ -28,6 +28,32 @@ function fixture() {
 }
 
 describe("Notebook 单元工具", () => {
+  it("Python 失败回执保留分段计时和任务内代码，失败草稿不能提交", async () => {
+    const { context, request } = fixture();
+    request.instruction = "创建 Python 单元并运行";
+    context.notebookRunner = (artifact, ctx) => runNotebook({ document: { name: artifact.name, revision: 7, cells: artifact.cells },
+      sources: request.appSpec.dataSources.filter((source) => request.notebookContext!.sourceIds.includes(source.id))
+        .map((source) => ({ source, rows: context.dataRuntime.rowsByDataSourceId[source.id] })),
+      forAi: true, signal: ctx.signal, log: () => {}, python: async () => ({ close: async () => {},
+        execute: async () => { throw new DOMException("合成计算超过预算", "TimeoutError"); } }),
+    });
+    const code = "raise ValueError('synthetic failure')";
+    await executeHarnessTool("createPythonCell", { editVersion: 0,
+      cell: { id: "py", kind: "python", title: "失败示例", code, outputName: "totals", inputCellIds: ["data"], fileNames: [] } }, context);
+    const result = await executeHarnessTool("runNotebookCells", { editVersion: 1 }, context);
+    const diagnostic = { cellId: "py", preparationMs: expect.any(Number), executionMs: expect.any(Number), failurePhase: "execution", termination: "timeout" };
+    expect(result.data).toMatchObject({ status: "failure", timings: [diagnostic], errors: [{ cellId: "py", timing: {
+      preparationMs: expect.any(Number), executionMs: expect.any(Number), failurePhase: "execution", termination: "timeout",
+    } }] });
+    const selection = buildHarnessContextSelection(request, [{ toolName: "runNotebookCells", toolCallId: "timed_run",
+      summary: result.summary, data: result.data }], 2, true);
+    expect(selection.context.latestObservation).toMatchObject({ result: { timings: [diagnostic] } });
+    expect(context.notebookCellSession?.document.cells.find((cell) => cell.id === "py")).toMatchObject({ code });
+    expect(context.notebookCellSession?.run?.cells.at(-1)?.resultRef).toBeUndefined();
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: 1 }, context)).rejects.toThrow("尚未完整试运行通过");
+    expect(request.notebookContext?.document.cells).toHaveLength(2);
+  });
+
   it("查找标题、相邻单元与长定义分页，不把空匹配当作空文档", async () => {
     const { context } = fixture();
     const result = await executeHarnessTool("cellSearch", { query: "演示" }, context);
@@ -56,6 +82,54 @@ describe("Notebook 单元工具", () => {
     expect(submitted.notebookArtifact).toMatchObject({ baseRevision: 7, executionEvidence: { status: "success" } });
     expect(adoptNotebookDraft(request.notebookContext!.document, submitted.notebookArtifact!).cells).toHaveLength(4);
     expect(() => adoptNotebookDraft({ ...request.notebookContext!.document, revision: 8 }, submitted.notebookArtifact!)).toThrow();
+  }, 15_000);
+
+  it("乱序增量草稿按显式依赖真实执行后才可提交，不信任运行器改写的 executionOrder", async () => {
+    const { context, request, sql, chart } = fixture();
+    const before = structuredClone(request);
+    const runner = context.notebookRunner!;
+    context.notebookRunner = async (artifact, ctx) => {
+      // The receipt checker must derive its expected order, not trust this hint.
+      artifact.executionOrder = artifact.cells.map((cell) => cell.id);
+      return runner(artifact, ctx);
+    };
+    await executeHarnessTool("editNotebookCells", { editVersion: 0, cells: [chart, sql], afterCellId: null }, context);
+    expect(context.notebookCellSession!.document.cells.map((cell) => cell.id)).toEqual(["chart", "summary", "note", "data"]);
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: 1 }, context)).rejects.toThrow("尚未完整试运行通过");
+    const run = await executeHarnessTool("runNotebookCells", { editVersion: 1 }, context);
+    expect(run.data).toMatchObject({ status: "success", completedCellIds: ["note", "data", "summary", "chart"], results: [
+      { cellId: "summary", rows: [{ region: "华东", revenue: 150 }, { region: "华南", revenue: 80 }] },
+      { cellId: "chart", rows: [{ region: "华东", revenue: 150 }, { region: "华南", revenue: 80 }] },
+    ] });
+    expect(context.notebookCellSession!.runVersion).toBe(1);
+    const submitted = await executeHarnessTool("submitNotebookDraft", { editVersion: 1 }, context);
+    expect(submitted.notebookArtifact).toMatchObject({ status: "draft", baseRevision: 7,
+      executionOrder: ["note", "data", "summary", "chart"],
+      executionEvidence: { status: "success", completedCellIds: ["note", "data", "summary", "chart"] },
+    });
+    expect(submitted.notebookArtifact!.cells.map((cell) => cell.id)).toEqual(["chart", "summary", "note", "data"]);
+    expect(request).toEqual(before);
+    expect(adoptNotebookDraft(request.notebookContext!.document, submitted.notebookArtifact!).revision).toBe(8);
+    expect(() => adoptNotebookDraft({ ...request.notebookContext!.document, revision: 8 }, submitted.notebookArtifact!)).toThrow();
+  }, 15_000);
+
+  it("拒绝伪装为显示顺序的真实运行回执，不能缓存或提交成成功证据", async () => {
+    const { context, request, sql, chart } = fixture();
+    const before = structuredClone(request);
+    const runner = context.notebookRunner!;
+    context.notebookRunner = async (artifact, ctx) => {
+      const run = await runner(artifact, ctx);
+      expect(run.status).toBe("success");
+      expect(run.cells.map((cell) => cell.cellId)).toEqual(["note", "data", "summary", "chart"]);
+      artifact.executionOrder = artifact.cells.map((cell) => cell.id);
+      return { ...run, cells: artifact.cells.map((cell) => run.cells.find((entry) => entry.cellId === cell.id)!) };
+    };
+    await executeHarnessTool("editNotebookCells", { editVersion: 0, cells: [chart, sql], afterCellId: null }, context);
+    await expect(executeHarnessTool("runNotebookCells", { editVersion: 1 }, context)).rejects.toThrow("回执与本次草稿不一致");
+    expect(context.notebookCellSession!.run).toBeUndefined();
+    expect(context.notebookCellSession!.runVersion).toBeUndefined();
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: 1 }, context)).rejects.toThrow("尚未完整试运行通过");
+    expect(request).toEqual(before);
   }, 15_000);
 
   it("预算缩减时源代码仍可按真实偏移连续读取，不标记截断代码为完整", async () => {
@@ -96,7 +170,7 @@ describe("Notebook 单元工具", () => {
     const before = structuredClone(context.notebookCellSession);
     const attempts = [
       { cells: [chart] }, { cells: [sql, sql] }, { cells: [sql], afterCellId: "missing" },
-      { cells: [sql], afterCellId: null }, { cells: [sql], removeCellIds: [sql.id] },
+      { cells: [{ ...sql, inputCellIds: [sql.id] }], afterCellId: null }, { cells: [sql], removeCellIds: [sql.id] },
       { cells: [{ ...sql, sql: "DROP TABLE sales_data" }] },
       { cells: [{ id: "secret", kind: "data", title: "其他数据", sourceDataSourceId: "unapproved", outputName: "secret" }] },
       { cells: [], removeCellIds: ["missing"] },

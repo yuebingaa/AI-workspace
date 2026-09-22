@@ -13,6 +13,7 @@ import {
 import type { AiPlanMetadata } from "@/core/ai/contracts";
 import {
   applyChangeSet,
+  applyPreviewedChangeSet,
   cancelPreview,
   createExecutionState,
   previewChangeSet,
@@ -35,6 +36,7 @@ import type { DatasetUploadResponse } from "@/core/datasets/contracts";
 import type { NotebookArtifact, NotebookCell } from "@/core/notebook/definition";
 import type { NotebookDocument } from "@/core/notebook/contracts";
 import { notebookDashboardPreview } from "@/core/notebook/dashboard";
+import { createNotebookDashboardReview, notebookSnapshotDefinitionStatus, type NotebookDashboardReview } from "@/core/notebook/dashboard-review";
 import {
   EDS_WORKSPACE_PAGE_ID,
   getEdsWorkspaceReports,
@@ -42,7 +44,7 @@ import {
 } from "@/core/eds";
 import type { AiChangeSetAuditMetadata, ChangeOperation, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
-import { restoreAssistantSessions } from "@/core/harness/assistant-sessions";
+import { activeAssistantSession, restoreAssistantSessions } from "@/core/harness/assistant-sessions";
 import {
   createBrowserStudioRepository,
   createStudioSnapshot,
@@ -76,18 +78,24 @@ import { StudioHeader } from "./StudioHeader";
 import type { WorkspaceMode } from "./AgentWorkspace";
 import { WorkspaceNavigation, type WorkspaceNavigationAction } from "./WorkspaceNavigation";
 import { AiApiSettings } from "./AiApiSettings";
+import { AgentEngineSettings } from "./AgentEngineSettings";
 import { WecomSettings } from "./WecomSettings";
 import { NotebookPanel } from "./notebook/NotebookPanel";
+import { NotebookSnapshotReview } from "./notebook/NotebookSnapshotReview";
 import type { ComposerResultOption } from "./ComposerContextMenu";
 import { useStudioPageActions, selectablePageId, useStudioPagesState } from "./workspace/pages";
 import { harnessUiClock, useStudioAssistantActions, useStudioAssistantState } from "./workspace/assistant";
 import { useStudioDatasetActions, useStudioDatasetsState } from "./workspace/datasets";
 import { useStudioSemanticState, useStudioSemanticActions } from "./workspace/semantics";
 import { useStudioPersistence } from "./workspace/persistence";
+import { useNotebookContextSelection } from "./workspace/useNotebookContextSelection";
+import { composerNotebookContext } from "./workspace/notebook-context-selection";
+import { notebookContextOptions } from "./notebook/NotebookContextSelection";
 import { SemanticModelManager, SemanticModelSection } from "./SemanticModelManager";
 import { selectedSemanticModel } from "@/core/semantic/model";
 import { WorkspaceSidebarRail } from "./WorkspaceSidebarRail";
 import { LocalProjectsProvider, useLocalProjects } from "./projects/LocalProjectsProvider";
+import { PROJECT_COMPATIBILITY_SAVE_LABEL, ProjectCompatibilityNotice } from "./projects/ProjectCompatibilityNotice";
 import { DataBrowser } from "./projects/DataBrowser";
 import { FilesPanel } from "./files/FilesPanel";
 import type { SessionImportedFile } from "./files/file-list";
@@ -129,6 +137,7 @@ function StudioProjectWorkspace() {
 
 function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const localProject = useLocalProjects();
+  const localProjectSaveLabel = localProject.status.compatibility ? PROJECT_COMPATIBILITY_SAVE_LABEL : localProject.status.message;
   const [dataBrowserOpen, setDataBrowserOpen] = useState(false);
   const [dataBrowserCategory, setDataBrowserCategory] = useState<"trash" | undefined>();
   const [filesPanelOpen, setFilesPanelOpen] = useState(false);
@@ -188,12 +197,15 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("preview");
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("agent");
-  const [settingsPanel, setSettingsPanel] = useState<"api" | "wecom" | null>(null);
+  const [settingsPanel, setSettingsPanel] = useState<"api" | "agent" | "wecom" | null>(null);
   const [assistantCollapsed, setAssistantCollapsed] = useState(false);
   const [notebookInteractionBusy, setNotebookInteractionBusy] = useState(false);
   const [puckDraft, setPuckDraft] = useState<StudioPuckData | null>(null);
   const [puckSessionKey, setPuckSessionKey] = useState(0);
   const [pendingPuckChangeSet, setPendingPuckChangeSet] = useState<ChangeSet | null>(null);
+  const [notebookSnapshotReview, setNotebookSnapshotReview] = useState<NotebookDashboardReview | null>(null);
+  const activeSnapshotReview = notebookSnapshotReview && notebookSnapshotReview.changeSetId === pendingPuckChangeSet?.id
+    && notebookSnapshotReview.changeSetId === execution.preview?.changeSetId ? notebookSnapshotReview : null;
   const [role, setRole] = useState<StudioRole>("editor");
   const [queryRecords, setQueryRecords] = useState<QueryExecutionRecord[]>([]);
   const [auditRecords, setAuditRecords] = useState<ChangeSetAuditRecord[]>([]);
@@ -278,6 +290,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const notebookDocument = dataProduct.notebooks?.[activePageId] ?? { name: `${activePage?.title ?? "工作界面"} · 分析文档`, revision: 0, cells: [] };
   const notebookSources = renderedSpec.dataSources.filter((source) => workspaceDatasets.some((item) => item.id === source.id)
     && (source.sourceType === "csv" || source.sourceType === "local-fixture"));
+  const notebookContextDisabled = aiRequestStatus === "loading" || notebookInteractionBusy || isCsvUploadOpen || isSessionChanging || isHistoryLoading;
+  const notebookSelection = useNotebookContextSelection(JSON.stringify([localProject.session?.handle ?? "temporary", localProject.instanceId,
+    activePageId, activeAssistantSession(assistantSessions).contextId]), notebookDocument, notebookContextDisabled);
+  const selectedNotebookContext = composerNotebookContext(notebookDocument,
+    [...new Set([...notebookSources.map((source) => source.id), ...notebookDocument.cells.flatMap((cell) => cell.kind === "data" ? [cell.sourceDataSourceId] : [])])].slice(0, 10),
+    notebookSelection.selectedCellIds, workspaceMode);
   const notebookDraft = harnessTasks.find((task) => task.pageId === activePageId && task.notebookArtifact
     && (task.state === "awaitingConfirmation" || task.state === "completed"))?.notebookArtifact;
   const formalAppSpecRevision = useMemo(() => appSpecRevision(execution.present), [execution.present]);
@@ -331,6 +349,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     const page = current.execution.present.pages.find((item) => item.id === activePageId);
     if (!page) throw new Error("目标工作界面已经移除");
     const changeSet = notebookDashboardPreview(page, cell, snapshot, crypto.randomUUID().replaceAll("-", ""));
+    const review = createNotebookDashboardReview(changeSet.id, page.id, cell, snapshot.dataset);
     const synchronized = synchronizeUploadedDatasetWorkspace(current, snapshot.dataset, snapshot.rows);
     const nextProduct = { ...synchronized.dataProduct, datasets: synchronized.dataProduct.datasets.map((item) => item.id === snapshot.dataset.datasetId ? { ...item, workspaceId: activePageId } : item) };
     const nextExecution = previewChangeSet(cancelPreview(synchronized.execution), changeSet, role);
@@ -339,6 +358,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     latestDatasetWorkspaceRef.current = { ...current, execution: nextExecution, dataProduct: nextProduct, dataRuntime: synchronized.dataRuntime };
     setDataProduct(nextProduct); setDataRuntime(synchronized.dataRuntime); setExecution(nextExecution);
     setPendingPuckChangeSet(changeSet); setPendingChangeSource("manual"); setCanvasMode("preview");
+    setNotebookSnapshotReview(review);
     setValidationError(null); setSaveLabel("Notebook 结果预览 · 确认后加入看板");
     handleWorkspaceModeChange("canvas");
     persistExplicitly(nextExecution, appendChangeSetAuditRecord(current.auditRecords, audit), current.queryRecords, nextProduct);
@@ -418,7 +438,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     }
     else if (action === "history") handleOpenHistory();
     else if (action === "clearConversation") handleClearAssistantConversation();
-    else if (action === "api" || action === "wecom") setSettingsPanel(action);
+    else if (action === "api" || action === "agent" || action === "wecom") setSettingsPanel(action);
     else if (action === "import") setIsCsvUploadOpen(true);
     else if (action === "backup") handleExportBackup();
     else if (action === "restore") handleChooseBackupFile();
@@ -821,9 +841,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   function handleApplyPuckPreview() {
     if (!pendingPuckChangeSet) return;
     try {
-      const nextExecution = applyChangeSet(cancelPreview(execution), pendingPuckChangeSet, role);
-      const nextDataProduct = reconcileDataProductWorkspaces(latestDatasetWorkspaceRef.current.dataProduct, nextExecution.present);
+      const current = latestDatasetWorkspaceRef.current;
+      const nextExecution = applyPreviewedChangeSet(current.execution, pendingPuckChangeSet, role);
+      const nextDataProduct = reconcileDataProductWorkspaces(current.dataProduct, nextExecution.present);
       const audit = addAudit(pendingPuckChangeSet, pendingChangeSource ?? "puck", "applied");
+      const nextAudits = appendChangeSetAuditRecord(current.auditRecords, audit);
+      latestDatasetWorkspaceRef.current = { ...current, execution: nextExecution, dataProduct: nextDataProduct, auditRecords: nextAudits };
       setExecution(nextExecution);
       setDataProduct(nextDataProduct);
       setActivePageId(selectablePageId(nextExecution.present, activePageId));
@@ -834,12 +857,13 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       });
       setPendingPuckChangeSet(null);
       setPendingChangeSource(null);
+      setNotebookSnapshotReview(null);
       clearPuckDraft();
       setPuckSessionKey((value) => value + 1);
       setCanvasMode("preview");
-      setSaveLabel("已保存 · 可视化编辑已应用");
+      setSaveLabel(activeSnapshotReview ? "已加入看板 · 固定结果快照" : "已保存 · 可视化编辑已应用");
       setValidationError(null);
-      persistExplicitly(nextExecution, appendChangeSetAuditRecord(auditRecords, audit), queryRecords, nextDataProduct);
+      persistExplicitly(nextExecution, nextAudits, current.queryRecords, nextDataProduct);
     } catch (error) {
       const message = readableValidationError(error);
       setValidationError(message);
@@ -848,13 +872,19 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   }
 
   function handleCancelPuckPreview() {
-    if (pendingPuckChangeSet) addAudit(pendingPuckChangeSet, pendingChangeSource ?? "puck", "cancelled");
-    setExecution(cancelPreview(execution));
+    const current = latestDatasetWorkspaceRef.current;
+    const audit = pendingPuckChangeSet ? addAudit(pendingPuckChangeSet, pendingChangeSource ?? "puck", "cancelled") : null;
+    const nextExecution = cancelPreview(current.execution);
+    const nextAudits = audit ? appendChangeSetAuditRecord(current.auditRecords, audit) : current.auditRecords;
+    latestDatasetWorkspaceRef.current = { ...current, execution: nextExecution, auditRecords: nextAudits };
+    setExecution(nextExecution);
     setPendingPuckChangeSet(null);
     setPendingChangeSource(null);
+    setNotebookSnapshotReview(null);
     setCanvasMode(puckDraft ? "edit" : "preview");
-    setSaveLabel(puckDraft ? "可视化编辑 · 尚未应用" : "已保存 · 已取消页面变更");
+    setSaveLabel(activeSnapshotReview ? "已取消加入看板 · 快照数据保留" : puckDraft ? "可视化编辑 · 尚未应用" : "已保存 · 已取消页面变更");
     setValidationError(null);
+    persistExplicitly(nextExecution, nextAudits, current.queryRecords, current.dataProduct);
   }
 
   function handleRoleChange(nextRole: StudioRole) {
@@ -1030,8 +1060,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     auditCurrentPreviewCancellation, setValidationError, setSaveLabel,
     notebookInteractionBusy,
     conversationSwitchBlocked: Boolean(conversationDisabledReason),
-    ...(workspaceMode === "notebook" ? { notebookContext: { document: notebookDocument,
-      sourceIds: [...new Set([...notebookSources.map((source) => source.id), ...notebookDocument.cells.flatMap((cell) => cell.kind === "data" ? [cell.sourceDataSourceId] : [])])].slice(0, 10) } } : {}),
+    ...(selectedNotebookContext ? { notebookContext: selectedNotebookContext } : {}),
   });
 
   const { handleCreateEdsWorkspace, handleSelectEdsWorkspaceReport, handleAnalyzeEdsReports, handleAnalyzeDataSource, handleCsvUploaded, handleConfirmDatasetAiAccess, handleDeleteDataset } = useStudioDatasetActions({
@@ -1095,12 +1124,12 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       <StudioHeader
         interfaces={interfaces}
         activeInterfaceId={activePageId}
-        saveLabel={localProject.session ? localProject.status.message : saveLabel}
+        saveLabel={localProject.session ? localProjectSaveLabel : saveLabel}
         mode={workspaceMode}
         assistantOpen={!assistantCollapsed}
         navigation={<WorkspaceNavigation buttonRef={historyButtonRef} interfaces={interfaces} activeInterfaceId={activePageId}
           canClearConversation={assistantConversation.length > 0 && aiRequestStatus !== "loading"}
-          projectName={localProject.session?.manifest.name} saveLabel={localProject.session ? localProject.status.message : saveLabel}
+          projectName={localProject.session?.manifest.name} saveLabel={localProject.session ? localProjectSaveLabel : saveLabel}
           role={role} canUndo={role !== "viewer" && execution.history.length > 0}
           resourceBusy={aiRequestStatus === "loading" || notebookInteractionBusy || isCsvUploadOpen} historyCount={harnessTasks.length + auditRecords.length}
           onRoleChange={handleRoleChange} onInterfaceChange={handleInterfaceChange} onCreateInterface={handleCreateInterface} onAction={handleNavigationAction} />}
@@ -1114,8 +1143,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           else openAssistantPanel();
         }}
       />
-      {localProject.notice && <div className="persistence-notice" role="alert">{localProject.notice}</div>}
-      {localProject.status.state === "error" && <div className="persistence-notice" role="alert">{localProject.status.message}。请先使用“备份”导出当前定义，避免丢失未保存修改。</div>}
+      {localProject.compatibility ? <><ProjectCompatibilityNotice issue={localProject.compatibility} /><div className="persistence-notice" role="status">上次项目未打开，当前为临时工作区。可在 Data Browser 中重新选择项目。</div></>
+        : localProject.notice && <div className="persistence-notice" role="alert">{localProject.notice}</div>}
+      {localProject.status.state === "error" && <div className="persistence-notice" role="alert">{localProject.status.compatibility ? "项目版本不兼容，自动保存已暂停；请在 Data Browser 查看详情。" : `${localProject.status.message}。`}请先使用“备份”导出当前定义，避免丢失未保存修改。</div>}
       {persistenceNotice && <div className="persistence-notice" role="alert"><span>{persistenceNotice}</span><button type="button" onClick={() => setPersistenceNotice(null)}>知道了</button></div>}
       <div
         id="workspace-view-panel"
@@ -1138,6 +1168,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             onOpenHistory={handleOpenHistory}
           />
           {filesPanelOpen ? <FilesPanel project={localProject.session} sources={renderedSpec.dataSources.filter((source) => workspaceDatasets.some((item) => item.id === source.id))}
+            notebooks={dataProduct.notebooks}
             files={importedFiles} workbooks={activeOriginalWorkbooks} refreshVersion={filesRefreshVersion}
             removedDatasetIds={removedOriginalDatasetIds} onRemoved={removeOriginalFile}
             beforeRemove={localProject.flush}
@@ -1188,6 +1219,10 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           puckData={puckDraft}
           puckSessionKey={puckSessionKey}
           hasPuckPreview={Boolean(pendingPuckChangeSet && execution.preview?.changeSetId === pendingPuckChangeSet.id)}
+          previewApplyLabel={activeSnapshotReview ? "确认加入看板" : undefined}
+          previewCancelLabel={activeSnapshotReview ? "取消预览" : undefined}
+          previewDetails={activeSnapshotReview ? <NotebookSnapshotReview review={activeSnapshotReview}
+            definitionStatus={notebookSnapshotDefinitionStatus(activeSnapshotReview, dataProduct.notebooks?.[activeSnapshotReview.pageId])} /> : undefined}
           changeFeedback={canvasChangeFeedback}
           edsReportOptions={edsReportOptions}
           edsAnalysisRunning={aiRequestStatus === "loading"}
@@ -1243,6 +1278,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             workspaces={interfaces.map(({ id, label, description }) => ({ id, name: label, detail: description }))}
             activeWorkspaceId={activePageId}
             contextResults={contextResults}
+            notebookOptions={notebookContextOptions(notebookDocument.cells)} selectedNotebookCellIds={notebookSelection.selectedCellIds}
+            notebookContextDisabled={notebookContextDisabled} onToggleNotebookCell={notebookSelection.toggle} onRemoveNotebookCell={notebookSelection.remove}
             semanticModels={semantic.models.map((model) => ({ id: model.id, name: model.name, detail: `${model.dimensions.length} 个维度 · ${model.measures.length} 个指标 · v${model.version}` }))}
             activeSemanticModelId={semantic.selected?.id}
             onSelectSemanticModel={handleSelectSemanticModel}
@@ -1289,6 +1326,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         </div>
       </div>
       <AiApiSettings hideTrigger open={settingsPanel === "api"} onOpenChange={open => { setSettingsPanel(open ? "api" : null); if (!open) historyButtonRef.current?.focus(); }} />
+      <AgentEngineSettings hideTrigger open={settingsPanel === "agent"} disabled={aiRequestStatus === "loading"} onOpenChange={open => { setSettingsPanel(open ? "agent" : null); if (!open) historyButtonRef.current?.focus(); }} />
       <WecomSettings hideTrigger open={settingsPanel === "wecom"} onOpenChange={open => { setSettingsPanel(open ? "wecom" : null); if (!open) historyButtonRef.current?.focus(); }} onSuggestion={instruction => { setAiInstruction(instruction); handleWorkspaceModeChange("agent"); }} />
       {isDataSourceOpen && activeDataSource && (
         <DataSourceDetailsPanel
@@ -1311,6 +1349,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         onOpenEdsImport={handleOpenEdsAnalysis}
       />}
       {dataBrowserOpen && <DataBrowser initialCategory={dataBrowserCategory} onClose={() => { setDataBrowserOpen(false); setDataBrowserCategory(undefined); setFilesRefreshVersion((value) => value + 1); }} onImport={() => setIsCsvUploadOpen(true)}
+        notebooks={dataProduct.notebooks}
         onFileRemoved={removeOriginalFile}
         onUse={handleUseProjectTable} onRemoved={removeProjectTable} models={semantic.models} canEdit={role !== "viewer" && aiRequestStatus !== "loading" && !notebookInteractionBusy && !isCsvUploadOpen} preview={execution.preview?.appSpec}
         onModel={(id) => semantic.setEditor({ modelId: id })} />}
@@ -1326,7 +1365,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         />
       )}
       {semantic.editor && <SemanticModelManager key={activePageId}
-        models={semantic.models} initialModelId={semantic.editor.modelId}
+        models={semantic.models} notebooks={dataProduct.notebooks} initialModelId={semantic.editor.modelId}
         sources={renderedSpec.dataSources.filter((source) => workspaceDatasets.some((dataset) => dataset.id === source.id))}
         rowsByDataSourceId={dataRuntime.rowsByDataSourceId} activeDataSourceId={activeDataSource?.id ?? ""}
         role={role} busy={aiRequestStatus === "loading"} onSave={semanticActions.save} onDelete={semanticActions.remove}

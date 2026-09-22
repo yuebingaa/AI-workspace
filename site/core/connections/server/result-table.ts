@@ -1,8 +1,10 @@
-import { NOTEBOOK_LIMITS, notebookTableSchema, type NotebookTable } from "@/core/notebook/contracts";
+import { dataTableSchema, type DataTable } from "@/core/datasets/table-contracts";
 import { CONNECTION_QUERY_LIMITS, ConnectionQueryError } from "./query-contracts";
 
 const LIMIT = CONNECTION_QUERY_LIMITS.rows;
-export function tableFromText(fields: NotebookTable["fields"], raw: unknown[][], truncated: boolean): NotebookTable {
+const connectionResultTableSchema = dataTableSchema.extend({ rows: dataTableSchema.shape.rows.max(LIMIT) });
+
+export function tableFromText(fields: DataTable["fields"], raw: unknown[][], truncated: boolean): DataTable {
   if (!fields.length || fields.length > 100 || new Set(fields.map((item) => item.name)).size !== fields.length) throw new ConnectionQueryError("查询结果需要 1–100 个不重名的字段，请在 SQL 中指定唯一别名");
   const rows = raw.slice(0, LIMIT).map((row) => Object.fromEntries(fields.map((field, i) => {
     const value = row[i];
@@ -19,7 +21,7 @@ export function tableFromText(fields: NotebookTable["fields"], raw: unknown[][],
     }
     return [field.name, String(value)];
   })));
-  const table = notebookTableSchema.parse({ fields, rows, truncated: truncated || raw.length > LIMIT });
-  if (Buffer.byteLength(JSON.stringify(table)) > NOTEBOOK_LIMITS.outputBytes) throw new ConnectionQueryError("数据库结果超过 2 MiB，请减少返回列或先聚合");
+  const table = connectionResultTableSchema.parse({ fields, rows, truncated: truncated || raw.length > LIMIT });
+  if (Buffer.byteLength(JSON.stringify(table)) > CONNECTION_QUERY_LIMITS.outputBytes) throw new ConnectionQueryError("数据库结果超过 2 MiB，请减少返回列或先聚合");
   return table;
 }

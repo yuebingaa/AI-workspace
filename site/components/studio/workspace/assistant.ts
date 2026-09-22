@@ -5,12 +5,13 @@ import type { AiPlanMetadata } from "@/core/ai/contracts";
 import { cancelPreview } from "@/core/changesets";
 import { EDS_WORKSPACE_PAGE_ID, type EdsWorkspaceSnapshot } from "@/core/eds";
 import { HarnessClientError, requestHarnessTask } from "@/core/harness/client";
-import { DEFAULT_HARNESS_LIMITS, MAX_HARNESS_IMAGE_ATTACHMENTS, MAX_HARNESS_IMAGE_BYTES, MAX_HARNESS_TOTAL_IMAGE_BYTES, type HarnessExecutionTiming, type HarnessTaskSummary } from "@/core/harness/contracts";
+import { DEFAULT_HARNESS_LIMITS, MAX_HARNESS_IMAGE_ATTACHMENTS, MAX_HARNESS_IMAGE_BYTES, MAX_HARNESS_TOTAL_IMAGE_BYTES, MAX_HARNESS_REQUEST_RECIPES, type HarnessExecutionTiming, type HarnessTaskSummary } from "@/core/harness/contracts";
 import { appendAssistantConversationTurn, assistantConversationFromHarnessTasks, isLightweightConversation, isUiMutationCapabilityQuestion, lightweightConversationReply, uiMutationCapabilityReply, type AssistantConversationTurn } from "@/core/harness/conversation";
 import { harnessConversationId, clearHarnessConversations } from "@/core/harness/conversation-client";
 import { activeAssistantSession, createAssistantSessions, MAX_ASSISTANT_SESSIONS, newAssistantSession, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
 import { failureResponse } from "@/core/harness/failure-response";
 import { instructionRequestsRawWorkbook } from "@/core/harness/raw-workbook";
+import { resolveHarnessPageDataSourceIds } from "@/core/harness/source-scope";
 import { appendHarnessEvent, appendHarnessTask, createHarnessTask, type HarnessTaskClock } from "@/core/harness/task-state";
 import type { AppSpec, ChangeSet, ChangeSetAuditRecord, DataProduct, DataSourceDefinition, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
@@ -197,6 +198,17 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
       return;
     }
 
+    const recipeSourceIds = new Set(resolveHarnessPageDataSourceIds({
+      appSpec: execution.present, pageId: activePageId, instruction: submittedInstruction,
+      dataSourceId: requestedDataSource?.id, notebookContext: context.notebookContext,
+    }));
+    const requestRecipes = dataProduct.recipes.filter((recipe) => recipeSourceIds.has(recipe.sourceDatasetId));
+    if (requestRecipes.length > MAX_HARNESS_REQUEST_RECIPES) {
+      setAiRequestError(`当前分析范围有 ${requestRecipes.length} 个相关数据配方，单次请求最多 ${MAX_HARNESS_REQUEST_RECIPES} 个。请缩小数据范围，或整理该来源的配方后重试；本次未发送请求，配方和草稿均已保留。`);
+      setAiRequestStatus("error");
+      return;
+    }
+
     aiRequestAbortRef.current?.abort();
     const controller = new AbortController();
     aiRequestAbortRef.current = controller;
@@ -269,7 +281,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
           },
         } : {}),
         appSpec: baseExecution.present,
-        recipes: dataProduct.recipes,
+        recipes: requestRecipes,
         ...(edsWorkspace ? { edsWorkspace } : {}),
         ...(retryOfTaskId ? { retryOfTaskId } : {}),
       }, {

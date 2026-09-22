@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { appendHarnessEvent, createHarnessTask, type AssistantConversationTurn, type HarnessTaskSummary } from "@/core/harness";
@@ -40,6 +41,7 @@ function render(
   pendingInstruction = "",
   imageAttachments: File[] = [],
   presentation: "sidebar" | "workspace" = "sidebar",
+  notebook: Pick<ComponentProps<typeof AiBuilderAssistant>, "notebookOptions" | "selectedNotebookCellIds" | "notebookContextDisabled" | "onRemoveNotebookCell"> = {},
 ) {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
   return renderToStaticMarkup(<AiBuilderAssistant
@@ -70,8 +72,32 @@ function render(
     onPreview={() => {}}
     onApply={() => {}}
     onCancelPreview={() => {}}
+    {...notebook}
   />);
 }
+
+describe("Notebook focus in both assistant layouts", () => {
+  const options = [{ id: "parameter", kind: "parameter" as const, name: "Saved threshold", detail: "参数 · threshold" }];
+  it.each(["sidebar", "workspace"] as const)("renders removable metadata chips in %s", (presentation) => {
+    const html = render("idle", task("completed"), null, false, [], "", [], presentation, {
+      notebookOptions: options, selectedNotebookCellIds: ["parameter"], onRemoveNotebookCell: () => {},
+    });
+    expect(html).toContain('aria-label="已选择的 Notebook 上下文"');
+    expect(html).toContain('aria-label="移除 Notebook 上下文 Saved threshold"');
+    expect(html).toContain("选择本身不会读取或运行数据");
+    expect(html).not.toContain("parameter.value");
+  });
+  it.each(["sidebar", "workspace"] as const)("keeps the no-selection layout unchanged in %s", (presentation) => {
+    expect(render("idle", task("completed"), null, false, [], "", [], presentation, { notebookOptions: options }))
+      .not.toContain('aria-label="已选择的 Notebook 上下文"');
+  });
+  it.each(["loading", "editing"])("disables chip removal during %s", (state) => {
+    const html = render(state === "loading" ? "loading" : "idle", task("completed"), null, false, [], "", [], "sidebar", {
+      notebookOptions: options, selectedNotebookCellIds: ["parameter"], notebookContextDisabled: state === "editing",
+    });
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="移除 Notebook 上下文 Saved threshold"/u);
+  });
+});
 
 describe("AI 助手 Harness 状态", () => {
   it("失败解释只显示在当前聊天回复中，保留重试入口", () => {

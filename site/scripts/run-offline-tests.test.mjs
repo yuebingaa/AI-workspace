@@ -19,6 +19,7 @@ test("Vitest 参数只传给第一阶段，成功后运行全部 Node 工具单�
   assert.equal(calls[1].args.some((value) => value === "--reporter=dot"), false);
   assert.equal(calls[1].args.some((value) => value.endsWith("eds-browser-acceptance.test.mjs")), true);
   assert.equal(calls[1].args.some((value) => value.endsWith("run-offline-tests.test.mjs")), true);
+  assert.equal(calls[1].args.some((value) => value.endsWith("copy-notebook-runtime.test.mjs")), true);
 });
 
 test("Vitest 非零退出时保留失败码且不启动 Node 工具单测", async () => {

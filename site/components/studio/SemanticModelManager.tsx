@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { DataRow, DataSourceDefinition } from "@/core/models";
+import type { DataProduct, DataRow, DataSourceDefinition } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
 import { executeDataRecipe } from "@/core/data";
 import { SEMANTIC_AGGREGATIONS, semanticAggregationLabels, semanticModelSchema, type SemanticModel } from "@/core/semantic/contracts";
 import { compileSemanticQuery } from "@/core/semantic/model";
 import { readableValidationError } from "@/core/schemas/errors";
+import { semanticModelReferences } from "@/core/semantic/model-references";
+import { SemanticModelDeletionImpact } from "./SemanticModelDeletionImpact";
 
 export function SemanticModelSection({ models, selectedId, canCreate, busy, onManage, onSelect }: {
   models: SemanticModel[]; selectedId?: string; canCreate: boolean; busy: boolean;
@@ -34,6 +36,7 @@ function blankModel(sourceId: string): SemanticModel {
 
 interface ManagerProps {
   models: SemanticModel[];
+  notebooks: DataProduct["notebooks"];
   sources: DataSourceDefinition[];
   rowsByDataSourceId: Record<string, DataRow[]>;
   initialModelId?: string;
@@ -45,13 +48,15 @@ interface ManagerProps {
   onClose(): void;
 }
 
-export function SemanticModelManager({ models, sources, rowsByDataSourceId, initialModelId, activeDataSourceId, role, busy, onSave, onDelete, onClose }: ManagerProps) {
+export function SemanticModelManager({ models, notebooks, sources, rowsByDataSourceId, initialModelId, activeDataSourceId, role, busy, onSave, onDelete, onClose }: ManagerProps) {
   const [editingId, setEditingId] = useState<string | null>(initialModelId ?? null);
   const [draft, setDraft] = useState<SemanticModel>(() => structuredClone(models.find((model) => model.id === initialModelId)
     ?? blankModel(sources.find((source) => source.id === activeDataSourceId)?.id ?? sources[0]?.id ?? "")));
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ fields: Array<{ name: string; label: string }>; rows: DataRow[] } | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const deletionDescriptionId = useId();
+  const references = editingId ? semanticModelReferences({ notebooks }, editingId) : [];
   const source = sources.find((source) => source.id === draft.sourceDatasetId);
   const readOnly = role === "viewer" || busy;
   useEffect(() => {
@@ -111,6 +116,7 @@ export function SemanticModelManager({ models, sources, rowsByDataSourceId, init
         {!models.length && <p>创建后可在侧边栏或 AI 上下文菜单中选择。</p>}
       </aside>
       <form id="semantic-model-form" onSubmit={(event) => { event.preventDefault(); save(); }}>
+        {editingId && <SemanticModelDeletionImpact references={references} id={deletionDescriptionId} />}
         <fieldset disabled={readOnly}>
           <div className="semantic-basics">
             <label>模型名称<input required maxLength={100} value={draft.name} placeholder="例如：销售分析口径" onChange={(event) => update({ ...draft, name: event.target.value })} /></label>
@@ -144,6 +150,6 @@ export function SemanticModelManager({ models, sources, rowsByDataSourceId, init
         {preview && <section className="semantic-preview" aria-label="语义查询预览"><b>计算预览 · {preview.rows.length} 行</b><div><table><thead><tr>{preview.fields.map((field) => <th key={field.name}>{field.label}</th>)}</tr></thead><tbody>{preview.rows.map((row, i) => <tr key={i}>{preview.fields.map((field) => <td key={field.name}>{String(row[field.name] ?? "—")}</td>)}</tr>)}</tbody></table></div>{!preview.rows.length && <p>当前数据没有查询结果。</p>}</section>}
       </form>
     </div>
-    <footer><div>{editingId && role !== "viewer" && <button type="button" className="semantic-delete" disabled={busy} onClick={() => { try { if (onDelete(editingId)) onClose(); } catch (error) { setError(readableValidationError(error)); } }}>删除模型</button>}</div><div><button type="button" onClick={onClose}>取消</button><button type="button" disabled={!source || busy} onClick={runPreview}>预览计算</button><button type="submit" form="semantic-model-form" className="semantic-save" disabled={readOnly || !sources.length}>保存并选择</button></div></footer>
+    <footer><div>{editingId && role !== "viewer" && <button type="button" className="semantic-delete" aria-describedby={deletionDescriptionId} disabled={busy || references.length > 0} onClick={() => { try { if (onDelete(editingId)) onClose(); } catch (error) { setError(readableValidationError(error)); } }}>删除模型</button>}</div><div><button type="button" onClick={onClose}>取消</button><button type="button" disabled={!source || busy} onClick={runPreview}>预览计算</button><button type="submit" form="semantic-model-form" className="semantic-save" disabled={readOnly || !sources.length}>保存并选择</button></div></footer>
   </dialog>, document.body);
 }

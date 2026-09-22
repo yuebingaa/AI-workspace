@@ -3,10 +3,19 @@ import { describe, expect, it } from "vitest";
 import { HarnessTrace, traceRows } from "./HarnessTrace";
 import { createHarnessTask } from "@/core/harness/task-state";
 import type { HarnessTraceEvent } from "@/core/harness/contracts";
+import { harnessNotebookDiagnosticsSchema } from "@/core/harness/notebook-diagnostics";
 
 const task = createHarnessTask("trace_ui_test", "检查销售数据", "page_home", "editor", { now: () => new Date("2026-09-09T00:00:00.000Z"), id: () => "event_ui" });
 const event = (sequence: number, type: HarnessTraceEvent["type"], extra: Partial<HarnessTraceEvent> = {}): HarnessTraceEvent => ({
   id: `trace_ui_${sequence}`, sequence, taskId: task.id, timestamp: task.createdAt, type, message: type, ...extra,
+});
+const diagnosticSource = JSON.stringify({ code: "<script>alert(1)</script>" }, null, 2);
+const diagnostics = harnessNotebookDiagnosticsSchema.parse({
+  version: 1 as const, baseRevision: 3, editVersion: 1, runId: "run_readonly", status: "failure" as const,
+  cells: [{ cellId: "cell_python", kind: "python" as const, title: "失败代码", status: "failure" as const,
+    source: diagnosticSource, sourceChars: diagnosticSource.length, sourceTruncated: false,
+    timing: { preparationMs: 1234, executionMs: 10000, failurePhase: "execution" as const, termination: "timeout" as const } }],
+  omittedCellCount: 0,
 });
 describe("real execution trace UI", () => {
   it("shows only actual steps and keeps awaiting confirmation distinct from completion", () => {
@@ -38,5 +47,39 @@ describe("real execution trace UI", () => {
   });
   it("does not invent a successful trace for a legacy task or local greeting", () => {
     expect(renderToStaticMarkup(<HarnessTrace task={task} />)).toBe("");
+  });
+  it("renders final failed Notebook diagnostics as escaped read-only text without adopting controls", () => {
+    const html = renderToStaticMarkup(<HarnessTrace task={{ ...task, state: "failed", trace: [event(1, "tool_completed")], notebookDiagnostics: diagnostics }} />);
+    expect(html).toContain("查看失败草稿（只读）");
+    expect(html).toContain("失败代码");
+    expect(html).toContain("单元定义 · JSON");
+    expect(html).toContain("仅保留在当前会话，刷新后丢失");
+    expect(html).toContain("环境准备");
+    expect(html).toContain("执行超时");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain('open=""');
+  });
+  it("supports a final diagnostic without inventing trace events and explains unavailable receipts", () => {
+    const html = renderToStaticMarkup(<HarnessTrace task={{ ...task, state: "blocked", notebookDiagnostics: harnessNotebookDiagnosticsSchema.parse({
+      ...diagnostics, status: "unavailable", runId: undefined, cells: [{ ...diagnostics.cells[0], status: "unknown", timing: undefined,
+        source: "{", sourceChars: 34000, sourceTruncated: true }], omittedCellCount: 2,
+    }) }} />);
+    expect(html).toContain("查看失败草稿（只读）");
+    expect(html).toContain("未取得执行回执");
+    expect(html).toContain("34000");
+    expect(html).toContain("另有 2 个单元");
+    expect(html).not.toContain("Notebook 单元耗时");
+    expect(html).not.toContain("0 ms");
+    expect(html).not.toContain("✓");
+  });
+  it.each(["completed", "cancelled", "awaitingConfirmation"] as const)("never presents stale failure diagnostics for %s", (state) => {
+    const html = renderToStaticMarkup(<HarnessTrace task={{ ...task, state, trace: [event(1, "context_loaded")], notebookDiagnostics: diagnostics }} />);
+    expect(html).not.toContain("查看失败草稿（只读）");
+  });
+  it("does not show a failure draft while a new request is running", () => {
+    const html = renderToStaticMarkup(<HarnessTrace task={{ ...task, state: "failed", trace: [event(1, "context_loaded")], notebookDiagnostics: diagnostics }} running />);
+    expect(html).not.toContain("查看失败草稿（只读）");
   });
 });

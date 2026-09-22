@@ -69,3 +69,14 @@
 .right-panel .prompt-box .context-plus-trigger { width: 25px; height: 25px; border: 0; border-radius: 4px; background: var(--studio-paper); color: var(--studio-secondary); font-size: 20px; }
 .right-panel .prompt-box .context-plus-trigger[aria-expanded="true"] { background: var(--studio-soft); color: var(--studio-secondary); }
 .right-panel .prompt-box .composer-attachment-error { margin: 0 0 8px; color: #a64237; font-size: 11px; }
+.notebook-context-option-group { display: contents; }
+.notebook-context-option-group > p, .notebook-context-limit { margin: 7px 8px 4px; color: var(--studio-muted); font-size: 10px; }
+.notebook-context-option-group > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--studio-secondary); text-align: left; }
+.notebook-context-option-group > button > span:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
+.notebook-context-option-group > button:is(:hover, :focus-visible, [aria-checked="true"]) { background: var(--studio-soft); color: var(--studio-ink); }
+.notebook-context-option-group > button:disabled { opacity: .45; cursor: not-allowed; }
+.notebook-context-selection { flex: 0 0 auto; min-width: 0; margin: 0 12px 8px; padding: 8px; border: 1px solid var(--studio-border); border-radius: 5px; background: var(--studio-surface); }
+.agent-workspace-panel > .notebook-context-selection { width: min(780px, calc(100% - 48px)); margin: 0 auto 8px; }
+.notebook-context-selection-chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 108px; overflow-y: auto; }
+.notebook-context-selection > small { display: block; margin-top: 6px; color: var(--studio-muted); font-size: 10px; line-height: 1.5; }
+.notebook-context-selection .composer-context-chip button:disabled { opacity: .45; cursor: not-allowed; }

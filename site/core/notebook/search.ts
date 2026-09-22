@@ -1,6 +1,19 @@
 import type { NotebookCell } from "./definition";
 import type { NotebookDocument } from "./contracts";
-import { cellDependencies, validateNotebook } from "./graph";
+import { cellDependencies, cellsToRun, validateNotebook } from "./graph";
+
+const searchFailureMessages = {
+  notebook_search_anchor_not_found: "找不到指定单元或输出变量，请先按名称搜索。",
+  notebook_search_anchor_required: "遍历依赖关系需要指定 cellId 或 variable。",
+} as const;
+
+/** Typed, finite diagnostics; identifiers and input values are never attached. */
+export class NotebookSearchError extends Error {
+  constructor(readonly code: keyof typeof searchFailureMessages) {
+    super(searchFailureMessages[code]);
+    this.name = "NotebookSearchError";
+  }
+}
 
 export interface NotebookIndexEntry {
   id: string;
@@ -25,11 +38,14 @@ export interface NotebookSearchIndex {
 
 /** Explicit Notebook bindings are authoritative; SQL text is not parsed as lineage. */
 export function buildNotebookSearchIndex(document: NotebookDocument): NotebookSearchIndex {
-  const cells = validateNotebook(document);
+  const displayCells = validateNotebook(document);
+  const cells = cellsToRun({ ...document, cells: displayCells });
+  const positions = new Map(displayCells.map((cell, index) => [cell.id, index]));
   const byId = new Map<string, NotebookIndexEntry>();
   const byVariable = new Map<string, NotebookIndexEntry>();
   const sourceById = new Map<string, string>();
-  for (const [index, cell] of cells.entries()) {
+  for (const cell of cells) {
+    const index = positions.get(cell.id)!;
     const upstream = cellDependencies(cell);
     const parents = upstream.map((id) => byId.get(id)!);
     const entry: NotebookIndexEntry = {
@@ -49,7 +65,10 @@ export function buildNotebookSearchIndex(document: NotebookDocument): NotebookSe
     // Validation may trim string fields; source inspection must preserve the stored definition.
     sourceById.set(cell.id, JSON.stringify(document.cells[index], null, 2));
   }
-  return { entries: [...byId.values()], byId, byVariable, sourceById };
+  const entries = displayCells.map((cell) => byId.get(cell.id)!);
+  // Search remains in visual order even when dependency execution has another order.
+  for (const entry of entries) entry.downstream.sort((a, b) => positions.get(a)! - positions.get(b)!);
+  return { entries, byId, byVariable, sourceById };
 }
 
 export type NotebookSearchDirection = "self" | "upstream" | "downstream" | "both";
@@ -71,8 +90,8 @@ export interface NotebookIndexMatch {
 export function searchNotebookIndex(index: NotebookSearchIndex, query: NotebookIndexSearch) {
   const anchor = query.cellId ? index.byId.get(query.cellId)
     : query.variable ? index.byVariable.get(query.variable) : undefined;
-  if ((query.cellId || query.variable) && !anchor) throw new Error("找不到指定单元或输出变量，请先按名称搜索。");
-  if (query.direction !== "self" && !anchor) throw new Error("遍历依赖关系需要指定 cellId 或 variable。");
+  if ((query.cellId || query.variable) && !anchor) throw new NotebookSearchError("notebook_search_anchor_not_found");
+  if (query.direction !== "self" && !anchor) throw new NotebookSearchError("notebook_search_anchor_required");
   const reachable = new Map<string, Pick<NotebookIndexMatch, "relation" | "distance">>();
   if (anchor) reachable.set(anchor.id, { relation: "self", distance: 0 });
   const visit = (direction: "upstream" | "downstream") => {

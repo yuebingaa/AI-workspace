@@ -49,9 +49,12 @@ export async function requestHarnessTask(
   }
   const controller = new AbortController();
   let timedOut = false;
+  const startedAt = Date.now();
+  let executionDeadlineReceived = false;
   const abortOuter = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", abortOuter, { once: true });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const expire = () => { timedOut = true; controller.abort(); };
+  let timer = setTimeout(expire, timeoutMs);
   try {
     const rawWorkbook = options.rawWorkbook;
     const imageAttachments = options.imageAttachments ?? [];
@@ -84,6 +87,17 @@ export async function requestHarnessTask(
         try {
           const result = await readHarnessStream(response, controller.signal, (event) => {
             if (event.taskId !== `harness_${payload.idempotencyKey}`) throw new Error("事件不属于当前请求。");
+            // This optional, schema-bounded server receipt only adjusts the
+            // default stream deadline. Replayed events cannot keep it alive,
+            // and explicit callers' tighter budgets are never overridden.
+            if (event.type === "task_started" && event.clientTimeoutMs !== undefined
+              && !executionDeadlineReceived && options.timeoutMs === undefined) {
+              executionDeadlineReceived = true;
+              clearTimeout(timer);
+              const remaining = event.clientTimeoutMs - (Date.now() - startedAt);
+              if (remaining <= 0) expire();
+              else timer = setTimeout(expire, remaining);
+            }
             options.onEvent?.(event);
           });
           if (result.task.idempotencyKey !== payload.idempotencyKey || result.task.pageId !== payload.pageId) throw new Error("最终任务与当前请求不匹配。");

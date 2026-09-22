@@ -112,7 +112,13 @@ const persistedStateSchema: z.ZodType<StudioPersistedState> = z.object({
   appliedChangeSetIds: z.array(z.string().min(1)).max(100),
   auditRecords: z.array(auditRecordSchema).max(100),
   queryRecords: z.array(queryRecordSchema).max(100),
-  harnessTasks: z.array(harnessTaskSummarySchema).max(20),
+  // Diagnostic source is for the current window only. Every local/project save,
+  // backup and restore passes through this projection; the live task is untouched.
+  harnessTasks: z.array(harnessTaskSummarySchema.transform((task) => {
+    const persistent = { ...task };
+    delete persistent.notebookDiagnostics;
+    return persistent;
+  })).max(20),
   assistantConversation: z.array(assistantConversationTurnSchema).max(MAX_ASSISTANT_CONVERSATION_TURNS),
   assistantConversationInitialized: z.boolean(),
   assistantSessions: assistantSessionsSchema.nullable(),

@@ -2,25 +2,14 @@ import { useState } from "react";
 import type { DataSourceDefinition } from "@/core/models";
 import type { NotebookCell } from "@/core/notebook/definition";
 import type { NotebookTable } from "@/core/notebook/contracts";
-
-export const notebookCellLabels: Record<NotebookCell["kind"], string> = { data: "Data", warehouseSql: "数据库 SQL", sql: "SQL", python: "Python", transform: "DataRecipe", semanticQuery: "语义查询", table: "表格", chart: "图表", text: "说明" };
-const tools: { kind: NotebookCell["kind"]; label: string; detail: string }[] = [
-  { kind: "sql", label: "SQL", detail: "查询已导入的数据" },
-  { kind: "python", label: "Python", detail: "用 pandas / NumPy 处理数据" },
-  { kind: "warehouseSql", label: "数据库 SQL", detail: "查询已配置的数据库连接" },
-  { kind: "text", label: "说明", detail: "记录问题、结论与分析口径" },
-  { kind: "chart", label: "图表", detail: "将上游结果可视化" },
-  { kind: "table", label: "表格", detail: "选择并展示结果字段" },
-  { kind: "transform", label: "数据处理", detail: "用 DataRecipe 筛选、计算和汇总" },
-  { kind: "semanticQuery", label: "语义查询", detail: "按已有模型查询维度与指标" },
-  { kind: "data", label: "数据", detail: "选用已导入的数据源" },
-];
+import { notebookCellPresentation, notebookToolbarOrder } from "./cell-presentation";
 
 export function NotebookIcon({ kind }: { kind: NotebookCell["kind"] | "ask" | "upload" }) {
   return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {kind === "sql" || kind === "python" ? <><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-16-2 20" /></> :
       kind === "warehouseSql" || kind === "data" ? <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0" /></> :
       kind === "text" ? <><path d="M4 5h16M12 5v15M8 20h8M4 5v3m16-3v3" /></> :
+      kind === "parameter" ? <><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10v4m-1-4h2m-2 4h2m4-2h7" /></> :
       kind === "chart" ? <><path d="M3 3v18h18M7 15l4-7 5 4 5-8" /></> :
       kind === "table" ? <><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M3 9h18M3 14h18M9 4v16" /></> :
       kind === "transform" ? <><path d="M3 6h18M3 12h18M3 18h18" /><circle cx="8" cy="6" r="2" fill="var(--studio-surface)" /><circle cx="16" cy="12" r="2" fill="var(--studio-surface)" /><circle cx="10" cy="18" r="2" fill="var(--studio-surface)" /></> :
@@ -47,11 +36,18 @@ export function NotebookTitle({ name, disabled, onRename }: { name: string; disa
     onClick={() => { setValue(name); setEditing(true); }}>{name}</button></h1>;
 }
 
-export function NotebookInsertToolbar({ disabled, onAdd }: { disabled: boolean; onAdd: (kind: NotebookCell["kind"]) => void }) {
-  return <div className="notebook-add" role="group" aria-label="添加分析单元">{tools.map(({ kind, label, detail }) =>
-    <button key={kind} type="button" disabled={disabled} aria-label={`＋ ${notebookCellLabels[kind]}`} title={detail} onClick={() => onAdd(kind)}>
-      <NotebookIcon kind={kind} /><span>{label}</span>
-    </button>)}
+export function NotebookInsertToolbar({ disabled, availableKinds = notebookToolbarOrder, onAdd }: {
+  disabled: boolean;
+  availableKinds?: readonly NotebookCell["kind"][];
+  onAdd: (kind: NotebookCell["kind"]) => void;
+}) {
+  const available = new Set(availableKinds);
+  return <div className="notebook-add" role="group" aria-label="添加分析单元">{notebookToolbarOrder.filter((kind) => available.has(kind)).map((kind) => {
+    const { label, toolbarLabel, detail } = notebookCellPresentation[kind];
+    return <button key={kind} type="button" disabled={disabled} aria-label={`＋ ${label}`} title={detail} onClick={() => onAdd(kind)}>
+      <NotebookIcon kind={kind} /><span>{toolbarLabel}</span>
+    </button>;
+  })}
   </div>;
 }
 

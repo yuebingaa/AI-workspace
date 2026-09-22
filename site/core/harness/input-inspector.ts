@@ -17,6 +17,7 @@ interface InspectionInput {
   notebookContext?: {
     document: NotebookDocument;
     sourceIds: string[];
+    selectedCellIds?: readonly string[];
     connections?: ReadonlyArray<{ allowAi: boolean }>;
   };
 }
@@ -46,6 +47,7 @@ export interface HarnessInputInspection {
   notebook?: {
     revision: number;
     cellCount: number;
+    selectedCellCount?: number;
     cellKinds: Partial<Record<NotebookDocument["cells"][number]["kind"], number>>;
     declaredOutputCount: number;
     declaredOutputs: string[];
@@ -106,6 +108,7 @@ export function inspectHarnessInput(input: InspectionInput, compact = false): Ha
     const requiredSources = new Set([...notebook.sourceIds,
       ...cells.flatMap((cell) => "sourceDataSourceId" in cell ? [cell.sourceDataSourceId] : [])]);
     report.notebook = { revision: notebook.document.revision, cellCount: cells.length, cellKinds: kinds,
+      ...(notebook.selectedCellIds?.length ? { selectedCellCount: notebook.selectedCellIds.length } : {}),
       declaredOutputCount: outputs.length, declaredOutputs, omittedOutputs: outputs.length - declaredOutputs.length,
       missingSourceCount: [...requiredSources].filter((id) => !sourceIds.has(id)).length,
       unattachedFileCount: [...requiredFiles].filter((name) => name !== workbook?.fileName).length };

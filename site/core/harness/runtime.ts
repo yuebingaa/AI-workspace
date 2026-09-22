@@ -1,9 +1,12 @@
 import { HarnessModelFormatError, HarnessModelProtocolError } from "./model-errors";
+import { notebookContextSelectionMetadata } from "@/core/notebook/context-selection";
+import type { NotebookCapabilities } from "@/core/notebook/capabilities";
 import { withinModelLimit, type HarnessModelLimit } from "./model-limits";
 import { inspectHarnessInput, inspectedModelContext, inputInspectionMessage, shouldInspectHarnessInput, toolNeedsInputInspection } from "./input-inspector";
 import { HARNESS_SEMANTIC_ROUTER_PROMPT, HARNESS_DYNAMIC_PLANNER_PROMPT } from "./model-policy";
 import { failureResponse, failureExplanationInputChars, acceptableFailureExplanation } from "./failure-response";
 import { isNotebookInspection, canonicalNotebookTool } from "./notebook-cell-tools";
+import { harnessToolTimeoutMs } from "./tool-budget";
 import type { LocalDataRuntime } from "@/core/models";
 import { StudioValidationError } from "@/core/schemas";
 import { toProjectIsoDateTime } from "@/core/time/project-iso";
@@ -68,6 +71,7 @@ import {
   type HarnessVisualVerifier,
 } from "./visual-verifier";
 import { appendHarnessEvent as appendEventToTask, createHarnessTask, taskWithPendingChangeSet, type HarnessTaskClock } from "./task-state";
+import { NotebookDiagnosticSession } from "./notebook-diagnostics";
 import { selectHarnessSkills } from "./skill-registry";
 import type { HarnessMcpRuntime } from "./mcp/contracts";
 import {
@@ -193,6 +197,8 @@ export interface HarnessRuntimeOptions {
   excelExporter?: HarnessExcelExporter;
   notebookRunner?: import("./tool-registry").HarnessToolContext["notebookRunner"];
   pythonRuntimeInfo?: import("./tool-registry").HarnessToolContext["pythonRuntimeInfo"];
+  /** Server-owned Notebook feature policy; the browser cannot widen it. */
+  notebookCapabilities?: NotebookCapabilities;
   connectionInspector?: import("./tool-registry").HarnessToolContext["connectionInspector"];
   rawWorkbook?: HarnessRawWorkbook;
   mcpRuntime?: HarnessMcpRuntime;
@@ -202,7 +208,7 @@ export interface HarnessRuntimeOptions {
   allowFailureExplanation?: boolean;
   visualVerifier?: HarnessVisualVerifier;
   visualVerificationTimeoutMs?: number;
-  /** Synchronous authorization check run at the final boundary before every model request. */
+  /** Synchronous authorization check before every model request and failed-draft disclosure. */
   authorizeModelCall?: () => void;
 }
 
@@ -265,6 +271,9 @@ function semanticIntentInput(
   return {
     instruction: sanitizeHarnessText(request.instruction).slice(0, 1_000),
     hasNotebookContext: Boolean(request.notebookContext),
+    ...(request.notebookContext?.selectedCellIds?.length ? { notebookSelection: notebookContextSelectionMetadata(
+      request.notebookContext.document, request.notebookContext.selectedCellIds,
+    ) } : {}),
     ...(request.semanticModel ? { semanticModel: request.semanticModel } : {}),
     conversationBrief: conversationBrief(request),
     ...(request.conversationContext?.previousInstruction ? {
@@ -503,7 +512,7 @@ async function withPhaseTimeout<T>(
   const abortOuter = () => controller.abort(outerSignal.reason);
   if (outerSignal.aborted) abortOuter();
   else outerSignal.addEventListener("abort", abortOuter, { once: true });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(new DOMException(timeoutMessage, "TimeoutError")); }, timeoutMs);
   try {
     if (controller.signal.aborted) throw outerAbortError();
     return await Promise.race([
@@ -521,10 +530,16 @@ async function withPhaseTimeout<T>(
 export class HarnessRuntime {
   async run(rawRequest: unknown, options: HarnessRuntimeOptions): Promise<HarnessTaskSummary> {
     const trace: HarnessTraceEvent[] = [];
-    const task = await this.runTask(rawRequest, { ...options, onEvent: (event) => {
+    const notebookDiagnostics = new NotebookDiagnosticSession();
+    let authorizationRejected = false;
+    const authorize = () => {
+      try { options.authorizeModelCall?.(); } catch (error) { authorizationRejected = true; throw error; }
+    };
+    const task = await this.runTask(rawRequest, { ...options,
+      ...(options.authorizeModelCall ? { authorizeModelCall: authorize } : {}), onEvent: (event) => {
       trace.push(event);
       try { options.onEvent?.(event); } catch { /* A disconnected observer cannot change execution. */ }
-    } });
+    } }, notebookDiagnostics);
     if (task.state === "failed" || task.state === "cancelled") {
       if (!task.resultMessage || /^(任务失败|任务已取消)/u.test(task.resultMessage) || task.contextUsage?.limitReached) {
         task.resultMessage = failureResponse(task);
@@ -535,10 +550,17 @@ export class HarnessRuntime {
       type: "completed", taskState: task.state,
       message: task.state === "awaitingConfirmation" ? "预览已生成，等待用户确认；正式页面尚未修改。"
         : task.state === "completed" ? "任务已完成。" : task.state === "cancelled" ? "任务已取消。" : "任务未完成。" });
-    return { ...task, trace };
+    const diagnostics = !authorizationRejected && !options.signal?.aborted && (task.state === "failed" || task.state === "blocked")
+      ? notebookDiagnostics.snapshot((artifact) => {
+        authorize();
+        for (const sourceId of artifact.sourceDataSourceIds) {
+          if (!options.dataRuntime.rowsByDataSourceId[sourceId]) throw new Error("Notebook 数据授权已变化");
+        }
+      }) : undefined;
+    return { ...task, trace, ...(diagnostics ? { notebookDiagnostics: diagnostics } : {}) };
   }
 
-  private async runTask(rawRequest: unknown, options: HarnessRuntimeOptions): Promise<HarnessTaskSummary> {
+  private async runTask(rawRequest: unknown, options: HarnessRuntimeOptions, notebookDiagnostics: NotebookDiagnosticSession): Promise<HarnessTaskSummary> {
     const parsed = harnessRequestSchema.safeParse(rawRequest);
     if (!parsed.success) throw new HarnessRequestError("Harness 请求格式不正确，请检查指令、页面和配方上下文。");
     const request = parsed.data;
@@ -607,6 +629,7 @@ export class HarnessRuntime {
     };
     let modelDurationMs = 0;
     let toolDurationMs = 0;
+    let activeToolTimeoutMs = bounds.toolCallTimeoutMs;
     let verificationDurationMs = 0;
     const observations: HarnessObservation[] = [];
     const analysisPlanStore = new Map<string, import("./analysis-plan-contracts").HarnessAnalysisPlanArtifact>();
@@ -636,7 +659,7 @@ export class HarnessRuntime {
         remainingMs: Math.max(0, bounds.totalExecutionTimeoutMs - activeElapsedMs),
         totalBudgetMs: bounds.totalExecutionTimeoutMs,
         modelRequestTimeoutMs: bounds.modelRequestTimeoutMs,
-        toolCallTimeoutMs: bounds.toolCallTimeoutMs,
+        toolCallTimeoutMs: phase === "toolExecution" ? activeToolTimeoutMs : bounds.toolCallTimeoutMs,
         modelDurationMs: Math.max(0, Math.round(modelDurationMs)),
         toolDurationMs: Math.max(0, Math.round(toolDurationMs)),
         otherDurationMs: Math.max(0, Math.round(verificationDurationMs)),
@@ -983,7 +1006,7 @@ export class HarnessRuntime {
       if (modelClient.plan && withinModelLimit(task.counters.modelCallCount + 1, bounds.maxModelCalls) && remainingMs() > 0) {
         const fallbackPlan = createHarnessExecutionPlan(request, semanticIntent);
         const safeToolNames = fallbackPlan.steps.flatMap((step) => step.kind === "tool" && step.toolName ? [step.toolName] : []);
-        const plannerSelection = buildHarnessContextSelection(request, observations, 1, false, undefined, undefined, loadedSkills, failedAttempts, semanticIntent, inputInspectionEnabled);
+        const plannerSelection = buildHarnessContextSelection(request, observations, 1, false, undefined, undefined, loadedSkills, failedAttempts, semanticIntent, inputInspectionEnabled, options.notebookCapabilities);
         const availableTools = harnessToolCatalog({
           names: safeToolNames,
           editableNodes: plannerSelection.editableNodes,
@@ -991,6 +1014,7 @@ export class HarnessRuntime {
           request,
           semanticIntent,
           mcpTools: request.mcpTools,
+          notebookCapabilities: options.notebookCapabilities,
         }).map(({ name, description, mode }) => ({ name, description, mode }));
         const plannerInput: HarnessPlannerInput = {
           instruction: request.instruction,
@@ -1088,7 +1112,7 @@ export class HarnessRuntime {
         if (controller.signal.aborted) throw abortError(controller.signal);
         if (!withinModelLimit(task.counters.modelCallCount + 1, bounds.maxModelCalls)) throw new Error("Harness 已达到最大模型调用次数。");
         const iteration = task.counters.loopCount + 1;
-        let selection = buildHarnessContextSelection(request, observations, iteration, false, toolCorrection, recovery, loadedSkills, failedAttempts, semanticIntent, inputInspectionEnabled);
+        let selection = buildHarnessContextSelection(request, observations, iteration, false, toolCorrection, recovery, loadedSkills, failedAttempts, semanticIntent, inputInspectionEnabled, options.notebookCapabilities);
         selection = { ...selection, toolNames: orderHarnessToolsByPlan(executionPlan, selection.toolNames) };
         executionPlan = syncHarnessExecutionPlan(executionPlan, observations, selection.toolNames, failedAttempts, recovery);
         selection = bindExecutorPlan(selection, executionPlan, verification, modelCorrection, {
@@ -1113,7 +1137,7 @@ export class HarnessRuntime {
           wallClock.throwIfFault();
           return task;
         }
-        let tools = harnessToolCatalog({ names: executionPlan.allowedTools, editableNodes: selection.editableNodes, instruction: request.instruction, request, semanticIntent, mcpTools: request.mcpTools });
+        let tools = harnessToolCatalog({ names: executionPlan.allowedTools, editableNodes: selection.editableNodes, instruction: request.instruction, request, semanticIntent, mcpTools: request.mcpTools, analysisPlan: task.analysisPlanArtifact, notebookCapabilities: options.notebookCapabilities });
         let inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
         const previousInputChars = task.contextUsage?.totalInputChars ?? 0;
         const previousPromptTokens = task.contextUsage?.totalPromptTokens ?? task.usage?.promptTokens ?? 0;
@@ -1121,7 +1145,7 @@ export class HarnessRuntime {
           || !withinModelLimit(previousInputChars + inputChars, contextBudget.maxTotalInputChars)
           || !withinModelLimit(previousPromptTokens + estimatedPromptTokens(inputChars), contextBudget.maxTotalPromptTokens);
         if (needsCompaction()) {
-          selection = buildHarnessContextSelection(request, observations, iteration, true, toolCorrection, recovery, loadedSkills, failedAttempts, semanticIntent, inputInspectionEnabled);
+          selection = buildHarnessContextSelection(request, observations, iteration, true, toolCorrection, recovery, loadedSkills, failedAttempts, semanticIntent, inputInspectionEnabled, options.notebookCapabilities);
           selection = { ...selection, toolNames: orderHarnessToolsByPlan(executionPlan, selection.toolNames) };
           executionPlan = syncHarnessExecutionPlan(executionPlan, observations, selection.toolNames, failedAttempts, recovery);
           selection = bindExecutorPlan(selection, executionPlan, verification, modelCorrection, {
@@ -1130,7 +1154,7 @@ export class HarnessRuntime {
             mode: harnessVisualVerificationMode(request, semanticIntent),
           }, evidenceBus.modelContext(24, 1_000));
           task = { ...task, workingMemory: selection.workingMemory, executionPlan, evidence: evidenceBus.snapshot() };
-          tools = harnessToolCatalog({ names: executionPlan.allowedTools, editableNodes: selection.editableNodes, instruction: request.instruction, request, semanticIntent, mcpTools: request.mcpTools });
+          tools = harnessToolCatalog({ names: executionPlan.allowedTools, editableNodes: selection.editableNodes, instruction: request.instruction, request, semanticIntent, mcpTools: request.mcpTools, analysisPlan: task.analysisPlanArtifact, notebookCapabilities: options.notebookCapabilities });
           inputChars = estimateHarnessModelInputChars(selection.context, tools, iteration);
         }
         const failContextBudget = (limitReached: "singleRequestChars" | "taskInputChars" | "taskPromptTokens", message: string): never => {
@@ -1496,7 +1520,9 @@ export class HarnessRuntime {
             "请更换参数、改用替代工具，或补充缺失的外部条件",
           ]);
         }
-        const toolBudgetMs = phaseBudget("工具调用", bounds.toolCallTimeoutMs);
+        const toolTimeoutMs = harnessToolTimeoutMs(toolName, options.bounds?.toolCallTimeoutMs);
+        const toolBudgetMs = phaseBudget("工具调用", toolTimeoutMs);
+        activeToolTimeoutMs = toolBudgetMs;
         task = appendHarnessEvent(task, {
           type: "toolCall",
           state: "executingTool",
@@ -1522,18 +1548,20 @@ export class HarnessRuntime {
               ...(options.excelExporter ? { excelExporter: options.excelExporter } : {}),
               ...(options.notebookRunner ? { notebookRunner: options.notebookRunner } : {}),
               ...(options.pythonRuntimeInfo ? { pythonRuntimeInfo: options.pythonRuntimeInfo } : {}),
+              ...(options.notebookCapabilities ? { notebookCapabilities: options.notebookCapabilities } : {}),
               ...(options.connectionInspector ? { connectionInspector: options.connectionInspector } : {}),
               analysisPlanStore,
               notebookCellSession,
+              notebookDiagnostics,
               ...(options.rawWorkbook ? { rawWorkbook: options.rawWorkbook } : {}),
               ...(options.mcpRuntime ? { mcpRuntime: options.mcpRuntime } : {}),
               signal,
             }),
             toolBudgetMs,
             controller.signal,
-            toolBudgetMs < bounds.toolCallTimeoutMs
+            toolBudgetMs < toolTimeoutMs
               ? "Harness 总执行时间预算已在工具调用期间用尽。"
-              : `Harness 单次工具调用已超过 ${bounds.toolCallTimeoutMs} ms 限制。`,
+              : `Harness 单次工具调用已超过 ${toolTimeoutMs} ms 限制。`,
             () => abortError(controller.signal),
           );
         } catch (toolError) {

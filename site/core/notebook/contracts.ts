@@ -2,6 +2,8 @@ import { z } from "zod";
 import { MAX_NOTEBOOK_CELLS, notebookCellSchema } from "./definition";
 import { semanticModelSchema } from "@/core/semantic/contracts";
 import { catalogReferenceSchema } from "@/core/metadata/contracts";
+import { dataFieldSchema, dataTableSchema, type DataTable } from "@/core/datasets/table-contracts";
+import { MAX_NOTEBOOK_TEXT_OUTPUT_CHARS } from "./text-references";
 
 export const NOTEBOOK_LIMITS = { inputBytes: 16 * 1024 * 1024, outputBytes: 2 * 1024 * 1024,
   rows: 1_000, columns: 30, queryTimeoutMs: 8_000, runTimeoutMs: 30_000, cells: MAX_NOTEBOOK_CELLS } as const;
@@ -15,17 +17,11 @@ export const notebookDocumentSchema = z.object({
 export type NotebookDocument = z.infer<typeof notebookDocumentSchema>;
 export const notebookLayerSchema = z.record(z.string().min(1).max(120), notebookDocumentSchema)
   .refine((layer) => Object.keys(layer).length <= 30, "最多保存 30 个工作界面的 Notebook");
-export const notebookFieldSchema = z.object({
-  name: z.string().min(1).max(120), label: z.string().min(1).max(160),
-  type: z.enum(["string", "number", "date", "boolean"]),
-}).strict();
-const valueSchema = z.union([z.string().max(20_000), z.number().finite(), z.boolean(), z.null()]);
-export const notebookTableSchema = z.object({
-  fields: z.array(notebookFieldSchema).min(1).max(100),
-  rows: z.array(z.record(z.string(), valueSchema)).max(NOTEBOOK_LIMITS.rows),
-  truncated: z.boolean(),
-}).strict();
-export type NotebookTable = z.infer<typeof notebookTableSchema>;
+export { dataFieldSchema as notebookFieldSchema };
+export const notebookTableSchema = dataTableSchema.extend({
+  rows: dataTableSchema.shape.rows.max(NOTEBOOK_LIMITS.rows),
+});
+export type NotebookTable = DataTable;
 export const notebookResultReferenceSchema = z.object({
   resultId: z.string().max(240), runId: z.string().max(160), cellId: z.string().max(120),
   revision: z.number().int().nonnegative(),
@@ -40,12 +36,21 @@ export const notebookResultReferenceSchema = z.object({
   sourceFiles: z.array(z.object({ name: z.string().max(180), sha256: z.string().length(64) }).strict()).max(3).optional(),
 }).strict();
 export type NotebookResultReference = z.infer<typeof notebookResultReferenceSchema>;
+export const notebookCellTimingSchema = z.object({
+  preparationMs: z.number().int().nonnegative(),
+  executionMs: z.number().int().nonnegative(),
+  failurePhase: z.enum(["preparation", "execution"]).optional(),
+  termination: z.enum(["error", "cancelled", "timeout"]).optional(),
+}).strict();
+export type NotebookCellTiming = z.infer<typeof notebookCellTimingSchema>;
 export const notebookCellRunSchema = z.object({
   cellId: z.string().max(120), status: z.enum(["success", "failure", "blocked"]),
   durationMs: z.number().nonnegative(), error: z.string().max(1_000).optional(),
   table: notebookTableSchema.optional(), queryId: z.string().max(160).optional(),
+  text: z.string().max(MAX_NOTEBOOK_TEXT_OUTPUT_CHARS).optional(),
   resultRef: notebookResultReferenceSchema.optional(),
   stdout: z.string().max(2_000).optional(), stderr: z.string().max(2_000).optional(),
+  timing: notebookCellTimingSchema.optional(),
 }).strict();
 export type NotebookCellRun = z.infer<typeof notebookCellRunSchema>;
 export const notebookRunSchema = z.object({
@@ -63,7 +68,7 @@ export const notebookRunRequestSchema = z.object({
 }).strict();
 export const notebookSqlTableSchema = z.object({
   name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,119}$/u),
-  fields: z.array(notebookFieldSchema).min(1).max(100),
-  rows: z.array(z.record(z.string(), valueSchema)).max(50_000),
+  fields: dataTableSchema.shape.fields,
+  rows: dataTableSchema.shape.rows.max(50_000),
 }).strict();
 export type NotebookSqlTable = z.infer<typeof notebookSqlTableSchema>;

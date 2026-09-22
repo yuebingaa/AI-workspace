@@ -27,9 +27,19 @@ Agent 可调用 `getKernelPackagesInfo` 查询环境、`createPythonCell` 创建
 
 ## 安装和迁移
 
-在 `site` 目录执行 `npm run python:setup`，本机安装 Edge / Chrome / Chromium；可用 `NOTEBOOK_PYTHON_BROWSER` 指定浏览器路径。下载清单固定版本与摘要；完成安装后计算离线运行。`vendor/python` 为生成资源，不进入 Git，构建与发布会复制它；搬迁源码后需重新安装资源，搬迁完整产物仍需目标机有浏览器。
+在 `site` 目录执行 `npm run python:setup`，本机安装 Edge / Chrome / Chromium；可用 `NOTEBOOK_PYTHON_BROWSER` 指定浏览器路径。下载清单固定版本与摘要；完成安装后计算离线运行。`vendor/python` 为生成资源，不进入 Git，默认构建与发布会复制它；搬迁源码后需重新安装资源，搬迁完整产物仍需目标机有浏览器。
 
 当前固定 Pyodide 314.0.7 / CPython 3.14.2、pandas 3.0.2、NumPy 2.4.6、openpyxl 3.1.5；完整依赖见 `scripts/python-runtime-lock.json`。状态接口 `GET /api/notebook/python` 检查资源完整性和浏览器路径，不代表已完成计算；实际运行是进一步验证。不要直接在此沙箱中运行 `pip` 或 `uv pip` 安装依赖。
+
+## 不包含 Python 资源的部署
+
+在构建进程设置 `NOTEBOOK_PYTHON_ENABLED=false` 后运行 `npm run build`，允许源目录没有 `vendor/python`，输出也不携带这组资源。CLI 复制步骤不会读取源码 `.env`，因此只改 `.env` 不等于已经选择无资源构建；构建结束后恢复原进程环境。受管发布由私有运行配置优先于进程环境决定，并沿用原显式发布流程，本轮没有发布。目标已有 Python 资源时拒绝省略模式，避免旧资源残留；不会替用户删除它们。
+
+服务端在配置启用后轻量检查 `vendor/python/runtime-lock.json` 是否是可读取的普通文件。缺失时状态 API、Agent 工具目录与 Notebook 执行统一关闭 Python；旧源码与依赖按原规则保留，独立 SQL / 表格 / 图表可以继续运行。完整资源校验、浏览器与 SDK 检查仍由状态详情和会话准备负责；存在一个清单文件不代表运行已就绪，不能创建空清单绕过安装。
+
+恢复资源使用 `npm run python:setup`（源码环境）或替换为完整产物，不迁移 Notebook。若仍配置 `NOTEBOOK_PYTHON_ENABLED=false`，需按运行约定显式恢复配置；否则下次状态请求 / 运行就会重新检查，已打开的浏览器可刷新获取状态，不自动执行旧代码。本批保留 Python 类型、适配代码和截图共用的 Playwright，并未移除全部相关依赖。
+
+实际验证与未验证范围见 [M6 第九包记录](verification/hex-python-optional-runtime-2026-09-21.md)。
 
 ## 当前边界
 

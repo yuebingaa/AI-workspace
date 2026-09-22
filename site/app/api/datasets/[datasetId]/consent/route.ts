@@ -1,7 +1,7 @@
 import { datasetConsentRequestSchema } from "@/core/datasets";
 import {
   DatasetAiAccessPolicyConflictError,
-} from "@/core/datasets/server/dataset-repository";
+} from "@/core/datasets/repository";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { BoundedBodyError, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
 import { StudioValidationError } from "@/core/schemas";
@@ -18,6 +18,16 @@ const noStoreHeaders = {
 const datasetIdPattern = /^dataset_upload_[A-Za-z0-9_-]{16,160}$/u;
 const MAX_CONSENT_BODY_BYTES = 1_024;
 const CONSENT_BODY_TIMEOUT_MS = 15_000;
+
+// During this port migration, HMR may retain a repository instance whose methods
+// close over the old error constructor. Only map known, already-rejected business
+// conflicts; never reset that instance or return arbitrary legacy error text.
+function isLegacyPolicyConflict(error: unknown): error is Error {
+  return error instanceof Error && error.name === "DatasetAiAccessPolicyConflictError"
+    && error.constructor.name === "DatasetAiAccessPolicyConflictError"
+    && ["此数据集没有需要确认的敏感字段", "敏感字段处理方式已经确认，不能由重放请求改写",
+      "当前数据处理方式不能被重复请求改写"].includes(error.message);
+}
 
 export async function POST(request: Request) {
   const segments = new URL(request.url).pathname.split("/").filter(Boolean);
@@ -59,7 +69,7 @@ export async function POST(request: Request) {
     return Response.json({ dataset }, { headers: noStoreHeaders });
   } catch (error) {
     if (error instanceof ProjectError) return projectErrorResponse(error);
-    if (error instanceof DatasetAiAccessPolicyConflictError) {
+    if (error instanceof DatasetAiAccessPolicyConflictError || isLegacyPolicyConflict(error)) {
       return Response.json({ error: { message: error.message } }, { status: 409, headers: noStoreHeaders });
     }
     if (error instanceof StudioValidationError) {

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { notebookParameterSchema } from "@/core/notebook/parameter";
+import { notebookTextReferencesSchema } from "@/core/notebook/text-references";
 
 export const MAX_HARNESS_ANALYSIS_STEPS = 30;
 
@@ -10,6 +12,15 @@ const noDependenciesSchema = z.array(identifierSchema).max(0);
 const oneDependencySchema = z.array(identifierSchema).length(1);
 const dependenciesSchema = z.array(identifierSchema).min(1).max(10)
   .refine((items) => new Set(items).size === items.length, "依赖步骤不能重复");
+
+const parameterStepSchema = z.object({
+  id: identifierSchema,
+  kind: z.literal("parameter"),
+  title: titleSchema,
+  objective: objectiveSchema,
+  dependsOn: noDependenciesSchema,
+  parameter: notebookParameterSchema,
+}).strict();
 
 const dataStepSchema = z.object({
   id: identifierSchema,
@@ -84,11 +95,15 @@ const textStepSchema = z.object({
   kind: z.literal("text"),
   title: titleSchema,
   objective: objectiveSchema,
-  dependsOn: noDependenciesSchema,
+  dependsOn: z.array(identifierSchema).max(10),
   narrativeGoal: z.string().trim().min(1).max(800),
-}).strict();
+  references: notebookTextReferencesSchema.optional(),
+}).strict().refine((step) => JSON.stringify(step.dependsOn) === JSON.stringify(
+  [...new Set((step.references ?? []).map((reference) => reference.cellId))],
+), "文本步骤的依赖必须与引用单元一致；静态文本没有依赖");
 
 export const harnessAnalysisStepSchema = z.discriminatedUnion("kind", [
+  parameterStepSchema,
   dataStepSchema,
   semanticQueryStepSchema,
   sqlStepSchema,

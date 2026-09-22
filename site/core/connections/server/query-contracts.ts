@@ -1,8 +1,8 @@
 import type { ConnectionConfig } from "../configuration";
 import type { ConnectionSchema } from "../contracts";
-import { NOTEBOOK_LIMITS, type NotebookTable } from "@/core/notebook/contracts";
+import type { DataTable } from "@/core/datasets/table-contracts";
 
-export const CONNECTION_QUERY_LIMITS = { rows: NOTEBOOK_LIMITS.rows, timeoutMs: 12_000, maxConcurrent: 2 } as const;
+export const CONNECTION_QUERY_LIMITS = { rows: 1_000, outputBytes: 2 * 1024 * 1024, timeoutMs: 12_000, maxConcurrent: 2 } as const;
 
 /** Only safe, deliberately authored messages may cross the query boundary. */
 export class ConnectionQueryError extends Error {}
@@ -18,15 +18,17 @@ export type ConnectionSchemaInput = Omit<ConnectionQueryInput, "sql">;
 
 /** A backend bound to one validated configuration; dialect and cancellation stay here. */
 export interface ConnectionDriver {
-  execute(sql: string, signal: AbortSignal): Promise<NotebookTable>;
+  execute(sql: string, signal: AbortSignal): Promise<DataTable>;
   schemaSql(): string;
 }
 
 export interface ConnectionQueryDependencies {
   resolveConnection(id: string, project: string | null, forAi: boolean): ConnectionConfig;
   driverFor(config: ConnectionConfig): ConnectionDriver;
+  /** Opaque identity only; the application never receives credentials. */
+  credentialIdentity?(config: ConnectionConfig): string;
 }
 export interface ConnectionQueryService {
-  executeConnectionSql(input: ConnectionQueryInput): Promise<NotebookTable>;
+  executeConnectionSql(input: ConnectionQueryInput): Promise<DataTable>;
   inspectConnectionSchema(input: ConnectionSchemaInput): Promise<ConnectionSchema>;
 }

@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { notebookCellSchema, pythonCellSchema, type NotebookArtifact } from "@/core/notebook/definition";
-import { notebookDocumentSchema, notebookRunSchema, type NotebookDocument, type NotebookRun } from "@/core/notebook/contracts";
+import { notebookDocumentSchema, type NotebookDocument, type NotebookRun } from "@/core/notebook/contracts";
 import { cellDependencies } from "@/core/notebook/graph";
+import { analyzeNotebookOutputRenames } from "@/core/notebook/output-renames";
+import { captureNotebookRunExpectation, parseNotebookRunReceipt } from "@/core/notebook/run-receipt";
 import { StudioValidationError } from "@/core/schemas";
 import type { HarnessRequest, HarnessToolExecutionResult, HarnessToolName } from "./contracts";
 import type { HarnessToolContext } from "./tool-registry";
 import { createHarnessNotebookArtifact } from "./notebook";
+import { notebookTextResults } from "./notebook-text-results";
 import { cellSearchSchema, searchNotebookCellSession } from "./notebook-cell-search";
 export { cellSearchSchema } from "./notebook-cell-search";
 
@@ -19,7 +22,13 @@ export interface NotebookCellSession {
 }
 
 export function usesNotebookCellTools(request: HarnessRequest): boolean {
-  return Boolean(request.notebookContext) && /单元|\bcell(?:s|search)?\b|变量|血缘|上游|下游|依赖关系|python|pandas|numpy/iu.test(request.instruction);
+  return Boolean(request.notebookContext) && (Boolean(request.notebookContext?.selectedCellIds?.length)
+    || /单元|\bcell(?:s|search)?\b|参数|\bparameters?\b|变量|血缘|上游|下游|依赖关系|python|pandas|numpy/iu.test(request.instruction));
+}
+
+export function wantsNotebookParameters(request: HarnessRequest): boolean {
+  return Boolean(request.notebookContext && (/参数|\bparameters?\b/iu.test(request.instruction)
+    || request.notebookContext.document.cells.some((cell) => cell.kind === "parameter")));
 }
 
 export function wantsNotebookPython(request: HarnessRequest): boolean {
@@ -34,7 +43,9 @@ export function isNotebookInspection(request: HarnessRequest): boolean {
   if (!usesNotebookCellTools(request)) return false;
   const instruction = request.instruction.replace(/(?:不要|无需|不必|禁止|不)(?:再|去)?(?:修改|编辑|创建|新增|删除|运行|执行)[^，。；]*/gu, "")
     .replace(/(?:运行|执行)(?:结果|状态|回执|记录)/gu, "结果");
-  return /查找|搜索|检索|查看|读取|解释|来源|血缘|上游|下游|依赖|引用|谁.*(?:生成|使用)|哪里.*定义|\b(?:find|search|inspect|read|explain|trace)\b/iu.test(instruction)
+  const readsSelection = Boolean(request.notebookContext?.selectedCellIds?.length)
+    && /看看|看一下|说明(?:一下|这些|这个|所选|含义)|含义|是什么|为什么|\bdescribe\b/iu.test(instruction);
+  return (readsSelection || /查找|搜索|检索|查看|读取|解释|来源|血缘|上游|下游|依赖|引用|谁.*(?:生成|使用)|哪里.*定义|\b(?:find|search|inspect|read|explain|trace)\b/iu.test(instruction))
     && !/新增|创建|添加|修改|替换|删除|移除|编辑|重跑|运行|执行|生成(?:.*单元|.*图表)|修复|\b(?:create|edit|add|delete|remove|run|execute|update|modify)\b/iu.test(instruction);
 }
 
@@ -96,39 +107,50 @@ export function editNotebookCells(args: z.infer<typeof editNotebookCellsSchema>,
   const position = anchor === null ? 0 : anchor === undefined ? cells.length : cells.findIndex((cell) => cell.id === anchor) + 1;
   cells.splice(position, 0, ...additions);
   const next = notebookDocumentSchema.parse({ ...state.document, cells });
-  artifactFor(next, context); // Validate the entire DAG and source access before committing any edit.
+  const artifact = artifactFor(next, context); // Validate the entire DAG and source access before committing any edit.
+  const outputRenames = analyzeNotebookOutputRenames(state.document.cells, next.cells);
   context.signal?.throwIfAborted();
   state.document = next;
   state.editVersion += 1;
   if (state.runVersion !== undefined) state.lastRunVersion = state.runVersion;
   state.run = undefined;
   state.runVersion = undefined;
+  context.notebookDiagnostics?.begin(artifact, state.editVersion);
   return { summary: `已更新本次任务草稿：新增 ${additions.length}、修改 ${args.cells.length - additions.length}、移除 ${removed.size} 个单元；尚未运行或保存。`,
     data: { editVersion: state.editVersion, status: "edited", changedCellIds: [...upserts.keys()],
       removedCellIds: [...removed], cellCount: cells.length,
-      cells: indexOf(next).filter((cell) => upserts.has(cell.id)), next: "runNotebookCells" } };
+      cells: indexOf(next).filter((cell) => upserts.has(cell.id)),
+      ...(outputRenames.length ? { outputRenames,
+        renameNotice: "结构化引用按单元 ID 保留，未自动改写 SQL / Python；请检查 codeChecks 中的输入引用及 Python 输出赋值，再真实试运行。影响检查不是代码正确性的证明。" } : {}),
+      next: "runNotebookCells" } };
 }
 
 export async function runNotebookCells(args: z.infer<typeof notebookSessionVersionSchema>, context: HarnessToolContext): Promise<HarnessToolExecutionResult> {
   const state = session(context, args.editVersion);
   if (!context.notebookRunner) fail("Notebook 执行器未配置，无法试运行单元。");
   const artifact = artifactFor(state.document, context);
+  const expected = captureNotebookRunExpectation({ name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells }, "ai");
+  const diagnosticGeneration = context.notebookDiagnostics?.begin(artifact, state.editVersion);
   state.run = undefined;
   state.runVersion = undefined;
-  const run = notebookRunSchema.parse(await context.notebookRunner(artifact, context));
+  const rawRun = await context.notebookRunner(structuredClone(artifact), context);
   session(context, args.editVersion); // Ignore cancelled or superseded late results.
-  const expectedIds = artifact.cells.map((cell) => cell.id);
-  if (run.revision !== artifact.baseRevision || run.cells.length !== expectedIds.length
-    || run.cells.some((cell, i) => cell.cellId !== expectedIds[i])
-    || (run.status === "success" && run.cells.some((cell) => cell.status !== "success"))) fail("执行回执与本次草稿不一致，不能作为验证证据。");
+  let run: NotebookRun;
+  try { run = parseNotebookRunReceipt(rawRun, expected); }
+  catch { fail("执行回执与本次草稿不一致，不能作为验证证据。"); }
   state.run = run;
   state.runVersion = state.editVersion;
   state.lastRunVersion = state.editVersion;
+  if (diagnosticGeneration !== undefined) context.notebookDiagnostics?.recordRun(diagnosticGeneration, run);
   return { summary: run.status === "success" ? `${run.cells.length} 个单元试运行通过，可提交修改对照。`
     : "单元试运行未通过。请根据具体错误修改草稿后重跑，当前没有可采用的结果。",
     data: { editVersion: state.editVersion, runId: run.runId, status: run.status,
+      ...notebookTextResults(run),
       notice: run.notice, completedCellIds: run.cells.filter((cell) => cell.status === "success").map((cell) => cell.cellId),
-      errors: run.cells.filter((cell) => cell.status !== "success").map((cell) => ({ cellId: cell.cellId, status: cell.status, error: cell.error })),
+      errors: run.cells.filter((cell) => cell.status !== "success").map((cell) => ({ cellId: cell.cellId, status: cell.status, error: cell.error,
+        ...(cell.timing ? { timing: cell.timing } : {}) })),
+      ...(run.cells.some((cell) => cell.timing) ? { timings: run.cells.filter((cell) => cell.timing)
+        .map((cell) => ({ cellId: cell.cellId, ...cell.timing })) } : {}),
       results: run.cells.filter((cell) => cell.table && artifact.cells.find((item) => item.id === cell.cellId)?.kind !== "data").slice(-3)
         .map((cell) => ({ cellId: cell.cellId, resultRef: cell.resultRef, fields: cell.table!.fields,
           rows: cell.table!.rows.slice(0, 5), returnedRows: cell.table!.rows.length, truncated: cell.table!.truncated })),
@@ -140,9 +162,13 @@ export function submitNotebookDraft(args: z.infer<typeof notebookSessionVersionS
   if (!state.editVersion) fail("尚未修改任何单元。");
   if (state.runVersion !== state.editVersion || state.run?.status !== "success") fail("当前草稿尚未完整试运行通过，请先修正并运行单元。");
   const artifact = artifactFor(state.document, context);
-  artifact.executionEvidence = { runId: state.run.runId, status: "success",
-    completedCellIds: state.run.cells.map((cell) => cell.cellId),
-    summary: `${state.run.cells.length} 个单元已试运行；图表还需在 Notebook 中查看渲染结果。` };
+  const expected = captureNotebookRunExpectation({ name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells }, "ai");
+  let run: NotebookRun;
+  try { run = parseNotebookRunReceipt(state.run, expected); }
+  catch { fail("执行回执与本次草稿不一致，不能作为验证证据。"); }
+  artifact.executionEvidence = { runId: run.runId, status: "success",
+    completedCellIds: run.cells.map((cell) => cell.cellId),
+    summary: `${run.cells.length} 个单元已试运行；图表还需在 Notebook 中查看渲染结果。` };
   return { summary: `“${artifact.name}”已生成待确认的单元修改对照。`,
     data: { notebookArtifactId: artifact.id, editVersion: state.editVersion, name: artifact.name,
       status: "draft", cellCount: artifact.cells.length, execution: artifact.executionEvidence },

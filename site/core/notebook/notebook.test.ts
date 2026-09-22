@@ -19,11 +19,13 @@ function fixture() {
   return { source, rows, model, product, document, sources: [{ source, rows }] };
 }
 describe("Notebook dependency and adoption", () => {
-  it("loads legacy empty documents, rejects duplicate/cyclic/forward dependencies", () => {
+  it("loads legacy empty documents, rejects duplicate IDs and separates movement from execution order", () => {
     expect(notebookDocumentSchema.parse({ name: "new", revision: 0, cells: [] }).cells).toEqual([]);
     const { document } = fixture();
     expect(() => validateNotebook({ ...document, cells: [...document.cells, document.cells[0]] })).toThrow("重复");
-    expect(() => moveNotebookCell(document, "query", -1)).toThrow("排在它之前");
+    const moved = moveNotebookCell(document, "query", -1);
+    expect(moved.cells.map((cell) => cell.id)).toEqual(["query", "data", "chart", "text"]);
+    expect(cellsToRun(moved, "chart").map((cell) => cell.id)).toEqual(["data", "query", "chart"]);
     expect(cellsToRun(document, "chart").map((cell) => cell.id)).toEqual(["data", "query", "chart"]);
     expect([...affectedCells(document.cells, ["data"])]).toEqual(["data", "query", "chart"]);
   });

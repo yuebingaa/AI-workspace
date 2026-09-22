@@ -95,11 +95,18 @@ describe("Harness Notebook 草稿", () => {
     ]);
   });
 
-  it("拒绝前向引用、未知字段和错误的语义模型版本", () => {
+  it("支持前向展示但拒绝未知字段和错误的语义模型版本", () => {
     const input = fixture();
     const options = { request: input.request, allowedDataSourceIds: [input.source.id], now: input.context.now, id: input.context.id };
     const forwardReference: HarnessNotebookDraft = { ...input.draft, cells: [input.draft.cells[2], ...input.draft.cells.slice(0, 2)] };
-    expect(() => createHarnessNotebookArtifact(forwardReference, options)).toThrow("排在它之前");
+    const artifact = createHarnessNotebookArtifact(forwardReference, options);
+    expect(artifact.cells.map((cell) => cell.id)).toEqual(["sales_chart", "sales_data", "sales_metrics"]);
+    expect(artifact.executionOrder).toEqual(["sales_data", "sales_metrics", "sales_chart"]);
+    expect(artifact.lineage).toEqual([
+      { cellId: "sales_chart", dependsOn: ["sales_metrics"] },
+      { cellId: "sales_data", dependsOn: [] },
+      { cellId: "sales_metrics", dependsOn: ["sales_data"] },
+    ]);
 
     const unknownField = structuredClone(input.draft);
     const chart = unknownField.cells.find((cell) => cell.kind === "chart")!;
@@ -110,6 +117,24 @@ describe("Harness Notebook 草稿", () => {
     const semantic = staleModel.cells.find((cell) => cell.kind === "semanticQuery")!;
     if (semantic.kind === "semanticQuery") semantic.modelVersion += 1;
     expect(() => createHarnessNotebookArtifact(staleModel, options)).toThrow("本次选中的语义模型及版本");
+  });
+
+  it("乱序草稿仍校验图完整性、源授权和语义字段，不绕过原规则", () => {
+    const input = fixture();
+    const options = { request: input.request, allowedDataSourceIds: [input.source.id], now: input.context.now, id: input.context.id };
+    const draft: HarnessNotebookDraft = { ...input.draft, cells: [...input.draft.cells].reverse() };
+    expect(() => createHarnessNotebookArtifact(draft, { ...options, allowedDataSourceIds: [] })).toThrow("只能使用当前工作界面");
+    const missing = structuredClone(draft); missing.cells = missing.cells.filter((cell) => cell.kind !== "data");
+    expect(() => createHarnessNotebookArtifact(missing, options)).toThrow("引用的依赖不存在：sales_data");
+    const cyclic: HarnessNotebookDraft = { name: "拒绝循环", cells: [
+      { id: "a", kind: "sql", title: "甲", inputCellIds: ["b"], outputName: "first", sql: "SELECT 1" },
+      { id: "b", kind: "sql", title: "乙", inputCellIds: ["a"], outputName: "second", sql: "SELECT 1" },
+    ] };
+    expect(() => createHarnessNotebookArtifact(cyclic, options)).toThrow("循环依赖");
+    const invalid = structuredClone(draft);
+    const chart = invalid.cells.find((cell) => cell.kind === "chart")!;
+    if (chart.kind === "chart") chart.valueFields = ["missing_field"];
+    expect(() => createHarnessNotebookArtifact(invalid, options)).toThrow("上游不存在的字段");
   });
 
   it("由独立工具返回草稿，不修改正式 AppSpec", async () => {

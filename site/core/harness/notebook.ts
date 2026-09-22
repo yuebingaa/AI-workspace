@@ -10,6 +10,7 @@ import { StudioValidationError } from "@/core/schemas/errors";
 import { normalizeNotebookSql } from "@/core/notebook/sql";
 import type { HarnessAnalysisPlanArtifact } from "./analysis-plan-contracts";
 import { assertNotebookMatchesAnalysisPlan } from "./analysis-planner";
+import { cellDependencies, cellsToRun } from "@/core/notebook/graph";
 
 interface NotebookDataOutput {
   fields: Set<string> | null;
@@ -36,7 +37,7 @@ function requireUpstreamOutput(
   const output = outputs.get(cell.inputCellId);
   if (!output) {
     throw new StudioValidationError("Notebook 草稿校验失败", [
-      `单元“${cell.title}”必须引用排在它之前、且能返回表格数据的单元：${cell.inputCellId}`,
+      `单元“${cell.title}”必须引用能返回表格数据的单元：${cell.inputCellId}`,
     ]);
   }
   return output;
@@ -74,6 +75,12 @@ export function createHarnessNotebookArtifact(
   const duplicateOutput = duplicate(outputNames);
   if (duplicateOutput) throw new StudioValidationError("Notebook 草稿校验失败", [`输出变量名不能重复：${duplicateOutput}`]);
 
+  let executionCells: HarnessNotebookCell[];
+  try { executionCells = cellsToRun({ name: draft.name, revision: 0, cells: draft.cells }); }
+  catch (error) {
+    throw new StudioValidationError("Notebook 草稿校验失败", [error instanceof Error ? error.message : "单元依赖无效"]);
+  }
+
   const allowed = new Set(options.allowedDataSourceIds);
   const sources = new Map(options.request.appSpec.dataSources.map((source) => [source.id, source]));
   const outputs = new Map<string, NotebookDataOutput>();
@@ -81,7 +88,7 @@ export function createHarnessNotebookArtifact(
   const usedSourceIds = new Set<string>();
   const usedConnectionIds = new Set<string>();
 
-  for (const cell of draft.cells) {
+  for (const cell of executionCells) {
     if (cell.kind === "warehouseSql") {
       if (!options.request.notebookContext?.connections?.some((connection) => connection.id === cell.connectionId && connection.allowAi)) {
         throw new StudioValidationError("Notebook 草稿校验失败", ["数据库连接未授权给当前 Agent：" + cell.connectionId]);
@@ -105,14 +112,25 @@ export function createHarnessNotebookArtifact(
       continue;
     }
 
-    if (cell.kind === "text") {
+    if (cell.kind === "parameter") {
+      outputs.set(cell.id, { fields: new Set(["value"]), sourceDataSourceId: "" });
       lineage.push({ cellId: cell.id, dependsOn: [] });
+      continue;
+    }
+
+    if (cell.kind === "text") {
+      for (const reference of cell.references ?? []) {
+        const upstream = outputs.get(reference.cellId);
+        if (!upstream) throw new StudioValidationError("Notebook 草稿校验失败", ["文本引用必须来自有效表格输出。"]);
+        requireFields(cell.title, upstream.fields, [reference.field]);
+      }
+      lineage.push({ cellId: cell.id, dependsOn: cellDependencies(cell) });
       continue;
     }
 
     if (cell.kind === "sql" || cell.kind === "python") {
       if (cell.kind === "sql") normalizeNotebookSql(cell.sql);
-      for (const id of cell.inputCellIds) if (!outputs.has(id)) throw new StudioValidationError("Notebook 草稿校验失败", ["SQL 必须引用排在它之前的表格输出：" + id]);
+      for (const id of cell.inputCellIds) if (!outputs.has(id)) throw new StudioValidationError("Notebook 草稿校验失败", ["计算单元必须引用有效的表格输出：" + id]);
       outputs.set(cell.id, { fields: null, sourceDataSourceId: "" });
       lineage.push({ cellId: cell.id, dependsOn: cell.inputCellIds });
       continue;
@@ -156,7 +174,7 @@ export function createHarnessNotebookArtifact(
     requireFields(cell.title, upstream.fields, [cell.categoryField, ...cell.valueFields]);
   }
 
-  if (!usedSourceIds.size && !usedConnectionIds.size && !draft.cells.some((cell) => cell.kind === "python")) {
+  if (!usedSourceIds.size && !usedConnectionIds.size && !draft.cells.some((cell) => cell.kind === "python" || cell.kind === "parameter")) {
     throw new StudioValidationError("Notebook 草稿校验失败", ["Notebook 至少需要一个当前工作界面的 Data 单元。"]);
   }
 
@@ -166,8 +184,8 @@ export function createHarnessNotebookArtifact(
     status: "draft",
     name: draft.name,
     cells: draft.cells,
-    executionOrder: ids,
-    lineage,
+    executionOrder: executionCells.map((cell) => cell.id),
+    lineage: ids.map((id) => lineage.find((entry) => entry.cellId === id)!),
     sourceDataSourceIds: [...usedSourceIds],
     ...(usedConnectionIds.size ? { connectionIds: [...usedConnectionIds] } : {}),
     createdAt: new Date(options.now()).toISOString(),

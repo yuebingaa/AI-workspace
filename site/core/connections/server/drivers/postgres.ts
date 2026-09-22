@@ -1,8 +1,8 @@
 import { Client, type QueryArrayConfig } from "pg";
 import type { ConnectionConfig } from "../../configuration";
-import { NOTEBOOK_LIMITS } from "@/core/notebook/contracts";
 import { CONNECTION_QUERY_LIMITS, ConnectionQueryError, type ConnectionDriver } from "../query-contracts";
 import { tableFromText } from "../result-table";
+import { resolveConnectionCredential } from "../local-config";
 
 const LIMIT = CONNECTION_QUERY_LIMITS.rows;
 const TIMEOUT = CONNECTION_QUERY_LIMITS.timeoutMs;
@@ -22,7 +22,7 @@ export class PostgresDriver implements ConnectionDriver {
 
   async execute(sql: string, signal: AbortSignal) {
     const config = this.config;
-    const password = process.env[config.passwordEnv];
+    const password = resolveConnectionCredential(config);
     if (!password) throw new ConnectionQueryError("连接的服务端密码尚未配置");
     const client = new Client({ host: config.host, port: config.port, database: config.database, user: config.user, password,
       ssl: config.ssl ? { rejectUnauthorized: true } : false, connectionTimeoutMillis: 5_000,
@@ -42,10 +42,14 @@ export class PostgresDriver implements ConnectionDriver {
       const result = await new Promise<{ fields: Array<{ name: string; dataTypeID: number }> }>((resolve, reject) => {
         const queryConfig: QueryArrayConfig = { text: `SELECT * FROM (\n${sql}\n) AS agentcanvas_result LIMIT ${LIMIT + 1}`,
           rowMode: "array", types: { getTypeParser: () => (value: string) => value } };
-        const query = new Query(queryConfig);
+        // pg's Client query_timeout wraps Query.callback even for a streaming
+        // Query. Without one it throws after success (and on timeout). Errors
+        // use this callback instead of the error event when it is present.
+        const streamedConfig = { ...queryConfig, callback: (error: Error | null) => { if (error) reject(error); } };
+        const query = new Query(streamedConfig);
         query.on("row", (row: unknown[]) => {
           bytes += Buffer.byteLength(JSON.stringify(row));
-          if (bytes > NOTEBOOK_LIMITS.outputBytes) { reject(new ConnectionQueryError("数据库结果超过 2 MiB")); stop(); return; }
+          if (bytes > CONNECTION_QUERY_LIMITS.outputBytes) { reject(new ConnectionQueryError("数据库结果超过 2 MiB")); stop(); return; }
           raw.push(row);
         });
         query.on("error", reject); query.on("end", resolve);

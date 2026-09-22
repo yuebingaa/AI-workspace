@@ -13,6 +13,8 @@ export interface ChangeSetPreview {
   appSpec: AppSpec;
   changeSetId: string;
   operationIds: string[];
+  /** Window-only confirmation baseline; never part of persisted AppSpec/history. */
+  confirmation?: { baseAppSpec: string; changeSet: string };
 }
 
 export interface ChangeSetHistoryEntry {
@@ -361,6 +363,10 @@ export function previewChangeSet(
       appSpec,
       changeSetId: changeSet.id,
       operationIds: changeSet.operations.map((operation) => operation.id),
+      confirmation: {
+        baseAppSpec: JSON.stringify(parseAppSpec(state.present)),
+        changeSet: JSON.stringify(parseChangeSet(changeSet)),
+      },
     },
   };
 }

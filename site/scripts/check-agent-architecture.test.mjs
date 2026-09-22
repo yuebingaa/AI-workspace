@@ -10,7 +10,7 @@ test("architecture guard detects drift and ignores tests and line ending changes
   const temporaryRoot = resolve(tmpdir());
   const fixture = await mkdtemp(join(temporaryRoot, "agent-architecture-check-"));
   try {
-    for (const scope of ["scripts", "docs/architecture", "core/harness", "core/ai/server", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/visualization-lab", "app/api/ai/visualization-lab"]) {
+    for (const scope of ["scripts", "docs/architecture", "core/harness", "core/ai/server", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/sql", "core/changesets", "core/visualization-lab", "app/api/ai/visualization-lab", "core/agent-engines", "app/api/settings/agent-engine", "runtime/dsh"]) {
       await mkdir(join(fixture, scope), { recursive: true });
     }
     const script = join(fixture, "scripts/check-agent-architecture.mjs");
@@ -19,9 +19,13 @@ test("architecture guard detects drift and ignores tests and line ending changes
     await writeFile(document, `# Architecture\n<!-- agent-architecture-source-sha256: ${"0".repeat(64)} -->\n`);
     const source = join(fixture, "core/harness/runtime.ts");
     await writeFile(source, "export const version = 1;\n");
-    for (const name of ["python-runtime-lock.json", "setup-python-runtime.mjs", "copy-notebook-runtime.mjs"]) {
+    await mkdir(join(fixture, "scripts/runtime"), { recursive: true });
+    for (const name of ["python-runtime-lock.json", "setup-python-runtime.mjs", "copy-notebook-runtime.mjs", "runtime/site-runtime.mjs", "setup-dsh-runtime.mjs"]) {
       await writeFile(join(fixture, "scripts", name), "initial runtime asset contract\n");
     }
+    const dshFiles = ["driver.mjs", "driver.d.mts", "controlled-plugin.mjs", "wire-policy.mjs", "policy.mjs", "policy.d.mts", "installation.mjs",
+      "tool-diagnostics.mjs", "tool-diagnostics.d.mts", "package.json", "package-lock.json"];
+    for (const name of dshFiles) await writeFile(join(fixture, "runtime/dsh", name), "initial DSH runtime contract\n");
     const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8", windowsHide: true });
     assert.equal(run().status, 1);
     assert.equal(run("--sync").status, 0);
@@ -38,8 +42,40 @@ test("architecture guard detects drift and ignores tests and line ending changes
     await writeFile(join(fixture, "core/metadata/catalog-service.ts"), "export const catalogVersion = 1;\n");
     assert.equal(run().status, 1);
     assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "core/sql/read-only-query.ts"), "export const policyVersion = 1;\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "core/sql/read-only-query.test.ts"), "test-only change");
+    assert.equal(run().status, 0);
+    await writeFile(join(fixture, "core/sql/read-only-query.ts"), "export const policyVersion = 2;\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
     await writeFile(join(fixture, "scripts/python-runtime-lock.json"), "changed runtime asset contract\n");
     assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "scripts/runtime/site-runtime.mjs"), "changed release capability composition\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "core/changesets/confirmation.ts"), "export const confirmationVersion = 1;\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    await writeFile(join(fixture, "core/changesets/confirmation.test.ts"), "test-only confirmation change");
+    assert.equal(run().status, 0);
+    await writeFile(join(fixture, "core/changesets/confirmation.ts"), "export const confirmationVersion = 2;\n");
+    assert.equal(run().status, 1);
+    assert.equal(run("--sync").status, 0);
+    for (const source of ["core/agent-engines/contracts.ts", "app/api/settings/agent-engine/route.ts", "scripts/setup-dsh-runtime.mjs",
+      ...dshFiles.map((name) => `runtime/dsh/${name}`)]) {
+      await writeFile(join(fixture, source), "changed DSH source contract\n");
+      assert.equal(run().status, 1, `DSH source drift must fail: ${source}`);
+      assert.equal(run("--sync").status, 0);
+      assert.equal(run().status, 0);
+    }
+    await mkdir(join(fixture, "runtime/dsh/node_modules/vendor"), { recursive: true });
+    await writeFile(join(fixture, "runtime/dsh/node_modules/vendor/index.ts"), "untracked dependency source\n");
+    await writeFile(join(fixture, "runtime/dsh/driver.test.mjs"), "test-only DSH source\n");
+    await writeFile(join(fixture, "core/agent-engines/driver.test.ts"), "test-only engine source\n");
+    assert.equal(run().status, 0, "DSH installs and tests are outside the architectural source fingerprint");
     await writeFile(document, "# Missing fingerprint\n");
     assert.equal(run("--sync").status, 1);
   } finally {

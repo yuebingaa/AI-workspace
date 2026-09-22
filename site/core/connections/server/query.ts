@@ -1,10 +1,12 @@
 import { resolveConnection } from "./config";
+import { createHash } from "node:crypto";
+import { resolveConnectionCredential } from "./local-config";
 import { createConnectionQueryService } from "./query-service";
 import { PostgresDriver } from "./drivers/postgres";
 import { DatabricksDriver } from "./drivers/databricks";
 import { createConnectionCatalog } from "./catalog";
 import type { ConnectionQueryInput, ConnectionSchemaInput } from "./query-contracts";
-import type { NotebookTable } from "@/core/notebook/contracts";
+import type { DataTable } from "@/core/datasets/table-contracts";
 import type { CatalogReference } from "@/core/metadata/contracts";
 import type { ConnectionSchema } from "../contracts";
 
@@ -12,11 +14,12 @@ import type { ConnectionSchema } from "../contracts";
 const service = createConnectionQueryService({
   resolveConnection,
   driverFor: (config) => config.kind === "postgresql" ? new PostgresDriver(config) : new DatabricksDriver(config),
+  credentialIdentity: (config) => createHash("sha256").update(resolveConnectionCredential(config) ?? "").digest("hex"),
 });
 
 const catalog = createConnectionCatalog(service.inspectConnectionSchema);
 
-export async function executeConnectionSql(input: ConnectionQueryInput): Promise<NotebookTable & { catalogRef?: CatalogReference }> {
+export async function executeConnectionSql(input: ConnectionQueryInput): Promise<DataTable & { catalogRef?: CatalogReference }> {
   // This records discovery context only; it is not a claim that SQL dependencies were parsed or source data was versioned.
   const snapshot = catalog.read(input);
   const table = await service.executeConnectionSql(input);

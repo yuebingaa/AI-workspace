@@ -76,6 +76,7 @@ function BarColumns({ labels, values, domain, showValues, palette }: Pick<BarCha
   const verticalLabels = prefersVerticalLabels(labels);
   const slotWidth = adaptiveBarSlotWidth(values.length);
   const plotWidth = Math.max(520, values.length * slotWidth);
+  const horizontalInset = 3;
   const chartHeight = verticalLabels ? 168 : 158;
   const data = labels.map((label, index): ChartDatum => ({ label, value: values[index] ?? 0 }));
   return (
@@ -83,14 +84,14 @@ function BarColumns({ labels, values, domain, showValues, palette }: Pick<BarCha
       <div
         className={`recharts-bar-plot${values.length >= 9 ? " dense" : ""}`}
         data-recharts-engine="true"
-        style={{ minWidth: `${plotWidth}px`, "--bar-slot-width": `${slotWidth}px` } as CSSProperties}
+        style={{ minWidth: `${plotWidth}px` }}
       >
         <RechartsBarChart
           width={plotWidth}
           height={chartHeight}
           data={data}
           barCategoryGap="55%"
-          margin={{ top: showValues ? 18 : 7, right: 3, bottom: 0, left: 3 }}
+          margin={{ top: showValues ? 18 : 7, right: horizontalInset, bottom: 0, left: horizontalInset }}
           accessibilityLayer
         >
           <CartesianGrid vertical={false} stroke="#edf1ef" />
@@ -109,7 +110,7 @@ function BarColumns({ labels, values, domain, showValues, palette }: Pick<BarCha
             {showValues && <LabelList dataKey="value" position="top" formatter={(value) => displayValue(Number(value))} className="bar-value" />}
           </Bar>
         </RechartsBarChart>
-        <div className={`recharts-category-labels${verticalLabels ? " vertical" : ""}`} style={{ gridTemplateColumns: `repeat(${Math.max(1, labels.length)},var(--bar-slot-width))` }}>
+        <div className={`recharts-category-labels${verticalLabels ? " vertical" : ""}`} style={{ width: plotWidth - horizontalInset * 2, marginLeft: horizontalInset, gridTemplateColumns: `repeat(${Math.max(1, labels.length)},minmax(0,1fr))` }}>
           {labels.map((label, index) => <small key={`${label}-${index}`} title={label}>{label}</small>)}
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { NotebookCell, NotebookArtifact } from "@/core/notebook/definition";
+import { notebookCellSchema, type NotebookCell, type NotebookArtifact } from "@/core/notebook/definition";
 import type { NotebookDocument } from "@/core/notebook/contracts";
 import { cellSource, cellReviewSource, applyRecipeSource, sourceDiff } from "./cell-source";
 import { NotebookSource } from "./NotebookSource";
@@ -8,8 +8,23 @@ import { NotebookDraftReview } from "./NotebookDraftReview";
 
 const query: Extract<NotebookCell, { kind: "sql" }> = { id: "query", kind: "sql", title: "地区汇总", inputCellIds: ["data"], outputName: "summary", sql: "SELECT region, SUM(amount) AS revenue\nFROM sales GROUP BY region" };
 const recipe: Extract<NotebookCell, { kind: "transform" }> = { id: "recipe", kind: "transform", title: "整理数据", inputCellId: "data", outputName: "clean", steps: [{ id: "limit", type: "limit", count: 20 }] };
+const sourceCases: Array<{ cell: NotebookCell; language: string; source: unknown }> = [
+  { cell: { id: "data", kind: "data", title: "源", sourceDataSourceId: "sales", outputName: "sales" }, language: "数据引用", source: { sourceDataSourceId: "sales", outputName: "sales" } },
+  { cell: { id: "semantic", kind: "semanticQuery", title: "语义", inputCellId: "data", modelId: "model", modelVersion: 1, dimensions: [], measures: ["revenue"], limit: 100, outputName: "totals" }, language: "查询配置", source: { inputCellId: "data", modelId: "model", modelVersion: 1, dimensions: [], measures: ["revenue"], limit: 100, outputName: "totals" } },
+  { cell: query, language: "SQL", source: query.sql },
+  { cell: { id: "warehouse", kind: "warehouseSql", title: "连接", connectionId: "database", outputName: "remote", sql: "SELECT 1 AS value" }, language: "SQL", source: "SELECT 1 AS value" },
+  { cell: { id: "python", kind: "python", title: "代码", inputCellIds: [], fileNames: [], outputName: "frame", code: 'frame = pd.DataFrame({"x": [1]})\nprint(frame)' }, language: "Python", source: 'frame = pd.DataFrame({"x": [1]})\nprint(frame)' },
+  { cell: recipe, language: "DataRecipe · JSON", source: recipe.steps },
+  { cell: { id: "table", kind: "table", title: "表", inputCellId: "data", columns: ["region"] }, language: "展示配置", source: { inputCellId: "data", columns: ["region"] } },
+  { cell: { id: "chart", kind: "chart", title: "图", inputCellId: "data", chartType: "bar", categoryField: "region", valueFields: ["amount"] }, language: "展示配置", source: { inputCellId: "data", chartType: "bar", categoryField: "region", valueFields: ["amount"] } },
+  { cell: { id: "text", kind: "text", title: "说明", markdown: "# 分析口径\n保留原文" }, language: "Markdown", source: "# 分析口径\n保留原文" },
+];
 
 describe("Notebook source and rule editing", () => {
+  it.each(sourceCases)("preserves $cell.kind source language and unformatted contents", ({ cell, language, source }) => {
+    expect(notebookCellSchema.parse(cell)).toEqual(cell);
+    expect(cellSource(cell)).toEqual({ language, value: typeof source === "string" ? source : JSON.stringify(source, null, 2) });
+  });
   it("shows executable SQL without silently formatting or changing it", () => {
     expect(cellSource(query)).toEqual({ language: "SQL", value: query.sql });
     expect(cellSource({ ...query, kind: "warehouseSql", connectionId: "warehouse" } as NotebookCell).value).toBe(query.sql);

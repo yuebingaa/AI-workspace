@@ -8,8 +8,10 @@ import { semanticModelSchema, type SemanticModel } from "@/core/semantic/contrac
 import { harnessMcpToolSummarySchema, type HarnessMcpToolSummary } from "./mcp/contracts";
 import { harnessNotebookArtifactSchema, type HarnessNotebookArtifact } from "./notebook-contracts";
 import { notebookDocumentSchema } from "@/core/notebook/contracts";
+import { notebookContextSelectedCellIdsSchema, type NotebookContextSelectionMetadata } from "@/core/notebook/context-selection";
 import { harnessAnalysisPlanArtifactSchema, type HarnessAnalysisPlanArtifact } from "./analysis-plan-contracts";
 import type { HarnessInputInspection } from "./input-inspector";
+import { harnessNotebookDiagnosticsSchema } from "./notebook-diagnostics";
 
 export const MAX_HARNESS_INSTRUCTION_LENGTH = 1_000;
 export const MAX_HARNESS_REQUEST_BYTES = 180_000;
@@ -29,6 +31,8 @@ export const DEFAULT_HARNESS_LIMITS = {
 } as const;
 
 export const HARNESS_CLIENT_TIMEOUT_MS = 95_000;
+/** Browser ceiling for a server-announced long-running execution kernel. */
+export const HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS = 185_000;
 
 export const harnessStateSchema = z.enum([
   "planning",
@@ -186,6 +190,7 @@ export type HarnessSemanticIntentDecision = z.infer<typeof harnessSemanticIntent
 export interface HarnessSemanticIntentInput {
   instruction: string;
   hasNotebookContext?: boolean;
+  notebookSelection?: NotebookContextSelectionMetadata;
   semanticModel?: Pick<SemanticModel, "id" | "name" | "sourceDatasetId" | "dimensions" | "measures">;
   conversationBrief?: HarnessConversationBrief;
   previousInstruction?: string;
@@ -474,6 +479,7 @@ export const harnessTraceEventSchema = z.object({
   taskState: harnessStateSchema.optional(),
   counters: harnessCountersSchema.optional(),
   executionTiming: harnessExecutionTimingSchema.optional(),
+  clientTimeoutMs: z.number().int().positive().max(HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS).optional(),
   toolCall: harnessEventSchema.shape.toolCall,
   plan: z.object({
     revision: z.number().int(),
@@ -509,6 +515,7 @@ export const harnessTaskSummarySchema = z.object({
   exportArtifact: excelExportArtifactSchema.optional(),
   tableArtifact: harnessTableArtifactSchema.optional(),
   notebookArtifact: harnessNotebookArtifactSchema.optional(),
+  notebookDiagnostics: harnessNotebookDiagnosticsSchema.optional(),
   analysisPlanArtifact: harnessAnalysisPlanArtifactSchema.optional(),
   error: z.string().max(1_000).optional(),
   model: z.string().min(1).max(160).optional(),
@@ -527,10 +534,18 @@ export const harnessTaskSummarySchema = z.object({
 }).strict();
 export type HarnessTaskSummary = z.infer<typeof harnessTaskSummarySchema>;
 
+export const MAX_HARNESS_REQUEST_RECIPES = 20;
+
 const harnessPublicRequestShape = {
   notebookContext: z.object({ document: notebookDocumentSchema, sourceIds: z.array(z.string().min(1).max(160)).max(10),
+    selectedCellIds: notebookContextSelectedCellIdsSchema.optional(),
     connections: z.array(z.object({ id: z.string().max(100), name: z.string().max(120), kind: z.enum(["postgresql", "databricks"]), allowAi: z.boolean() }).strict()).max(20).optional(),
-  }).strict().optional(),
+  }).strict().superRefine((notebook, context) => {
+    const available = new Set(notebook.document.cells.map((cell) => cell.id));
+    notebook.selectedCellIds?.forEach((id, index) => {
+      if (!available.has(id)) context.addIssue({ code: "custom", path: ["selectedCellIds", index], message: "选中的 Notebook 单元不属于本次文档" });
+    });
+  }).optional(),
   idempotencyKey: z.string().min(8).max(160).regex(/^[A-Za-z0-9_-]+$/),
   instruction: z.string().trim().min(1).max(MAX_HARNESS_INSTRUCTION_LENGTH),
   pageId: z.string().min(1).max(120),
@@ -547,7 +562,7 @@ const harnessPublicRequestShape = {
     selectedContext: z.array(z.string().max(160)).max(20).optional(),
   }).strict().optional(),
   appSpec: appSpecSchema,
-  recipes: z.array(dataRecipeSchema).max(20),
+  recipes: z.array(dataRecipeSchema).max(MAX_HARNESS_REQUEST_RECIPES),
   edsWorkspace: edsWorkspaceSnapshotSchema.optional(),
   retryOfTaskId: z.string().min(1).max(160).optional(),
 } as const;

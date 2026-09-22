@@ -7,7 +7,8 @@ import {
   type HarnessAnalysisPlanDraft,
   type HarnessAnalysisStep,
 } from "./analysis-plan-contracts";
-import type { HarnessNotebookCell, HarnessNotebookDraft } from "./notebook-contracts";
+import type { HarnessNotebookDraft } from "./notebook-contracts";
+import { cellDependencies } from "@/core/notebook/graph";
 
 interface PlannedOutput {
   fields: Set<string> | null;
@@ -78,9 +79,18 @@ export function createHarnessAnalysisPlanArtifact(
       continue;
     }
 
-    if (step.kind === "text") continue;
+    if (step.kind === "parameter") {
+      outputs.set(step.id, { kind: step.kind, fields: new Set(["value"]), sourceDataSourceIds: new Set() });
+      continue;
+    }
+    if (step.kind === "text") {
+      for (const reference of step.references ?? []) {
+        requireFields(step.title, outputs.get(reference.cellId)!.fields, [reference.field]);
+      }
+      continue;
+    }
     const upstream = step.dependsOn.map((id) => outputs.get(id)!);
-    if (upstream.some((output) => !["data", "semanticQuery", "sql", "python", "warehouseSql", "transform"].includes(output.kind))) {
+    if (upstream.some((output) => !["data", "parameter", "semanticQuery", "sql", "python", "warehouseSql", "transform"].includes(output.kind))) {
       throw new StudioValidationError("Analysis Plan 校验失败", [`步骤“${step.title}”只能依赖产生表格数据的步骤。`]);
     }
     const upstreamSourceIds = new Set(upstream.flatMap((output) => [...output.sourceDataSourceIds]));
@@ -108,7 +118,7 @@ export function createHarnessAnalysisPlanArtifact(
     else requireFields(step.title, upstream[0].fields, [step.categoryField, ...step.valueFields]);
   }
 
-  if (!usedSourceIds.size && !usedConnectionIds.size && !draft.steps.some((step) => step.kind === "python")) throw new StudioValidationError("Analysis Plan 校验失败", ["分析计划至少需要一个当前工作界面的 Data 或已授权数据库查询步骤。"]);
+  if (!usedSourceIds.size && !usedConnectionIds.size && !draft.steps.some((step) => step.kind === "python" || step.kind === "parameter")) throw new StudioValidationError("Analysis Plan 校验失败", ["分析计划至少需要一个当前工作界面的 Data 或已授权数据库查询步骤。"]);
   const kinds = new Set(draft.steps.map((step) => step.kind));
   const missingDeliverable = draft.deliverables.find((deliverable) => (
     deliverable === "chart" ? !kinds.has("chart") : deliverable === "table" ? !kinds.has("table") : !kinds.has("text")
@@ -127,12 +137,6 @@ export function createHarnessAnalysisPlanArtifact(
   });
 }
 
-function notebookDependencies(cell: HarnessNotebookCell): string[] {
-  if (cell.kind === "sql" || cell.kind === "python") return cell.inputCellIds;
-  if ("inputCellId" in cell) return [cell.inputCellId];
-  return [];
-}
-
 export function assertNotebookMatchesAnalysisPlan(plan: HarnessAnalysisPlanArtifact, draft: HarnessNotebookDraft): void {
   if (draft.analysisPlanId !== plan.id) throw new StudioValidationError("Notebook 草稿校验失败", ["Notebook 草稿没有引用本次 Analysis Plan。"]);
   if (draft.cells.length !== plan.steps.length) throw new StudioValidationError("Notebook 草稿校验失败", ["Notebook 单元数量与 Analysis Plan 步骤数量不一致。"]);
@@ -143,11 +147,17 @@ export function assertNotebookMatchesAnalysisPlan(plan: HarnessAnalysisPlanArtif
   for (const step of plan.steps) {
     const cell = cells.get(step.id);
     if (!cell || cell.kind !== step.kind) throw new StudioValidationError("Notebook 草稿校验失败", [`计划步骤“${step.id}”没有编译为相同类型的 Notebook 单元。`]);
-    if (JSON.stringify(notebookDependencies(cell)) !== JSON.stringify(step.dependsOn)) {
+    if (JSON.stringify(cellDependencies(cell)) !== JSON.stringify(step.dependsOn)) {
       throw new StudioValidationError("Notebook 草稿校验失败", [`Notebook 单元“${cell.title}”的依赖与 Analysis Plan 不一致。`]);
     }
     if (step.kind === "data" && cell.kind === "data" && step.sourceDataSourceId !== cell.sourceDataSourceId) {
       throw new StudioValidationError("Notebook 草稿校验失败", [`Notebook 数据单元“${cell.title}”更换了计划数据源。`]);
+    }
+    if (step.kind === "parameter" && cell.kind === "parameter" && JSON.stringify(step.parameter) !== JSON.stringify(cell.parameter)) {
+      throw new StudioValidationError("Notebook 草稿校验失败", ["Notebook 参数配置与分析计划不一致，请先更新计划。"]);
+    }
+    if (step.kind === "text" && cell.kind === "text" && JSON.stringify(step.references ?? []) !== JSON.stringify(cell.references ?? [])) {
+      throw new StudioValidationError("Notebook 草稿校验失败", ["Notebook 文本引用与分析计划不一致，请先更新计划。"]);
     }
     if (step.kind === "warehouseSql" && cell.kind === "warehouseSql" && step.connectionId !== cell.connectionId) {
       throw new StudioValidationError("Notebook 草稿校验失败", ["Notebook 更换了计划中的数据库连接"]);

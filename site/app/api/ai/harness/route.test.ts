@@ -28,9 +28,13 @@ import {
 import { POST } from "./route";
 import { POST as streamPOST } from "./stream/route";
 import { readHarnessStream } from "@/core/harness/stream";
-import { harnessResponseSchema } from "@/core/harness/contracts";
+import { harnessRequestSchema, harnessResponseSchema } from "@/core/harness/contracts";
 import { semanticFixture } from "@/core/semantic/test-fixture";
 import * as inputInspector from "@/core/harness/input-inspector";
+import { HarnessIdempotencyStore, HarnessRuntime } from "@/core/harness/runtime";
+import { harnessToolTimeoutMs } from "@/core/harness/tool-budget";
+import { createHarnessTask } from "@/core/harness/task-state";
+import type { HarnessRequest, HarnessTaskSummary } from "@/core/harness/contracts";
 
 function stream(text: string) {
   return new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } });
@@ -71,6 +75,37 @@ function dynamicPlan(toolNames: HarnessToolName[]) {
   };
 }
 
+function syntheticDiagnosticTask(request: HarnessRequest): HarnessTaskSummary {
+  const source = JSON.stringify({ id: "py", kind: "python", title: "合成失败", code: "SYNTHETIC_DIAGNOSTIC_ONLY" }, null, 2);
+  return { ...createHarnessTask(request.idempotencyKey, request.instruction, request.pageId, request.role,
+    { now: () => new Date("2026-09-16T00:00:00.000Z"), id: () => "diagnostic_event" }),
+    state: "failed", error: "合成任务未完成", resultMessage: "合成失败，不修改正式看板", notebookDiagnostics: {
+      version: 1, baseRevision: 0, status: "unavailable", omittedCellCount: 0,
+      cells: [{ cellId: "py", kind: "python", title: "合成失败", status: "unknown", source, sourceChars: source.length, sourceTruncated: false }],
+    } };
+}
+
+async function diagnosticRequestFixture(key: string) {
+  if (!demoFixtureResult.success) throw new Error("fixtures unavailable");
+  vi.stubEnv("HARNESS_MCP_ENABLED", "false");
+  vi.stubEnv("HARNESS_MULTI_AGENT_MODE", "single");
+  const uploaded = await parseCsvUpload({ stream: stream("region,value\n合成区域,1"), originalFileName: "diagnostic-access.csv", mimeType: "text/csv" });
+  const identity = resolveDemoRequestIdentity();
+  await datasetRepository.put(identity, uploaded);
+  const product = demoFixtureResult.data.dataProduct;
+  const payload = { idempotencyKey: key, instruction: "检查上传数据的 Python 单元", pageId: "page_home", dataSourceId: uploaded.dataset.datasetId,
+    appSpec: { ...product.appSpec, dataSources: [...product.appSpec.dataSources, uploaded.dataset.source] },
+    recipes: [...product.recipes, uploaded.dataset.recipe] };
+  const request = (signal?: AbortSignal) => new Request("http://localhost/api/ai/harness", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal });
+  return { request, identity, uploaded };
+}
+
+async function diagnosticResponse(response: Response, transport: string) {
+  expect(response.status).toBe(200);
+  return transport === "sse" ? readHarnessStream(response, new AbortController().signal) : harnessResponseSchema.parse(await response.json());
+}
+
 describe("Harness 上传数据隐私门", () => {
   beforeEach(() => {
     datasetRepository.clear();
@@ -81,6 +116,82 @@ describe("Harness 上传数据隐私门", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  it.each(["json", "sse"])("%s 幂等缓存回传前复验撤回授权且不修改缓存中的任务", async (transport) => {
+    const { request, identity, uploaded } = await diagnosticRequestFixture(`diagnostic_cache_${transport}`);
+    const runtime = vi.spyOn(HarnessRuntime.prototype, "run").mockImplementation(async (raw) => syntheticDiagnosticTask(harnessRequestSchema.parse(raw)));
+    const route = transport === "sse" ? streamPOST : POST;
+    const original = await diagnosticResponse(await route(request()), transport);
+    expect(original.task.notebookDiagnostics).toBeDefined();
+    const get = datasetRepository.get.bind(datasetRepository);
+    vi.spyOn(datasetRepository, "get").mockImplementationOnce(async (ownership, id) => {
+      const loaded = await get(ownership, id);
+      await datasetRepository.delete(identity, uploaded.dataset.datasetId);
+      return loaded; // Authorization changes after initial loading, while the cache can still match.
+    });
+    const revoked = await diagnosticResponse(await route(request()), transport);
+    expect(revoked.task.notebookDiagnostics).toBeUndefined();
+    const unchanged = { ...original.task };
+    delete unchanged.notebookDiagnostics;
+    expect(revoked.task).toEqual(unchanged);
+    expect(runtime).toHaveBeenCalledTimes(1);
+    await datasetRepository.put(identity, uploaded);
+    expect((await diagnosticResponse(await route(request()), transport)).task.notebookDiagnostics).toEqual(original.task.notebookDiagnostics);
+    expect(runtime).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["json", "sse"])("%s 共享在途任务每个响应都重新检查诊断授权", async (transport) => {
+    const { request, identity, uploaded } = await diagnosticRequestFixture(`diagnostic_pending_${transport}`);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const runtime = vi.spyOn(HarnessRuntime.prototype, "run").mockImplementation(async (raw) => { await pending; return syntheticDiagnosticTask(harnessRequestSchema.parse(raw)); });
+    const shared = vi.spyOn(HarnessIdempotencyStore.prototype, "execute");
+    const route = transport === "sse" ? streamPOST : POST;
+    const first = route(request());
+    await vi.waitFor(() => expect(runtime).toHaveBeenCalledTimes(1));
+    const second = route(request());
+    await vi.waitFor(() => expect(shared).toHaveBeenCalledTimes(2));
+    await datasetRepository.delete(identity, uploaded.dataset.datasetId);
+    release();
+    const results = await Promise.all([first, second].map(async (response) => diagnosticResponse(await response, transport)));
+    expect(results.map((result) => result.task.notebookDiagnostics)).toEqual([undefined, undefined]);
+    expect(results.map((result) => result.task.error)).toEqual(["合成任务未完成", "合成任务未完成"]);
+    expect(runtime).toHaveBeenCalledTimes(1);
+  });
+
+  it("已取消的 JSON 缓存请求不回传诊断，也不修改原有任务状态", async () => {
+    const { request } = await diagnosticRequestFixture("diagnostic_cancel_cached_json");
+    const runtime = vi.spyOn(HarnessRuntime.prototype, "run").mockImplementation(async (raw) => syntheticDiagnosticTask(harnessRequestSchema.parse(raw)));
+    const original = await diagnosticResponse(await POST(request()), "json");
+    const abort = new AbortController();
+    const get = datasetRepository.get.bind(datasetRepository);
+    vi.spyOn(datasetRepository, "get").mockImplementationOnce(async (ownership, id) => { const loaded = await get(ownership, id); abort.abort(); return loaded; });
+    const cancelled = await diagnosticResponse(await POST(request(abort.signal)), "json");
+    expect(cancelled.task.notebookDiagnostics).toBeUndefined();
+    expect(cancelled.task.state).toBe(original.task.state);
+    expect(runtime).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([undefined, "", "invalid", "250"])("网页工具预算配置 %s 不把缺省 10 秒误认为显式 Notebook 限制", async (value) => {
+    if (!demoFixtureResult.success) throw new Error("fixtures unavailable");
+    vi.stubEnv("HARNESS_MCP_ENABLED", "false");
+    vi.stubEnv("HARNESS_MULTI_AGENT_MODE", "single");
+    vi.stubEnv("HARNESS_TOOL_CALL_TIMEOUT_MS", value);
+    const runtime = vi.spyOn(HarnessRuntime.prototype, "run");
+    const response = await POST(new Request("http://localhost/api/ai/harness", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        idempotencyKey: `notebook_budget_route_${value ?? "absent"}`, instruction: "创建 Python 单元并分析", pageId: "page_home",
+        appSpec: demoFixtureResult.data.dataProduct.appSpec, recipes: [],
+        notebookContext: { sourceIds: [], document: { name: "预算接线", revision: 0, cells: [] } },
+      }),
+    }));
+    expect(response.status).toBe(200);
+    expect(runtime).toHaveBeenCalledTimes(1);
+    const configured = runtime.mock.calls[0][1].bounds?.toolCallTimeoutMs;
+    expect(configured).toBe(value === "250" ? 250 : undefined);
+    expect(harnessToolTimeoutMs("runNotebookCells", configured)).toBe(value === "250" ? 250 : 35_000);
+    expect(harnessToolTimeoutMs("inspectDataset", configured)).toBe(value === "250" ? 250 : 10_000);
   });
 
   it.each(["json", "sse"])("%s 普通对话先经 Agent 判断，跳过 Inspector 并保留唯一最终回执", async (transport) => {

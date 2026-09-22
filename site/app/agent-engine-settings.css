@@ -1,0 +1,37 @@
+.agent-engine-dialog { width: min(650px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow: auto; border: 1px solid var(--studio-border); border-radius: 8px; background: var(--studio-surface); color: var(--studio-ink); font-family: var(--studio-font); box-shadow: var(--studio-shadow); }
+.agent-engine-dialog::backdrop { background: color-mix(in srgb, var(--studio-ink) 24%, transparent); }
+.agent-engine-content { padding: 24px; display: grid; gap: 16px; font-size: 13px; line-height: 1.6; }
+.agent-engine-content header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.agent-engine-content h2 { margin: 0; font-size: 20px; line-height: 1.4; }
+.agent-engine-content h3, .agent-engine-content h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.agent-engine-content p { margin: 0; overflow-wrap: anywhere; }
+.agent-engine-content header p { margin-top: 6px; color: var(--studio-secondary); font-size: 12px; }
+.agent-engine-content button { padding: 7px 12px; border: 1px solid var(--studio-border); border-radius: 4px; background: var(--studio-surface); color: var(--studio-ink); font: inherit; cursor: pointer; }
+.agent-engine-content button:disabled { opacity: .48; cursor: not-allowed; }
+.agent-engine-content :is(button, input):focus-visible { outline: 2px solid var(--studio-secondary); outline-offset: 3px; }
+.agent-engine-content header button { flex: none; padding: 0 9px; line-height: 30px; font-size: 21px; }
+.agent-engine-current { color: var(--studio-secondary); }
+.agent-engine-current strong { color: var(--studio-ink); }
+.agent-engine-options { display: grid; gap: 8px; min-width: 0; padding: 0; margin: 0; border: 0; }
+.agent-engine-options legend { margin-bottom: 8px; padding: 0; font-weight: 600; }
+.agent-engine-options label { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--studio-border); border-radius: 5px; cursor: pointer; }
+.agent-engine-options label.selected { background: var(--studio-soft); border-color: var(--studio-border-strong); }
+.agent-engine-options:disabled label { cursor: default; }
+.agent-engine-options input { flex: none; margin: 5px 0 0; accent-color: var(--studio-ink); }
+.agent-engine-options span { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.agent-engine-options small { color: var(--studio-secondary); font-size: 12px; }
+.agent-engine-options em { display: inline-block; padding: 0 5px; margin-left: 4px; border: 1px solid var(--studio-border-strong); border-radius: 3px; font-size: 10px; font-style: normal; font-weight: 400; }
+.agent-engine-muted, .agent-engine-persistence { color: var(--studio-secondary); font-size: 12px; }
+.agent-engine-plugins { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--studio-border); }
+.agent-engine-plugins > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.agent-engine-plugins small { color: var(--studio-muted); font-size: 11px; }
+.agent-engine-plugins article { padding: 10px 12px; border: 1px solid var(--studio-border); border-radius: 5px; }
+.agent-engine-plugins article p { color: var(--studio-secondary); font-size: 12px; margin-top: 3px; }
+.agent-engine-plugins ul { display: flex; flex-wrap: wrap; gap: 5px 8px; list-style: none; padding: 0; margin: 8px 0 0; }
+.agent-engine-plugins code { display: inline-block; padding: 2px 5px; border-radius: 3px; background: var(--studio-paper); color: var(--studio-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.agent-engine-status { padding: 9px 12px; border: 1px solid var(--studio-border); border-radius: 4px; background: var(--studio-paper); }
+.agent-engine-error { color: #b43b33; }
+.agent-engine-persistence { padding-top: 12px; border-top: 1px solid var(--studio-border); }
+.agent-engine-content footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
+.agent-engine-content footer > span { flex: 1; }
+.agent-engine-content .agent-engine-primary { background: var(--studio-ink); border-color: var(--studio-ink); color: var(--studio-surface); }

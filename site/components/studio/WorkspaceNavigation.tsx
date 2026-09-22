@@ -3,7 +3,7 @@ import { studioRoleLabels, type StudioRole } from "@/core/permissions";
 import type { StudioInterfaceOption } from "./StudioHeader";
 import { StudioIcon, type StudioIconName } from "./StudioIcon";
 
-export type WorkspaceNavigationAction = "pages" | "data" | "files" | "models" | "connections" | "history" | "api" | "wecom" | "import" | "backup" | "restore" | "undo" | "clearConversation";
+export type WorkspaceNavigationAction = "pages" | "data" | "files" | "models" | "connections" | "history" | "api" | "agent" | "wecom" | "import" | "backup" | "restore" | "undo" | "clearConversation";
 const tools: Array<{ id: WorkspaceNavigationAction; label: string; icon: StudioIconName; keywords: string }> = [
   { id: "data", label: "数据浏览器", icon: "data", keywords: "Data Browser 项目 数据表 资源 回收站" },
   { id: "pages", label: "工作界面与数据", icon: "pages", keywords: "页面 结构 组件 看板" },
@@ -14,6 +14,7 @@ const tools: Array<{ id: WorkspaceNavigationAction; label: string; icon: StudioI
 ];
 const settings: typeof tools = [
   { id: "api", label: "AI 接口配置", icon: "settings", keywords: "API 模型 设置" },
+  { id: "agent", label: "Agent 执行与插件", icon: "settings", keywords: "DSH Harness 执行器 引擎 插件 设置" },
   { id: "wecom", label: "企业微信连接", icon: "wecom", keywords: "连接 授权" },
   { id: "clearConversation", label: "清除上下文", icon: "restore", keywords: "清空 聊天 对话 会话 重置" },
   { id: "backup", label: "下载工作区备份", icon: "backup", keywords: "下载 备份 导出" },

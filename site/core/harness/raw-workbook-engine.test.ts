@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EdsWorkbookSheet } from "@/core/eds";
-import { indexRawWorkbook, queryRawWorkbook } from "./raw-workbook-engine";
+import { indexRawWorkbook, publicRawWorkbookProfile, queryRawWorkbook } from "./raw-workbook-engine";
 
 const sheets: EdsWorkbookSheet[] = [
   {
@@ -24,6 +24,25 @@ const sheets: EdsWorkbookSheet[] = [
 ];
 
 describe("EDS 原始工作簿结构化扫描与查询", () => {
+  it("区分解析行、自动表头后非空记录与字段空值，不把差值报告成原文件空行", () => {
+    const index = indexRawWorkbook([{ sheet: "统计边界", data: [
+      ["测试标题"], ["Line", "DT(s)"], [null, null], [" ", "\t"], ["A", 1], ["A", 1],
+    ] }], "quality_scope_raw_20260916");
+    const profile = publicRawWorkbookProfile(index);
+    expect(profile).toMatchObject({ scannedRowCount: 6, scannedDataRowCount: 2, scannedCellCount: 4,
+      rules: { scope: "parsed-workbook", rowCount: "parsed-rows-including-header-and-preamble",
+        header: "heuristic-first-20-rows", dataRows: "after-header-excluding-normalized-blank-rows",
+        emptyCells: "nfkc-trim-empty-within-data-rows", emptyRowCount: "not-reported", duplicateRows: "not-measured" },
+      sheets: [{ rowCount: 6, headerRow: 2, dataRowCount: 2 }],
+    });
+    expect(profile).not.toHaveProperty("emptyRowCount");
+    for (const mode of ["rows", "aggregate"] as const) {
+      const result = queryRawWorkbook(index, { mode, sheetName: "统计边界", limit: 1,
+        ...(mode === "aggregate" ? { aggregations: [{ operation: "count" as const, alias: "count" }] } : {}) });
+      expect(result).toMatchObject({ rules: profile.rules, scannedDataRowCount: 2, matchedRowCount: 2 });
+      expect(result).not.toHaveProperty("emptyRowCount");
+    }
+  });
   it("完整扫描全部工作表、数据行和单元格，并识别表头与字段概况", () => {
     const index = indexRawWorkbook(sheets, "a".repeat(64));
 

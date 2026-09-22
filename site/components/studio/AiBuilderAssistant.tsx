@@ -13,6 +13,7 @@ import { HarnessTrace } from "./HarnessTrace";
 import { AgentWorkspaceWelcome } from "./AgentWorkspace";
 import { ComposerContextMenu, type ComposerDataOption, type ComposerResultOption } from "./ComposerContextMenu";
 import { ConversationSwitcher, type ConversationSwitcherProps } from "./ConversationSwitcher";
+import { NotebookContextChips, type NotebookContextOption } from "./notebook/NotebookContextSelection";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
 export type AiRequestUiStatus = "idle" | "loading" | "success" | "blocked" | "error" | "cancelled" | "timeout";
@@ -39,6 +40,11 @@ interface AiBuilderAssistantProps {
   workspaces?: ComposerDataOption[];
   activeWorkspaceId?: string;
   contextResults?: ComposerResultOption[];
+  notebookOptions?: NotebookContextOption[];
+  selectedNotebookCellIds?: string[];
+  notebookContextDisabled?: boolean;
+  onToggleNotebookCell?: (id: string) => void;
+  onRemoveNotebookCell?: (id: string) => void;
   semanticModels?: ComposerDataOption[];
   activeSemanticModelId?: string;
   onSelectSemanticModel?: (id: string | null) => void;
@@ -103,6 +109,11 @@ export function AiBuilderAssistant({
   workspaces = [],
   activeWorkspaceId = "",
   contextResults = [],
+  notebookOptions = [],
+  selectedNotebookCellIds = [],
+  notebookContextDisabled = false,
+  onToggleNotebookCell,
+  onRemoveNotebookCell,
   semanticModels = [],
   activeSemanticModelId,
   onSelectSemanticModel,
@@ -346,6 +357,8 @@ export function AiBuilderAssistant({
         </div>
         <button type="button" className="context-add-trigger" disabled={isLoading} aria-haspopup="menu" aria-expanded={Boolean(contextMenuAnchor)} onClick={(event) => setContextMenuAnchor(contextMenuAnchor ? null : event.currentTarget)}>添加上下文 <span aria-hidden="true">↗</span></button>
       </div>}
+      <NotebookContextChips options={notebookOptions} selectedIds={selectedNotebookCellIds} disabled={isLoading || notebookContextDisabled}
+        onRemove={(id) => onRemoveNotebookCell?.(id)} />
       {activeSemanticModelId && <div className="semantic-context"><span>◇ 使用语义模型：{semanticModels.find((model) => model.id === activeSemanticModelId)?.name}</span>
         <button type="button" disabled={isLoading} onClick={onManageSemanticModels}>管理</button>
         <button type="button" disabled={isLoading} aria-label="取消语义模型选择" onClick={() => onSelectSemanticModel?.(null)}>×</button></div>}
@@ -422,8 +435,11 @@ export function AiBuilderAssistant({
         </div>
       </div>
       {contextMenuAnchor && !isLoading && <ComposerContextMenu
+        key={`${activeWorkspaceId}:${sessionId ?? "current"}`}
         anchor={contextMenuAnchor} workspaces={workspaces} activeWorkspaceId={activeWorkspaceId}
         dataSources={dataSources} activeDataSourceId={activeDataSourceId} results={contextResults}
+        notebookOptions={notebookOptions} selectedNotebookCellIds={selectedNotebookCellIds} notebookContextDisabled={notebookContextDisabled}
+        onToggleNotebookCell={onToggleNotebookCell} onOpenNotebook={onOpenNotebook}
         semanticModels={semanticModels} activeSemanticModelId={activeSemanticModelId}
         onSelectSemanticModel={(id) => onSelectSemanticModel?.(id)} onManageSemanticModels={onManageSemanticModels}
         onClose={closeContextMenu}

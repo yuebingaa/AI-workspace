@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { AppSpec, DataRecipe, DataRow, DataSourceDefinition, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
 import type { HarnessTableArtifact } from "@/core/harness/contracts";
 import type { ExcelExportArtifact } from "@/core/exports/contracts";
@@ -35,6 +35,9 @@ interface DataProductCanvasProps {
   puckData: StudioPuckData | null;
   puckSessionKey: number;
   hasPuckPreview: boolean;
+  previewApplyLabel?: string;
+  previewCancelLabel?: string;
+  previewDetails?: ReactNode;
   changeFeedback?: CanvasChangeFeedback | null;
   edsReportOptions?: EdsCanvasReportOption[];
   edsAnalysisRunning?: boolean;
@@ -71,6 +74,9 @@ export function DataProductCanvas({
   puckData,
   puckSessionKey,
   hasPuckPreview,
+  previewApplyLabel = "应用编辑",
+  previewCancelLabel,
+  previewDetails,
   changeFeedback,
   edsReportOptions,
   edsAnalysisRunning,
@@ -125,8 +131,8 @@ export function DataProductCanvas({
         <div>
           {isPreviewing && <span className="preview-badge">变更预览</span>}
           {mode === "edit" && puckData && <button type="button" className="canvas-primary" onClick={() => onRequestPuckPreview(puckData)}>生成变更预览</button>}
-          {mode === "preview" && hasPuckPreview && <button type="button" onClick={onCancelPuckPreview}>{puckData ? "继续编辑" : "取消预览"}</button>}
-          {mode === "preview" && hasPuckPreview && <button type="button" className="canvas-primary" onClick={onApplyPuckPreview}>应用编辑</button>}
+          {mode === "preview" && hasPuckPreview && <button type="button" onClick={onCancelPuckPreview}>{previewCancelLabel ?? (puckData ? "继续编辑" : "取消预览")}</button>}
+          {mode === "preview" && hasPuckPreview && <button type="button" className="canvas-primary" disabled={!canEdit} onClick={onApplyPuckPreview}>{previewApplyLabel}</button>}
           {!hasPuckPreview && mode === "preview" && <button type="button">分享</button>}
           <button type="button">•••</button>
         </div>
@@ -154,6 +160,7 @@ export function DataProductCanvas({
         </div>
       )}
       <div ref={viewportRef} className={`canvas-design-viewport${isBlankPreview ? " is-blank" : ""}`} tabIndex={0} aria-label="看板滚动区域">
+        {mode === "preview" && hasPuckPreview && previewDetails}
         {changeFeedback && (
           <div className={`canvas-change-feedback ${changeFeedback.status}`} role="status">
             <i aria-hidden="true">{changeFeedback.status === "applied" ? "✓" : "✦"}</i>

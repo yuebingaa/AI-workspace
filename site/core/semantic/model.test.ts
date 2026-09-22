@@ -9,6 +9,12 @@ import { semanticFixture } from "./test-fixture";
 import { assertSemanticBinding, assertSemanticPreviewBindings } from "./bindings";
 import type { DataBinding } from "@/core/models";
 import { reconcileDataProductWorkspaces } from "@/core/workspaces";
+import type { NotebookCell } from "@/core/notebook/definition";
+
+function savedSemanticCell(modelId: string, id: string, modelVersion = 1): NotebookCell {
+  return { id, kind: "semanticQuery", title: `查询 ${id}`, inputCellId: "source", modelId, modelVersion,
+    dimensions: [], measures: ["revenue"], limit: 100, outputName: `result_${id}` };
+}
 
 describe("业务语义模型", () => {
   it("图表新绑定遵循指标口径，纯样式变更不会改写旧图表", () => {
@@ -64,9 +70,59 @@ describe("业务语义模型", () => {
   });
   it("删除仅清理定义与选择，不修改数据表、配方或 AppSpec", () => {
     const { product, model } = semanticFixture();
+    product.notebooks = { page_home: { name: "无语义引用", revision: 1, cells: [{ id: "note", kind: "text", title: "说明", markdown: model.id }] } };
+    const original = structuredClone(product);
     const next = deleteSemanticModel(saveSemanticModel(product, model, "page_home", "editor"), model.id, "editor");
     expect(next.semanticLayer).toEqual({ models: [], selectedByWorkspace: {} });
     expect(next.datasets).toEqual(product.datasets); expect(next.recipes).toEqual(product.recipes); expect(next.appSpec).toEqual(product.appSpec);
+    expect(next.notebooks).toBe(product.notebooks);
+    expect(product).toEqual(original);
+  });
+  it("跨界面的已保存语义查询阻止删除，并保留所有产品状态", () => {
+    const { product, model } = semanticFixture();
+    const saved = saveSemanticModel(product, model, "page_home", "editor");
+    saved.notebooks = { page_other: { name: "跨页分析", revision: 2, cells: [savedSemanticCell(model.id, "query_other")] } };
+    const original = structuredClone(saved);
+    expect(() => deleteSemanticModel(saved, model.id, "editor")).toThrow(/跨页分析.*page_other.*查询 query_other.*query_other/);
+    expect(saved).toEqual(original);
+  });
+  it("其他模型的引用不阻断删除，也不改动其他模型、选择或 Notebook", () => {
+    const { product, model } = semanticFixture();
+    const saved = saveSemanticModel(product, model, "page_home", "editor");
+    const other = { ...model, id: "other_model", name: "其他模型" };
+    saved.semanticLayer!.models.push(other);
+    saved.semanticLayer!.selectedByWorkspace.page_other = other.id;
+    saved.notebooks = { page_other: { name: "其他分析", revision: 1, cells: [savedSemanticCell(other.id, "other_query")] } };
+    const original = structuredClone(saved);
+    const next = deleteSemanticModel(saved, model.id, "editor");
+    expect(next.semanticLayer).toEqual({ models: [other], selectedByWorkspace: { page_other: other.id } });
+    expect(next.notebooks).toBe(saved.notebooks);
+    expect(next.datasets).toBe(saved.datasets);
+    expect(next.recipes).toBe(saved.recipes);
+    expect(next.appSpec).toBe(saved.appSpec);
+    expect(saved).toEqual(original);
+  });
+  it.each([1, 2, 99])("引用版本 %s 无论与当前版本是否相同都阻止删除", (version) => {
+    const { product, model } = semanticFixture();
+    const saved = saveSemanticModel(product, { ...model, version: 1 }, "page_home", "editor");
+    const updated = saveSemanticModel(saved, model, "page_home", "editor");
+    updated.notebooks = { page_home: { name: "版本分析", revision: 1, cells: [savedSemanticCell(model.id, "version_query", version)] } };
+    expect(() => deleteSemanticModel(updated, model.id, "editor")).toThrow("引用");
+  });
+  it("先执行角色和存在检查，再提供引用诊断", () => {
+    const { product, model } = semanticFixture();
+    const saved = saveSemanticModel(product, model, "page_home", "editor");
+    saved.notebooks = { page_home: { name: "受保护分析", revision: 1, cells: [savedSemanticCell(model.id, "protected"), savedSemanticCell("missing_model", "orphan")] } };
+    expect(() => deleteSemanticModel(saved, model.id, "viewer")).toThrow("无权");
+    expect(() => deleteSemanticModel(saved, "missing_model", "editor")).toThrow("不存在");
+  });
+  it("完整检查引用，错误最多展示前三处并给出剩余数量", () => {
+    const { product, model } = semanticFixture();
+    const saved = saveSemanticModel(product, model, "page_home", "editor");
+    saved.notebooks = { page_home: { name: "批量分析", revision: 1,
+      cells: Array.from({ length: 5 }, (_, index) => savedSemanticCell(model.id, `query_${index + 1}`)) } };
+    expect(() => deleteSemanticModel(saved, model.id, "editor")).toThrow(/query_1.*query_2.*query_3.*另有 2 处引用/);
+    expect(() => deleteSemanticModel(saved, model.id, "editor")).not.toThrow(/query_4|query_5/);
   });
   it("校验不存在的字段、不支持的聚合、重复标识和非法表达式", () => {
     const { model, source } = semanticFixture();

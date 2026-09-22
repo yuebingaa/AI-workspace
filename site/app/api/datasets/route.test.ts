@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { datasetRepository } from "@/core/datasets/server/dataset-repository";
+import { DatasetAiAccessPolicyConflictError } from "@/core/datasets/repository";
 import { parseCsvUpload } from "@/core/datasets/server/csv-dataset";
 import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { GET as getDataset, DELETE as deleteDataset } from "./[datasetId]/route";
@@ -198,5 +199,50 @@ describe("CSV 数据集 API", () => {
     const removed = await deleteDataset(new Request("http://localhost/api/datasets/dataset_upload_1234567890123456", { method: "DELETE" }));
     expect(removed.status).toBe(500);
     expect(await removed.text()).not.toContain("synthetic");
+  });
+
+  it.each([
+    "此数据集没有需要确认的敏感字段",
+    "敏感字段处理方式已经确认，不能由重放请求改写",
+    "当前数据处理方式不能被重复请求改写",
+  ])("keeps the known hot-reload conflict response without replacing stored data: %s", async (message) => {
+    const stored = await parseCsvUpload({
+      stream: new Response("email,amount\nsynthetic@example.invalid,10").body!,
+      originalFileName: "synthetic-hot-reload.csv", mimeType: "text/csv",
+    });
+    const owner = resolveDemoRequestIdentity(), id = stored.dataset.datasetId;
+    await datasetRepository.put(owner, stored);
+    await datasetRepository.setAiAccessPolicy(owner, id, "masked");
+    const before = await datasetRepository.get(owner, id);
+    // A retained pre-migration instance closes over a different constructor.
+    const OldConflict = class DatasetAiAccessPolicyConflictError extends Error {
+      constructor(text: string) { super(text); this.name = "DatasetAiAccessPolicyConflictError"; }
+    };
+    const oldError = new OldConflict(message);
+    expect(oldError).not.toBeInstanceOf(DatasetAiAccessPolicyConflictError);
+    vi.spyOn(datasetRepository, "setAiAccessPolicy").mockRejectedValueOnce(oldError);
+    const response = await confirmConsent(new Request(`http://localhost/api/datasets/${id}/consent`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ policy: "exclude-sensitive-samples" }),
+    }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: { message } });
+    expect(await datasetRepository.get(owner, id)).toEqual(before);
+  });
+
+  it.each([
+    new Error("敏感字段处理方式已经确认，不能由重放请求改写"),
+    { name: "DatasetAiAccessPolicyConflictError", message: "敏感字段处理方式已经确认，不能由重放请求改写" },
+    Object.assign(new Error("敏感字段处理方式已经确认，不能由重放请求改写"), { name: "DatasetAiAccessPolicyConflictError" }),
+    new (class DatasetAiAccessPolicyConflictError extends Error {
+      constructor() { super("synthetic-private-error-detail"); this.name = "DatasetAiAccessPolicyConflictError"; }
+    })(),
+  ])("does not expose unrelated or malformed errors as legacy policy conflicts %#", async (error) => {
+    vi.spyOn(datasetRepository, "setAiAccessPolicy").mockRejectedValueOnce(error);
+    const response = await confirmConsent(new Request("http://localhost/api/datasets/dataset_upload_1234567890123456/consent", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ policy: "masked" }),
+    }));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: { message: "敏感字段处理方式保存失败。" } });
   });
 });

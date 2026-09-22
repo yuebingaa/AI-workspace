@@ -1,6 +1,6 @@
 import { connectionSchemaSchema, type ConnectionSchema } from "../contracts";
-import type { NotebookTable } from "@/core/notebook/contracts";
-import { normalizeNotebookSql } from "@/core/notebook/sql";
+import type { DataTable } from "@/core/datasets/table-contracts";
+import { normalizeReadOnlySql } from "@/core/sql/read-only-query";
 import {
   CONNECTION_QUERY_LIMITS, ConnectionQueryError,
   type ConnectionQueryDependencies, type ConnectionQueryInput, type ConnectionSchemaInput, type ConnectionQueryService,
@@ -11,9 +11,10 @@ const TIMEOUT = CONNECTION_QUERY_LIMITS.timeoutMs;
 /** One service per server runtime, not per request: concurrency is shared by all callers. */
 export function createConnectionQueryService(dependencies: ConnectionQueryDependencies): ConnectionQueryService {
   let active = 0;
-  async function executeConnectionSql(input: ConnectionQueryInput): Promise<NotebookTable> {
+  async function executeConnectionSql(input: ConnectionQueryInput): Promise<DataTable> {
     const config = dependencies.resolveConnection(input.connectionId, input.project, input.forAi ?? false);
-    const sql = normalizeNotebookSql(input.sql);
+    const credentialIdentity = dependencies.credentialIdentity?.(config);
+    const sql = normalizeReadOnlySql(input.sql);
     const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(TIMEOUT)]) : AbortSignal.timeout(TIMEOUT);
     signal.throwIfAborted();
     if (active >= CONNECTION_QUERY_LIMITS.maxConcurrent) throw new ConnectionQueryError("已有两个数据库查询运行中，请稍后重试");
@@ -23,6 +24,7 @@ export function createConnectionQueryService(dependencies: ConnectionQueryDepend
       signal.throwIfAborted();
       // A concurrent configuration revocation invalidates the result too.
       if (JSON.stringify(dependencies.resolveConnection(input.connectionId, input.project, input.forAi ?? false)) !== JSON.stringify(config)) throw new ConnectionQueryError("连接配置已变化，请重新运行");
+      if (dependencies.credentialIdentity?.(config) !== credentialIdentity) throw new ConnectionQueryError("连接凭据已变化，请重新运行");
       return table;
     } catch (error) {
       if (signal.aborted) throw new ConnectionQueryError("数据库查询已取消或超时");

@@ -3,6 +3,19 @@ import { describe, expect, it } from "vitest";
 import { BarChart } from "./BarChart";
 
 describe("BarChart", () => {
+  it.each([[1, 514], [4, 514], [6, 514], [10, 694], [14, 834]])(
+    "%i 个分类的标签网格与柱形绘图区共用实际宽度和边距",
+    (count, labelWidth) => {
+      const labels = Array.from({ length: count }, (_, index) => `Category ${index + 1}`);
+      const html = renderToStaticMarkup(<BarChart
+        title="Category alignment" subtitle="Synthetic geometry regression"
+        labels={labels} values={labels.map((_, index) => index + 1)}
+        yAxis={[String(count), "0"]} domain={{ minimum: 0, maximum: count }}
+      />);
+      expect(html).toContain(`width:${labelWidth}px;margin-left:3px;grid-template-columns:repeat(${count},minmax(0,1fr))`);
+    },
+  );
+
   it("按跨零坐标域分别呈现正负柱", () => {
     const html = renderToStaticMarkup(<BarChart
       title="虚构净变化"
@@ -105,7 +118,7 @@ describe("BarChart", () => {
     expect(html).toContain('class="chart vertical-labels"');
     expect(html).toContain('class="bars-scroll vertical-labels"');
     expect(html).toContain("min-width:840px");
-    expect(html).toContain("--bar-slot-width:60px");
+    expect(html).toContain("width:834px;margin-left:3px;grid-template-columns:repeat(14,minmax(0,1fr))");
   });
 
   it("柱子数量增加时自动缩小单柱槽位", () => {
@@ -120,6 +133,7 @@ describe("BarChart", () => {
     />);
 
     expect(html).toContain('class="recharts-bar-plot dense"');
-    expect(html).toContain("--bar-slot-width:70px");
+    expect(html).toContain("min-width:700px");
+    expect(html).toContain("width:694px;margin-left:3px;grid-template-columns:repeat(10,minmax(0,1fr))");
   });
 });

@@ -1,6 +1,7 @@
 import { notebookRunRequestSchema, NOTEBOOK_LIMITS } from "@/core/notebook/contracts";
 import { cellsToRun } from "@/core/notebook/graph";
 import { runNotebook } from "@/core/notebook/server/runtime";
+import { createNotebookResultCapture } from "@/core/notebook/server/result-capture";
 import { resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { requestDatasetRepository, requestProject, projectErrorResponse } from "@/core/projects/server/request";
 import { ProjectError } from "@/core/projects/server/store";
@@ -10,6 +11,7 @@ import { demoFixtureResult } from "@/fixtures/demo-product";
 import { executeConnectionSql } from "@/core/connections/server/query";
 import { assertLocalProjectRequest, requestProjectHandle } from "@/core/projects/server/request";
 import { notebookDatasetProvenance } from "@/core/notebook/provenance";
+import { NOTEBOOK_DASHBOARD_MESSAGES, notebookDashboardSnapshotIssue } from "@/core/notebook/dashboard-policy";
 
 export const runtime = "nodejs";
 const headers = { "cache-control": "private, no-store", "x-content-type-options": "nosniff" };
@@ -18,6 +20,7 @@ export async function POST(request: Request) {
   const fetchSite = request.headers.get("sec-fetch-site");
   if ((origin && origin !== new URL(request.url).origin) || (fetchSite && !["same-origin", "none"].includes(fetchSite))) return Response.json({ error: { message: "只允许当前网站运行本地查询" } }, { status: 403, headers });
   if (!["application/json", "multipart/form-data"].includes(request.headers.get("content-type")?.split(";", 1)[0] ?? "")) return Response.json({ error: { message: "必须使用 JSON 或文件请求" } }, { status: 415, headers });
+  let capture: ReturnType<typeof createNotebookResultCapture> | undefined;
   try {
     const uploaded = await readNotebookRequest(request);
     const parsed = notebookRunRequestSchema.parse(uploaded.raw);
@@ -34,21 +37,25 @@ export async function POST(request: Request) {
       if (!source || !rows) throw new Error("源数据不存在或已过期，请重新导入并在 Data 单元中重新选择数据源");
       return { source, rows };
     }));
+    if (parsed.action !== "run" && parsed.targetCellId) {
+      capture = createNotebookResultCapture({ cellId: parsed.targetCellId, revision: parsed.document.revision, accessMode: "user", signal: request.signal });
+    }
     const run = await runNotebook({ document: parsed.document, sources, semanticModels: parsed.semanticModels,
       pythonFiles: resolveNotebookPythonFiles(request, cellsToRun(parsed.document, parsed.targetCellId), uploaded.files),
       connectionQuery: (connectionId, sql, signal) => executeConnectionSql({ connectionId, sql, signal, project: requestProjectHandle(request) }),
-      targetCellId: parsed.targetCellId, signal: request.signal, userId: identity.ownerId });
+      targetCellId: parsed.targetCellId, signal: request.signal, userId: identity.ownerId, publishResult: capture?.publishResult });
     if (parsed.action !== "run") {
       const cell = parsed.document.cells.find((item) => item.id === parsed.targetCellId);
       const result = run.cells.find((item) => item.cellId === parsed.targetCellId);
-      if (!cell || !result?.table || result.status !== "success" || result.table.truncated) throw new Error("只有成功且未截断的表格结果才能放入看板；请先筛选或聚合数据");
-      const table = result.table;
+      if (!cell || !result?.table || result.status !== "success" || !result.resultRef?.complete) throw new Error("只有成功且未截断的表格结果才能放入看板；请先筛选或聚合数据");
+      if (!capture) throw new Error("本次运行没有可保存的完整结果");
+      // The wire table is only a preview. Read the matching full result from
+      // this authorized request, never from a client-supplied/global result ID.
+      const table = capture.read(result.resultRef);
       if (!table.rows.length) throw new Error("结果为空，不能生成看板数据快照");
-      if (parsed.action === "snapshot" && table.rows.length > 500) throw new Error("看板快照最多 500 行，请先筛选或聚合数据");
-      if (parsed.action === "snapshot" && cell.kind === "chart") {
-        const categories = table.rows.map((row) => String(row[cell.categoryField]));
-        if (new Set(categories).size !== categories.length) throw new Error("看板图表需要唯一分类，请先聚合，不会自动合并重复分类");
-        if (table.rows.some((row) => cell.valueFields.some((field) => typeof row[field] !== "number" || !Number.isFinite(row[field])))) throw new Error("当前看板图表不支持空数值，请先在 SQL 中明确处理 NULL");
+      if (parsed.action === "snapshot") {
+        const issue = notebookDashboardSnapshotIssue(cell, table);
+        if (issue) throw new Error(NOTEBOOK_DASHBOARD_MESSAGES[issue]);
       }
       const encode = (value: unknown) => '"' + String(value ?? "").replaceAll('"', '""') + '"';
       const csv = [table.fields.map((field) => encode(field.name)).join(","), ...table.rows.map((row) => table.fields.map((field) => encode(row[field.name])).join(","))].join("\n");
@@ -110,5 +117,7 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof ProjectError) return projectErrorResponse(error);
     return Response.json({ error: { message: error instanceof Error ? error.message.slice(0, 1_000) : "Notebook 运行失败" } }, { status: 400, headers });
+  } finally {
+    capture?.dispose();
   }
 }

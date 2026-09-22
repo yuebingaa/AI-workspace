@@ -10,7 +10,7 @@ export const datasetLineageSchema = z.object({
   rowCount: z.number().int().nonnegative(), complete: z.boolean(), dataSignature: fingerprint,
   steps: z.array(z.object({
     cellId: z.string().min(1).max(120), title: z.string().min(1).max(160),
-    kind: z.enum(["data", "sql", "python", "warehouseSql", "semanticQuery", "transform", "table", "chart", "text"]),
+    kind: z.enum(["data", "sql", "python", "warehouseSql", "semanticQuery", "transform", "table", "chart", "text", "parameter"]),
     inputCellIds: z.array(z.string().max(120)).max(10),
     resultId: z.string().max(240).optional(), queryId: id.optional(),
     dataSignature: fingerprint.optional(), catalogRef: catalogReferenceSchema.optional(),

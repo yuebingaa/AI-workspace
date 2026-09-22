@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NOTEBOOK_CELL_KINDS } from "@/core/notebook/cell-catalog";
 import { buildNotebookSearchIndex, searchNotebookIndex, type NotebookIndexEntry } from "@/core/notebook/search";
 import { StudioValidationError } from "@/core/schemas";
 import type { HarnessToolExecutionResult } from "./contracts";
@@ -8,7 +9,7 @@ import type { NotebookCellSession } from "./notebook-cell-tools";
 export const cellSearchSchema = z.object({
   query: z.string().max(160).optional(), cellId: z.string().min(1).max(120).optional(),
   variable: z.string().min(1).max(120).optional(),
-  kind: z.enum(["data", "sql", "python", "warehouseSql", "semanticQuery", "transform", "table", "chart", "text"]).optional(),
+  kind: z.enum(NOTEBOOK_CELL_KINDS).optional(),
   searchIn: z.enum(["metadata", "source"]).default("metadata"),
   direction: z.enum(["self", "upstream", "downstream", "both"]).default("self"),
   depth: z.number().int().min(1).max(30).default(30),
@@ -21,19 +22,33 @@ export const cellSearchSchema = z.object({
   editVersion: z.number().int().nonnegative().optional(), runId: z.string().min(1).max(160).optional(),
 }).strict().refine((value) => !(value.cellId && value.variable), "cellId 与 variable 只能选择一个定位方式");
 
-function fail(message: string): never { throw new StudioValidationError("Notebook 检索失败", [message]); }
+const searchStateMessages = {
+  notebook_search_version_stale: "草稿版本已变化，请重新搜索，不能续读旧索引。",
+  notebook_search_run_stale: "运行结果已变化或失效，请重新读取输出，不能续读旧运行。",
+  notebook_search_budget_exceeded: "单元检索摘要超过当前工具预算，请缩小检索范围。",
+} as const;
+
+/** Preserve the existing validation category without exporting run IDs or input values. */
+export class NotebookSearchStateError extends StudioValidationError {
+  constructor(readonly code: keyof typeof searchStateMessages) {
+    super("Notebook 检索失败", [searchStateMessages[code]]);
+    this.name = "NotebookSearchStateError";
+  }
+}
+
+function fail(code: keyof typeof searchStateMessages): never { throw new NotebookSearchStateError(code); }
 function summary(entry: NotebookIndexEntry) {
   return { id: entry.id, kind: entry.kind, title: entry.title, index: entry.index,
     ...(entry.outputName ? { outputName: entry.outputName } : {}) };
 }
 
 export function searchNotebookCellSession(args: z.infer<typeof cellSearchSchema>, context: HarnessToolContext, state: NotebookCellSession): HarnessToolExecutionResult {
-  if (args.editVersion !== undefined && args.editVersion !== state.editVersion) fail("草稿版本已变化，请重新搜索，不能续读旧索引。");
+  if (args.editVersion !== undefined && args.editVersion !== state.editVersion) fail("notebook_search_version_stale");
   const index = buildNotebookSearchIndex(state.document);
   const { anchor, matches } = searchNotebookIndex(index, args);
   const target = anchor ?? matches[args.offset]?.entry;
   const runCurrent = Boolean(state.run && state.runVersion === state.editVersion && state.run.revision === state.document.revision);
-  if (args.runId && (!runCurrent || state.run?.runId !== args.runId)) fail("运行结果已变化或失效，请重新读取输出，不能续读旧运行。");
+  if (args.runId && (!runCurrent || state.run?.runId !== args.runId)) fail("notebook_search_run_stale");
   const runStatus = runCurrent ? state.run!.status
     : state.run || state.lastRunVersion !== undefined ? "stale" : "notRun";
   const source = target && args.view === "source" ? index.sourceById.get(target.id)! : "";
@@ -122,7 +137,7 @@ export function searchNotebookCellSession(args: z.infer<typeof cellSearchSchema>
         if (JSON.stringify(resultData()).length <= (context.resultBudgetChars ?? 4_000)) low = middle;
         else high = middle - 1;
       }
-      if (!low) fail("单元检索摘要超过当前工具预算，请缩小检索范围。");
+      if (!low) fail("notebook_search_budget_exceeded");
       resize(low);
     } else if (lineage && lineage.links.length > 1) {
       lineage.links.pop(); lineage.nextLinkOffset = args.linkOffset + lineage.links.length;
@@ -133,7 +148,7 @@ export function searchNotebookCellSession(args: z.infer<typeof cellSearchSchema>
     } else if (outputRows.length > 1) outputRows = outputRows.slice(0, -1);
     else if (fields.length > 1) fields.pop();
     else if (valueLimit > 20) valueLimit = Math.floor(valueLimit / 2);
-    else fail("单元检索摘要超过当前工具预算，请缩小检索范围。");
+    else fail("notebook_search_budget_exceeded");
   }
   context.signal?.throwIfAborted();
   return { summary: `Notebook 共 ${index.entries.length} 个单元，本次匹配 ${matches.length} 个。${args.view === "output"

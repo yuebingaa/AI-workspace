@@ -60,9 +60,44 @@ describe("Notebook 结构索引与声明血缘", () => {
     const duplicate = document(); duplicate.cells[1] = { ...duplicate.cells[0], id: "b" };
     expect(() => buildNotebookSearchIndex(duplicate)).toThrow("输出名称重复");
     const cycle = document(); cycle.cells[2] = { id: "join", kind: "sql", title: "循环", outputName: "alarms", inputCellIds: ["totals"], sql: "SELECT 1" };
-    expect(() => buildNotebookSearchIndex(cycle)).toThrow("必须引用");
+    expect(() => buildNotebookSearchIndex(cycle)).toThrow("循环依赖");
     const missing = document(); missing.cells.splice(0, 1);
-    expect(() => buildNotebookSearchIndex(missing)).toThrow("必须引用");
+    expect(() => buildNotebookSearchIndex(missing)).toThrow("引用的依赖不存在：a");
     expect(searchNotebookIndex(buildNotebookSearchIndex({ name: "空分析", revision: 0, cells: [] }), defaults).matches).toEqual([]);
+  });
+  it("显示顺序与执行顺序分离后仍保留位置、原始源码和完整血缘", () => {
+    const original = document();
+    const doc = { ...original, cells: [...original.cells].reverse() };
+    const index = buildNotebookSearchIndex(doc);
+    expect(index.entries.map((entry) => entry.id)).toEqual(doc.cells.map((cell) => cell.id));
+    expect(index.byId.get("chart")).toMatchObject({ index: 1, upstream: ["totals"], sourceDataSourceIds: ["dataset_a", "dataset_b"] });
+    for (const [position, cell] of doc.cells.entries()) {
+      expect(index.byId.get(cell.id)?.index).toBe(position);
+      expect(index.sourceById.get(cell.id)).toBe(JSON.stringify(cell, null, 2));
+    }
+    const matches = searchNotebookIndex(index, { ...defaults, cellId: "chart", direction: "upstream" });
+    expect(matches.matches.map(({ entry }) => entry.id)).toEqual(["chart", "totals", "right", "left", "join", "b", "a"]);
+    expect(index.byId.get("join")?.downstream).toEqual(["right", "left"]);
+  });
+  it("乱序索引不混淆各单元未修剪的存储源码或原件与连接范围", () => {
+    const doc: NotebookDocument = { name: "来源", revision: 1, cells: [
+      { id: "show", kind: "table", title: "展示", inputCellId: "py", columns: ["value"] },
+      { id: "py", kind: "python", title: "计算", inputCellIds: ["remote"], outputName: "result", code: "result = remote_data\n", fileNames: ["synthetic.csv"] },
+      { id: "remote", kind: "warehouseSql", title: "数据库", connectionId: "test_connection", outputName: "remote_data", sql: "SELECT 1 AS value\n" },
+    ] };
+    const index = buildNotebookSearchIndex(doc);
+    expect(index.byId.get("show")).toMatchObject({ connectionIds: ["test_connection"], sourceFileNames: ["synthetic.csv"] });
+    expect(index.sourceById.get("remote")).toBe(JSON.stringify(doc.cells[2], null, 2));
+    expect(index.sourceById.get("py")).toBe(JSON.stringify(doc.cells[1], null, 2));
+  });
+  it("沿用Schema修剪标识的兼容性，但读取源码仍为原始定义", () => {
+    const doc: NotebookDocument = { name: "兼容", revision: 0, cells: [
+      { id: " show ", kind: "table", title: " 展示 ", inputCellId: " query ", columns: ["value"] },
+      { id: " query ", kind: "warehouseSql", title: " 查询 ", connectionId: "synthetic_connection", outputName: " totals ", sql: "SELECT 1 AS value\n" },
+    ] };
+    const index = buildNotebookSearchIndex(doc);
+    expect(index.entries.map((entry) => [entry.id, entry.index])).toEqual([["show", 0], ["query", 1]]);
+    expect(index.byId.get("show")?.inputs).toEqual([{ cellId: "query", variable: "totals" }]);
+    expect(index.sourceById.get("query")).toBe(JSON.stringify(doc.cells[1], null, 2));
   });
 });

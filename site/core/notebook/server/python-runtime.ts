@@ -150,7 +150,7 @@ export async function createNotebookPythonSession(signal: AbortSignal): Promise<
             return vm.runPython("_ac_run_cell(_ac_payload)") as string;
           }, { code: input.code, outputName: input.outputName, tables, files });
           const serialized = await Promise.race([computation, new Promise<never>((_, reject) => {
-            timer = setTimeout(() => { void close(); reject(new Error("Python 单元运行超过 10 秒，已终止本次执行；请简化计算后重跑")); }, 10_000);
+            timer = setTimeout(() => { void close(); reject(new DOMException("Python 单元运行超过 10 秒，已终止本次执行；请简化计算后重跑", "TimeoutError")); }, 10_000);
           })]);
           executionSignal.throwIfAborted();
           if (Buffer.byteLength(serialized) > MAX_BYTES) throw new Error("Python 返回结果超过 16 MiB");

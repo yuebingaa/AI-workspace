@@ -6,7 +6,7 @@ import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/co
 import { StudioValidationError } from "@/core/schemas";
 import { requestDatasetRepository, projectErrorResponse } from "@/core/projects/server/request";
 import { ProjectError } from "@/core/projects/server/store";
-import type { DatasetRepository } from "@/core/datasets/server/dataset-repository";
+import type { DatasetRepository } from "@/core/datasets/repository";
 
 export const runtime = "nodejs";
 const CSV_UPLOAD_TIMEOUT_MS = 15_000;
@@ -22,8 +22,8 @@ function jsonError(message: string, status: number) {
 }
 
 export async function persistDatasetResponse(
-  identity: Parameters<typeof datasetRepository.put>[0],
-  parsed: Parameters<typeof datasetRepository.put>[1],
+  identity: Parameters<DatasetRepository["put"]>[0],
+  parsed: Parameters<DatasetRepository["put"]>[1],
   maxResponseBytes?: number,
   repository: DatasetRepository = datasetRepository,
 ): Promise<string> {

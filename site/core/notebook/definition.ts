@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { dataRecipeStepSchema } from "@/core/schemas/data-recipe";
+import { notebookParameterSchema } from "./parameter";
+import { notebookTextReferencesSchema, validateNotebookTextTemplate } from "./text-references";
 
 export const MAX_NOTEBOOK_CELLS = 30;
 
@@ -8,6 +10,14 @@ const notebookIdentifierSchema = z.string().trim().min(1).max(120)
 const notebookOutputNameSchema = z.string().trim().min(1).max(120)
   .regex(/^[A-Za-z][A-Za-z0-9_]*$/u);
 const notebookTitleSchema = z.string().trim().min(1).max(120);
+
+export const parameterCellSchema = z.object({
+  id: notebookIdentifierSchema,
+  kind: z.literal("parameter"),
+  title: notebookTitleSchema,
+  outputName: notebookOutputNameSchema,
+  parameter: notebookParameterSchema,
+}).strict();
 
 const dataCellSchema = z.object({
   id: notebookIdentifierSchema,
@@ -89,7 +99,11 @@ const textCellSchema = z.object({
   kind: z.literal("text"),
   title: notebookTitleSchema,
   markdown: z.string().trim().min(1).max(4_000),
-}).strict();
+  references: notebookTextReferencesSchema.optional(),
+}).strict().superRefine((cell, context) => {
+  try { validateNotebookTextTemplate(cell); }
+  catch (error) { context.addIssue({ code: "custom", path: ["markdown"], message: error instanceof Error ? error.message : "文本引用无效" }); }
+});
 
 export const notebookCellSchema = z.discriminatedUnion("kind", [
   dataCellSchema,
@@ -101,6 +115,7 @@ export const notebookCellSchema = z.discriminatedUnion("kind", [
   tableCellSchema,
   chartCellSchema,
   textCellSchema,
+  parameterCellSchema,
 ]);
 export type NotebookCell = z.infer<typeof notebookCellSchema>;
 

@@ -180,7 +180,8 @@ describe("Harness Analysis Planner", () => {
     expect(runCount).toBe(1);
     expect(task.contextUsage?.limitReached).toBeUndefined();
     if (largeContext) expect(task.contextUsage?.requests.some((entry) => entry.inputChars > 10_000)).toBe(true);
-    else expect(task.contextUsage?.requests.every((entry) => entry.inputChars <= 10_000)).toBe(true);
+    else expect(task.contextUsage?.requests.every((entry) => entry.inputChars <= 10_000),
+      JSON.stringify(task.contextUsage?.requests.map(({ inputChars, phase }) => ({ inputChars, phase })))).toBe(true);
     expect(input.request).toEqual(before);
   });
 

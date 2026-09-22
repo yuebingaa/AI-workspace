@@ -3,6 +3,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ExcelExportArtifact } from "@/core/exports/contracts";
 import { ExcelDownloadError, fetchExcelExport } from "@/core/exports/client";
+import { triggerBrowserDownload } from "@/core/exports/browser-download";
+
+// Compatibility for existing imports; the shared browser effect has one implementation.
+export { triggerBrowserDownload } from "@/core/exports/browser-download";
 
 export function remainingExcelExportLifetimeMs(expiresAt: string, nowMs: number): number {
   const expiresAtMs = Date.parse(expiresAt);
@@ -28,21 +32,6 @@ export function canApplyExcelDownloadResult(input: {
     && input.activeRequestMatches
     && !input.aborted
     && input.requestArtifactId === input.currentArtifactId;
-}
-
-export function triggerBrowserDownload(blob: Blob, fileName: string): void {
-  const url = URL.createObjectURL(blob);
-  let anchor: HTMLAnchorElement | null = null;
-  try {
-    anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-  } finally {
-    anchor?.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
 }
 
 export function ExcelDownloadButton({ artifact, label }: { artifact: ExcelExportArtifact; label: string }) {

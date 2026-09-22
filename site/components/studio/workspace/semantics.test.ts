@@ -55,4 +55,31 @@ describe("语义模型界面控制器", () => {
     state.role = "editor"; state.busy = true;
     expect(() => actions.save(model)).toThrow("等待"); expect(() => actions.select(null)).toThrow("等待"); expect(() => actions.remove(model.id)).toThrow("等待");
   });
+  it("refuses a newly added Notebook reference before confirming or committing", () => {
+    const { state, model, source } = context(); const actions = createStudioSemanticActions(state); actions.save(model);
+    state.latestDatasetWorkspaceRef.current.dataProduct.notebooks = { page_home: { name: "引用分析", revision: 1, cells: [
+      { id: "data", kind: "data", title: "输入", sourceDataSourceId: source.id, outputName: "raw" },
+      { id: "query", kind: "semanticQuery", title: "汇总", inputCellId: "data", modelId: model.id, modelVersion: model.version,
+        dimensions: [], measures: ["revenue"], limit: 10, outputName: "totals" },
+    ] } };
+    const before = structuredClone(state.latestDatasetWorkspaceRef.current), confirm = vi.fn(() => true);
+    vi.mocked(state.persistExplicitly).mockClear(); vi.mocked(state.setDataProduct).mockClear(); vi.stubGlobal("window", { confirm });
+    expect(() => actions.remove(model.id)).toThrow("引用");
+    expect(confirm).not.toHaveBeenCalled(); expect(state.persistExplicitly).not.toHaveBeenCalled(); expect(state.setDataProduct).not.toHaveBeenCalled();
+    expect(state.latestDatasetWorkspaceRef.current).toEqual(before);
+  });
+  it("rechecks the latest definitions after confirmation instead of committing a stale candidate", () => {
+    const { state, model, source } = context(); const actions = createStudioSemanticActions(state); actions.save(model);
+    vi.mocked(state.persistExplicitly).mockClear();
+    vi.stubGlobal("window", { confirm: () => {
+      state.latestDatasetWorkspaceRef.current.dataProduct.notebooks = { page_home: { name: "新引用", revision: 1, cells: [
+        { id: "data", kind: "data", title: "输入", sourceDataSourceId: source.id, outputName: "raw" },
+        { id: "query", kind: "semanticQuery", title: "汇总", inputCellId: "data", modelId: model.id, modelVersion: model.version,
+          dimensions: [], measures: ["revenue"], limit: 10, outputName: "totals" },
+      ] } }; return true;
+    } });
+    expect(() => actions.remove(model.id)).toThrow("引用"); expect(state.persistExplicitly).not.toHaveBeenCalled();
+    expect(state.latestDatasetWorkspaceRef.current.dataProduct.semanticLayer?.models).toHaveLength(1);
+    expect(state.latestDatasetWorkspaceRef.current.dataProduct.notebooks?.page_home.cells).toHaveLength(2);
+  });
 });

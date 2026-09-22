@@ -1,13 +1,15 @@
 import { notebookCellSchema, type NotebookCell } from "@/core/notebook/definition";
+import { notebookCellPresentation } from "./cell-presentation";
 
 export function cellSource(cell: NotebookCell): { language: string; value: string } {
-  if (cell.kind === "python") return { language: "Python", value: cell.code };
-  if (cell.kind === "sql" || cell.kind === "warehouseSql") return { language: "SQL", value: cell.sql };
-  if (cell.kind === "text") return { language: "Markdown", value: cell.markdown };
-  if (cell.kind === "transform") return { language: "DataRecipe · JSON", value: JSON.stringify(cell.steps, null, 2) };
+  const language = notebookCellPresentation[cell.kind].sourceLanguage;
+  if (cell.kind === "python") return { language, value: cell.code };
+  if (cell.kind === "sql" || cell.kind === "warehouseSql") return { language, value: cell.sql };
+  if (cell.kind === "text") return { language, value: cell.markdown };
+  if (cell.kind === "transform") return { language, value: JSON.stringify(cell.steps, null, 2) };
   const { id, title, kind, ...configuration } = cell;
-  void id; void title;
-  return { language: kind === "data" ? "数据引用" : kind === "semanticQuery" ? "查询配置" : "展示配置", value: JSON.stringify(configuration, null, 2) };
+  void id; void title; void kind;
+  return { language, value: JSON.stringify(configuration, null, 2) };
 }
 
 // Review all definition fields as well as SQL, so rebinding inputs or a connection

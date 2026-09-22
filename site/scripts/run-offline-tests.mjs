@@ -9,6 +9,7 @@ const vitestCliPath = join(dirname(moduleRequire.resolve("vitest/package.json"))
 const toolTestPaths = [
   join(scriptDirectory, "eds-browser-acceptance.test.mjs"),
   join(scriptDirectory, "run-offline-tests.test.mjs"),
+  join(scriptDirectory, "copy-notebook-runtime.test.mjs"),
 ];
 
 export function runCommand(executable, args) {

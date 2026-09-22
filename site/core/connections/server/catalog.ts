@@ -4,6 +4,7 @@ import { CATALOG_LIMITS, type CatalogAccess, type CatalogRepository } from "@/co
 import { catalogStoreSchema, createCatalogRepository } from "@/core/metadata/server/catalog-repository";
 import { configuredSnapshotAdapter } from "@/core/persistence/server/json-file-snapshot";
 import { resolveConnection } from "./config";
+import { resolveConnectionCredential } from "./local-config";
 import type { ConnectionSchema } from "../contracts";
 import type { ConnectionSchemaInput } from "./query-contracts";
 
@@ -21,7 +22,7 @@ export function createConnectionCatalog(inspectSource: (input: ConnectionSchemaI
   };
   function authorize(access: CatalogAccess) {
     const config = resolveConnection(access.connectionId, access.project, access.forAi ?? false);
-    const credential = process.env[config.kind === "postgresql" ? config.passwordEnv : config.tokenEnv] ?? "";
+    const credential = resolveConnectionCredential(config) ?? "";
     const identity = config.kind === "postgresql"
       ? [config.kind, config.host, config.port, config.database, config.user, config.ssl]
       : [config.kind, config.host, config.warehouseId, config.catalog, config.schema];

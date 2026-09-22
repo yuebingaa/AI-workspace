@@ -82,6 +82,133 @@ function cycles(): string[][] {
 }
 
 describe("runtime module boundaries", () => {
+  it("execution engine settings share only portable contracts; legacy runtime does not depend on DSH", () => {
+    const contract = "core/agent-engines/contracts.ts";
+    expect([...reachable(contract, declaredGraph)]).toEqual([contract]);
+    const view = "components/studio/AgentEngineSettings.tsx";
+    expect([...reachable(view, declaredGraph)]).toContain(contract);
+    expect([...reachable(view, declaredGraph)].filter((name) => name.includes("/server/") || name.startsWith("core/harness/"))).toEqual([]);
+    for (const entry of ["core/harness/runtime.ts", "core/harness/agents/coordinator.ts"]) {
+      expect([...reachable(entry, declaredGraph)].filter((name) => name.startsWith("core/agent-engines/") || name.startsWith("runtime/dsh/"))).toEqual([]);
+    }
+    const adapter = "core/agent-engines/server/dsh-engine.ts";
+    expect([...reachable(adapter)]).not.toContain("core/harness/runtime.ts");
+    expect([...reachable(adapter)]).not.toContain("core/ai/server/deepseek-harness-model.ts");
+  });
+  it("project inspection views depend on a read-only DTO, not project installation or execution", () => {
+    const entries = ["core/projects/inspection.ts", "core/projects/inspection-client.ts", "components/studio/projects/ProjectInspectionPanel.tsx"];
+    for (const entry of entries) {
+      expect(sources.has(entry)).toBe(true);
+      const dependencies = [...reachable(entry, declaredGraph)];
+      expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("core/harness/")
+        || name === "core/projects/client.ts" || name === "core/projects/contracts.ts"
+        || name === "core/projects/state-repository.ts" || name.endsWith("LocalProjectsProvider.tsx"))).toEqual([]);
+    }
+    for (const entry of ["core/notebook/definition.ts", "core/notebook/server/execution.ts", "core/projects/state-repository.ts"]) {
+      expect([...reachable(entry, declaredGraph)]).not.toContain("core/projects/server/inspection.ts");
+    }
+  });
+  it("project compatibility diagnostics stay portable and do not relax executable Cell schemas", () => {
+    const entry = "core/projects/compatibility.ts";
+    expect(sources.has(entry)).toBe(true);
+    const dependencies = [...reachable(entry, declaredGraph)];
+    expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("core/harness/")
+      || name.startsWith("components/") || name.startsWith("app/") || name === "core/projects/client.ts")).toEqual([]);
+    for (const name of dependencies) {
+      expect(imports(sources.get(name)!, name, true).filter((specifier) => /^(?:node:|react(?:\/|$)|pg$|@duckdb\/)/u.test(specifier))).toEqual([]);
+    }
+    expect([...reachable("core/notebook/definition.ts", declaredGraph)]).not.toContain(entry);
+    expect([...reachable("core/notebook/contracts.ts", declaredGraph)]).not.toContain(entry);
+  });
+  it("Notebook dashboard review and policy remain portable and do not own persistence or execution", () => {
+    for (const entry of ["core/notebook/dashboard-review.ts", "core/notebook/dashboard-policy.ts"]) {
+      expect(sources.has(entry)).toBe(true);
+      const dependencies = [...reachable(entry, declaredGraph)];
+      expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("core/harness/")
+        || name.startsWith("core/projects/") || name.startsWith("components/") || name.startsWith("app/"))).toEqual([]);
+      for (const name of dependencies) {
+        expect(imports(sources.get(name)!, name, true).filter((specifier) => /^(?:node:|react(?:\/|$)|pg$|@duckdb\/)/u.test(specifier))).toEqual([]);
+      }
+    }
+  });
+  it("dashboard rendering accepts review content without importing Notebook execution or review internals", () => {
+    const dependencies = [...reachable("components/studio/DataProductCanvas.tsx")];
+    expect(dependencies.filter((name) => name.includes("/server/")
+      || ["core/notebook/dashboard-review.ts", "core/notebook/dashboard-policy.ts", "core/notebook/dashboard.ts"].includes(name))).toEqual([]);
+  });
+  it("CSV serialization depends on portable tables, not Notebook policy or browser/server effects", () => {
+    const entry = "core/exports/table-csv.ts";
+    expect(sources.has(entry)).toBe(true);
+    const dependencies = [...reachable(entry, declaredGraph)];
+    expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("core/notebook/")
+      || name.startsWith("core/harness/") || name.startsWith("components/") || name.startsWith("app/"))).toEqual([]);
+    expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
+      || ref.startsWith("react/") || ref.startsWith("node:") || ref.startsWith("next/") || ref === "pg")).toEqual([]);
+    expect(sources.get(entry)).not.toMatch(/\b(?:window|document|localStorage|sessionStorage)\s*\./u);
+  });
+
+  it("browser download has no infrastructure imports and the Excel compatibility export shares its implementation", () => {
+    const entry = "core/exports/browser-download.ts";
+    expect(sources.has(entry)).toBe(true);
+    expect(direct.get(entry)).toEqual([]);
+    expect(graph.get("components/studio/ExcelDownloadButton.tsx")).toContain(entry);
+    expect(sources.get("components/studio/ExcelDownloadButton.tsx")).not.toContain("URL.createObjectURL");
+    expect(graph.get("components/studio/notebook/NotebookResultTable.tsx")).toContain(entry);
+  });
+
+  it("dependency scheduling, output rename analysis and search stay independent of UI, Harness and server adapters", () => {
+    for (const entry of ["core/notebook/graph.ts", "core/notebook/search.ts", "core/notebook/output-renames.ts"]) {
+      expect(sources.has(entry), entry).toBe(true);
+      const dependencies = [...reachable(entry, declaredGraph)];
+      expect(dependencies.filter((name) => name.startsWith("core/harness/") || name.includes("/server/")
+        || name.startsWith("app/") || name.startsWith("components/")), entry).toEqual([]);
+      expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
+        || ref.startsWith("react/") || ref.startsWith("next/") || ref.startsWith("node:") || ref === "pg"), entry).toEqual([]);
+    }
+  });
+  it("shared table shapes depend only on schema validation, not Notebook policy or execution", () => {
+    const entry = "core/datasets/table-contracts.ts";
+    expect(sources.has(entry)).toBe(true);
+    expect([...reachable(entry, declaredGraph)]).toEqual([entry]);
+    expect(direct.get(entry)).toEqual(["zod"]);
+  });
+  it("Dataset repository ports and SQL preflight do not initialize infrastructure", () => {
+    for (const entry of ["core/datasets/repository.ts", "core/sql/read-only-query.ts"]) {
+      expect(sources.has(entry), entry).toBe(true);
+      expect([...reachable(entry)], entry).toEqual([entry]);
+      expect(direct.get(entry), entry).toEqual([]);
+    }
+  });
+  it("connection code owns query policy without depending on Notebook definitions or limits", () => {
+    for (const entry of [...sources.keys()].filter((name) => name.startsWith("core/connections/"))) {
+      expect([...reachable(entry, declaredGraph)].filter((name) => name.startsWith("core/notebook/")), entry).toEqual([]);
+    }
+  });
+  it("project storage can use Dataset errors without loading the temporary repository singleton", () => {
+    expect([...reachable("core/projects/server/store.ts")]).not.toContain("core/datasets/server/dataset-repository.ts");
+  });
+  it("Dataset statistics remain pure and shared without UI, Harness or infrastructure dependencies", () => {
+    const entry = "core/datasets/quality-profile.ts";
+    expect([...reachable(entry)]).toEqual([entry]);
+    expect(direct.get(entry)).toEqual([]);
+  });
+  it("Cell catalog and table/chart projection have no runtime dependencies", () => {
+    for (const entry of ["core/notebook/cell-catalog.ts", "core/notebook/presentation-table.ts"]) {
+      expect(sources.has(entry), entry).toBe(true);
+      expect([...reachable(entry)], entry).toEqual([entry]);
+      expect(direct.get(entry), entry).toEqual([]);
+    }
+  });
+  it("Cell presentation and default creation cannot load React, Harness or server effects", () => {
+    for (const entry of ["components/studio/notebook/cell-presentation.ts", "components/studio/notebook/cell-creation.ts"]) {
+      expect(sources.has(entry), entry).toBe(true);
+      const dependencies = [...reachable(entry)];
+      expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("app/")
+        || name.startsWith("core/harness/") || name.endsWith(".tsx")), entry).toEqual([]);
+      expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
+        || ref.startsWith("react/") || ref.startsWith("next/") || ref.startsWith("node:") || ref === "pg"), entry).toEqual([]);
+    }
+  });
   it("Input Inspector cannot read files, run queries/code or call models", () => {
     const dependencies = [...reachable("core/harness/input-inspector.ts")];
     expect(dependencies.sort()).toEqual(["core/harness/input-inspector.ts", "core/harness/security.ts"]);
@@ -116,7 +243,7 @@ describe("runtime module boundaries", () => {
   });
 
   it("Notebook owns its definitions without runtime or type-only dependencies on Harness", () => {
-    for (const entry of ["definition.ts", "contracts.ts", "execution-contracts.ts", "graph.ts", "client-state.ts", "transform.ts", "dashboard.ts"]) {
+    for (const entry of ["definition.ts", "cell-catalog.ts", "presentation-table.ts", "result-access.ts", "result-availability.ts", "contracts.ts", "execution-contracts.ts", "graph.ts", "client-state.ts", "transform.ts", "dashboard.ts"]) {
       expect([...reachable(`core/notebook/${entry}`, declaredGraph)].filter((name) => name.startsWith("core/harness/")), entry).toEqual([]);
     }
     for (const entry of [...sources.keys()].filter((name) => name.startsWith("components/studio/notebook/"))) {
@@ -127,8 +254,76 @@ describe("runtime module boundaries", () => {
   it("Notebook execution depends on ports, not the default engine or log storage", () => {
     const dependencies = [...reachable("core/notebook/server/execution.ts", declaredGraph)];
     expect(dependencies.filter((name) => name === "core/notebook/server/runtime.ts" || name === "core/notebook/server/query-engine.ts"
-      || name === "core/notebook/server/query-log.ts" || name.startsWith("core/persistence/server/") || name.startsWith("core/harness/"))).toEqual([]);
+      || name === "core/notebook/server/query-log.ts" || name === "core/notebook/server/result-capture.ts"
+      || name.startsWith("core/persistence/server/") || name.startsWith("core/harness/"))).toEqual([]);
     expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ["node:fs", "node:fs/promises", "node:child_process", "pg"].includes(ref))).toEqual([]);
+  });
+
+  it("Notebook result contracts and availability remain independent of UI and server storage", () => {
+    for (const entry of ["core/notebook/result-access.ts", "core/notebook/result-availability.ts"]) {
+      expect(sources.has(entry), entry).toBe(true);
+      const dependencies = [...reachable(entry, declaredGraph)];
+      expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("components/") || name.startsWith("app/")), entry).toEqual([]);
+      expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react" || ref.startsWith("react/") || ref.startsWith("node:") || ref === "pg"), entry).toEqual([]);
+    }
+  });
+
+  it("Notebook trial receipt consistency belongs to a pure shared module used by all Harness consumers", () => {
+    const entry = "core/notebook/run-receipt.ts";
+    expect(sources.has(entry)).toBe(true);
+    const dependencies = [...reachable(entry, declaredGraph)];
+    expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("core/harness/")
+      || name.startsWith("app/") || name.startsWith("components/"))).toEqual([]);
+    expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref.startsWith("node:")
+      || ref === "react" || ref.startsWith("react/") || ref.startsWith("next/") || ref === "pg")).toEqual([]);
+    for (const consumer of ["core/harness/tool-registry.ts", "core/harness/notebook-cell-tools.ts", "core/harness/notebook-diagnostics.ts"]) {
+      expect(declaredGraph.get(consumer), consumer).toContain(entry);
+    }
+  });
+
+  it("Notebook preview sorting is pure while table interaction and chart rendering are separate", () => {
+    const preview = "core/notebook/table-preview.ts";
+    expect(sources.has(preview)).toBe(true);
+    expect(direct.get(preview)).toEqual([]);
+    const table = "components/studio/notebook/NotebookResultTable.tsx";
+    const dependencies = [...reachable(table)];
+    expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("core/harness/")
+      || name.endsWith("/NotebookChart.tsx") || name.endsWith("/NotebookPanel.tsx"))).toEqual([]);
+    expect(dependencies.flatMap((name) => direct.get(name) ?? [])).not.toContain("recharts");
+    expect(direct.get("components/studio/notebook/NotebookResult.tsx")).not.toContain("recharts");
+    expect(direct.get("components/studio/notebook/NotebookChart.tsx")).toContain("recharts");
+  });
+
+  it("Notebook parameter values remain pure and the editor does not import execution infrastructure", () => {
+    const domain = "core/notebook/parameter.ts";
+    expect(sources.has(domain)).toBe(true);
+    const dependencies = [...reachable(domain, declaredGraph)];
+    expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("components/")
+      || name.startsWith("app/") || name.startsWith("core/harness/"))).toEqual([]);
+    expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
+      || ref.startsWith("react/") || ref.startsWith("node:") || ref.startsWith("next/") || ref === "pg")).toEqual([]);
+    const editor = "components/studio/notebook/NotebookParameterEditor.tsx";
+    expect(declaredGraph.get(editor)).toContain(domain);
+    expect([...reachable(editor, declaredGraph)].filter((name) => name.includes("/server/")
+      || name.startsWith("core/harness/") || name.endsWith("/NotebookPanel.tsx"))).toEqual([]);
+  });
+
+  it("parameter recompute selection and result witnesses stay pure; request ownership stays client-only", () => {
+    for (const entry of ["core/notebook/parameter-recompute.ts", "core/notebook/result-cache.ts"]) {
+      expect(sources.has(entry), entry).toBe(true);
+      const dependencies = [...reachable(entry, declaredGraph)];
+      expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("app/")
+        || name.startsWith("components/") || name.startsWith("core/harness/")), entry).toEqual([]);
+      expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref.startsWith("node:")
+        || ref === "react" || ref.startsWith("react/") || ref.startsWith("next/") || ref === "pg"), entry).toEqual([]);
+    }
+    const ownership = "components/studio/notebook/run-control.ts";
+    expect(sources.has(ownership)).toBe(true);
+    expect(direct.get(ownership)).toEqual([]);
+    const scheduling = "components/studio/notebook/useNotebookAutoRun.ts";
+    expect(sources.has(scheduling)).toBe(true);
+    expect([...reachable(scheduling, declaredGraph)].filter((name) => name.includes("/server/")
+      || name.startsWith("core/harness/") || name.startsWith("app/"))).toEqual([]);
   });
 
   it("persistence scheduling and the project save queue do not depend on UI or HTTP adapters", () => {
@@ -139,6 +334,20 @@ describe("runtime module boundaries", () => {
       expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
         || ref.startsWith("react/") || ref.startsWith("node:") || ref === "pg"), entry).toEqual([]);
     }
+  });
+
+  it("Notebook context selection is pure metadata and its client state cannot reach execution infrastructure", () => {
+    const domain = "core/notebook/context-selection.ts";
+    expect(sources.has(domain)).toBe(true);
+    const dependencies = [...reachable(domain, declaredGraph)];
+    expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("components/")
+      || name.startsWith("app/") || name.startsWith("core/harness/"))).toEqual([]);
+    expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
+      || ref.startsWith("react/") || ref.startsWith("node:") || ref.startsWith("next/") || ref === "pg")).toEqual([]);
+    const hook = "components/studio/workspace/useNotebookContextSelection.ts";
+    expect(sources.has(hook)).toBe(true);
+    expect([...reachable(hook, declaredGraph)].filter((name) => name.includes("/server/")
+      || name.startsWith("app/") || name.startsWith("core/harness/"))).toEqual([]);
   });
 
   it("client entry points cannot import server implementations or private configuration", () => {
@@ -154,5 +363,33 @@ describe("runtime module boundaries", () => {
       }
     }
     expect([...violations].sort()).toEqual([]);
+  });
+
+  it("Python deployment availability stays server-owned and all execution entry points share it", () => {
+    const availability = "core/notebook/server/available-capabilities.ts";
+    expect(sources.has(availability)).toBe(true);
+    for (const entry of ["core/notebook/server/runtime.ts", "app/api/notebook/python/route.ts", "app/api/ai/harness/handler.ts"]) {
+      expect(declaredGraph.get(entry), entry).toContain(availability);
+      expect(sources.get(entry), entry).not.toContain("notebookCapabilitiesFromEnvironment(");
+    }
+    const dependencies = [...reachable(availability, declaredGraph)];
+    expect(dependencies.filter((name) => name.startsWith("components/") || name.startsWith("core/harness/")
+      || name.startsWith("app/") || name.endsWith("python-runtime.ts"))).toEqual([]);
+    expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
+      || ref === "playwright-core" || ref === "pg")).toEqual([]);
+  });
+
+  it("controlled text interpolation stays pure and its editor does not import execution infrastructure", () => {
+    const domain = "core/notebook/text-references.ts";
+    const dependencies = [...reachable(domain, declaredGraph)];
+    expect(dependencies.filter((name) => name.includes("/server/") || name.startsWith("components/")
+      || name.startsWith("app/") || name.startsWith("core/harness/"))).toEqual([]);
+    expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref === "react"
+      || ref.startsWith("node:") || ref.startsWith("next/") || ref === "pg")).toEqual([]);
+    for (const component of ["NotebookTextEditor.tsx", "NotebookTextResult.tsx"]) {
+      const source = `components/studio/notebook/${component}`;
+      expect([...reachable(source)].filter((name) => name.includes("/server/") || name.startsWith("core/harness/"))).toEqual([]);
+      expect(sources.get(source)).not.toMatch(/dangerouslySetInnerHTML|\beval\s*\(|new\s+Function\s*\(/u);
+    }
   });
 });

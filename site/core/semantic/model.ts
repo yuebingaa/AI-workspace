@@ -4,6 +4,7 @@ import type { DataRecipe } from "@/core/models/data-recipe";
 import type { StudioRole } from "@/core/permissions/roles";
 import { StudioValidationError } from "@/core/schemas/errors";
 import { semanticLayerSchema, semanticModelSchema, semanticQuerySchema, type SemanticModel, type SemanticQuery } from "./contracts";
+import { semanticModelReferences } from "./model-references";
 
 export function validateSemanticModel(model: SemanticModel, source: DataSourceDefinition | undefined): SemanticModel {
   const parsed = semanticModelSchema.parse(model);
@@ -67,6 +68,13 @@ export function selectSemanticModel(product: DataProduct, pageId: string, modelI
 export function deleteSemanticModel(product: DataProduct, modelId: string, role: StudioRole): DataProduct {
   assertCanManage(role);
   if (!product.semanticLayer?.models.some((item) => item.id === modelId)) throw new Error("语义模型不存在或已经删除。");
+  const references = semanticModelReferences(product, modelId);
+  if (references.length > 0) {
+    const locations = references.slice(0, 3).map((reference) =>
+      `“${reference.notebookName}”（${reference.pageId}）中的“${reference.cellTitle}”（${reference.cellId}）`).join("；");
+    const remaining = references.length > 3 ? `；另有 ${references.length - 3} 处引用` : "";
+    throw new Error(`语义模型仍被 Notebook 引用，无法删除：${locations}${remaining}。请先修改或删除这些语义查询单元。`);
+  }
   return { ...product, semanticLayer: {
     models: product.semanticLayer.models.filter((item) => item.id !== modelId),
     selectedByWorkspace: Object.fromEntries(Object.entries(product.semanticLayer.selectedByWorkspace).filter(([, id]) => id !== modelId)),

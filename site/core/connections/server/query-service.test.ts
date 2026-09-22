@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { connectionConfigSchema } from "../configuration";
-import type { NotebookTable } from "@/core/notebook/contracts";
+import type { DataTable } from "@/core/datasets/table-contracts";
 import { createConnectionQueryService } from "./query-service";
 import { ConnectionQueryError, type ConnectionDriver } from "./query-contracts";
 
 // No pg, network, environment or provider mock: exercise the application through its port.
 const config = connectionConfigSchema.parse([{ id: "test", name: "Test", kind: "postgresql", projects: ["local"], allowAi: true,
   host: "127.0.0.1", database: "test", user: "readonly", passwordEnv: "TEST_ONLY_PASSWORD" }])[0];
-const table: NotebookTable = { fields: [{ name: "exact", label: "exact", type: "string" }], rows: [{ exact: "9007199254740993" }], truncated: false };
+const table: DataTable = { fields: [{ name: "exact", label: "exact", type: "string" }], rows: [{ exact: "9007199254740993" }], truncated: false };
 const input = { connectionId: "test", project: null, forAi: true, sql: "SELECT exact FROM sample;" };
 
 function setup(execute: ConnectionDriver["execute"] = async () => table) {
@@ -18,8 +18,8 @@ function setup(execute: ConnectionDriver["execute"] = async () => table) {
 }
 
 function gate() {
-  let release!: (value: NotebookTable) => void;
-  const promise = new Promise<NotebookTable>((resolve) => { release = resolve; });
+  let release!: (value: DataTable) => void;
+  const promise = new Promise<DataTable>((resolve) => { release = resolve; });
   return { promise, release };
 }
 
@@ -85,6 +85,34 @@ describe("connection query application boundary", () => {
     const { service, resolveConnection } = setup();
     resolveConnection.mockReturnValueOnce(config).mockReturnValueOnce({ ...config, allowAi: false });
     await expect(service.executeConnectionSql(input)).rejects.toThrow("连接配置已变化");
+  });
+
+  it("uses the connection's 12-second deadline and rejects a result returned after it", async () => {
+    const timeoutController = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    try {
+      const pending = gate();
+      const { service, driver } = setup(() => pending.promise);
+      const running = service.executeConnectionSql(input);
+      expect(timeout).toHaveBeenCalledWith(12_000);
+      expect(driver.execute).toHaveBeenCalledWith("SELECT exact FROM sample", timeoutController.signal);
+      timeoutController.abort(new DOMException("Synthetic timeout", "TimeoutError"));
+      pending.release(table);
+      await expect(running).rejects.toThrow("数据库查询已取消或超时");
+    } finally { timeout.mockRestore(); }
+  });
+
+  it("discards a late result after the injected credential identity changes", async () => {
+    const pending = gate();
+    let identity = "first-opaque-identity";
+    const service = createConnectionQueryService({ resolveConnection: () => config,
+      driverFor: () => ({ execute: () => pending.promise, schemaSql: () => "SELECT 1" }),
+      credentialIdentity: () => identity });
+    const running = service.executeConnectionSql(input);
+    identity = "changed-opaque-identity";
+    pending.release(table);
+    await expect(running).rejects.toThrow("连接凭据已变化");
+    await expect(service.executeConnectionSql(input)).resolves.toBe(table);
   });
 
   it("redacts provider exceptions while preserving deliberately safe errors and SQLSTATE", async () => {

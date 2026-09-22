@@ -60,6 +60,23 @@ describe("Harness SSE transport", () => {
     expect(await readHarnessStream(response(text.replaceAll("\n", "\r\n")), signal(), (item) => events.push(item))).toEqual({ task });
     expect(events.map((item) => item.sequence)).toEqual([1, 2]);
   });
+  it("carries read-only diagnostics only in the validated terminal task, not trace events", async () => {
+    const { task, event } = fixture();
+    const source = '{"code":"# synthetic transient code"}';
+    const failed = { ...task, state: "failed" as const, notebookDiagnostics: {
+      version: 1 as const, baseRevision: 0, status: "unavailable" as const, omittedCellCount: 0,
+      cells: [{ cellId: "python_failed", kind: "python" as const, title: "测试", status: "unknown" as const,
+        source, sourceChars: source.length, sourceTruncated: false }],
+    } };
+    const events: HarnessTraceEvent[] = [];
+    const text = encodeHarnessFrame(event(1))
+      + encodeHarnessFrame({ ...event(2, "completed"), taskState: "failed" }, failed);
+    const received = await readHarnessStream(response(text, 41), signal(), (item) => events.push(item));
+    expect(received.task).toEqual(failed);
+    expect(JSON.stringify(events)).not.toContain("synthetic transient code");
+    expect(JSON.stringify(events)).not.toContain("notebookDiagnostics");
+    expect(events.filter((item) => item.type === "completed")).toHaveLength(1);
+  });
   it("does not accept truncation, out-of-order events, mixed tasks or malformed frames", async () => {
     const { event } = fixture();
     for (const text of [encodeHarnessFrame(event(1)), encodeHarnessFrame(event(2)),

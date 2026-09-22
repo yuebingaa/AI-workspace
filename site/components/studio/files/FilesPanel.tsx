@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DataSourceDefinition } from "@/core/models";
+import type { DataProduct, DataSourceDefinition } from "@/core/models";
+import { notebookFileReferences } from "@/core/notebook/file-references";
 import type { DatasetUploadResponse } from "@/core/datasets/contracts";
 import { loadUploadedDataset } from "@/core/datasets/client";
 import { downloadProjectFile, loadProject, setProjectFileArchived } from "@/core/projects/client";
@@ -10,8 +11,9 @@ import { StudioIcon } from "../StudioIcon";
 import { FileDeleteDialog } from "./FileDeleteDialog";
 import { buildFileList, fileSize, sortFileList, type FileListEntry, type SessionImportedFile, type SessionWorkbook } from "./file-list";
 
-export function FilesPanel({ project, sources, files, workbooks, removedDatasetIds, refreshVersion, canImport, interactionBusy, onClose, onImport, onPreview, onWorkbook, onBrowseData, onConnections, onRemoved, onTrash, beforeRemove }: {
+export function FilesPanel({ project, sources, notebooks, files, workbooks, removedDatasetIds, refreshVersion, canImport, interactionBusy, onClose, onImport, onPreview, onWorkbook, onBrowseData, onConnections, onRemoved, onTrash, beforeRemove }: {
   project: ProjectSession | null; sources: DataSourceDefinition[]; files: SessionImportedFile[]; workbooks: SessionWorkbook[];
+  notebooks: DataProduct["notebooks"];
   refreshVersion: number; canImport: boolean; interactionBusy: boolean;
   removedDatasetIds: string[]; onRemoved: (datasetIds: string[], file?: File) => void; onTrash: () => void;
   beforeRemove: () => Promise<void>;
@@ -108,7 +110,8 @@ export function FilesPanel({ project, sources, files, workbooks, removedDatasetI
       <section className="studio-files-connections"><h3>数据库连接</h3><p>也可以从已连接的数据库中查询数据。</p><button type="button" disabled={interactionBusy} onClick={onConnections}><StudioIcon name="connections" />查看连接<span>↗</span></button></section>
     </div>
     <footer><p>{project ? "原始文件已保存在本地项目。" : "本次会话的原件可下载；刷新后需重新选择文件。"}</p>{project && <button type="button" disabled={interactionBusy || busy} onClick={onTrash}>回收站 <span>↗</span></button>}<button type="button" disabled={interactionBusy || busy} onClick={onBrowseData}>管理项目与数据 <span>↗</span></button></footer>
-    {pendingDelete && <FileDeleteDialog name={pendingDelete.name} recoverable={pendingDelete.origin === "project"}
+    {pendingDelete && <FileDeleteDialog key={pendingDelete.id} name={pendingDelete.name} recoverable={pendingDelete.origin === "project"}
+      references={notebookFileReferences(notebooks, pendingDelete.name)}
       disabled={!canImport || interactionBusy || busy || loading} fallbackFocusRef={closeRef}
       onConfirm={() => remove(pendingDelete)} onClose={() => setPendingDelete(null)} />}
   </aside>;

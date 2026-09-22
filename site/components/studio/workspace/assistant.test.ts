@@ -4,13 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionState } from "@/core/changesets";
 import { HarnessClientError, requestHarnessTask } from "@/core/harness/client";
 import { clearHarnessConversations } from "@/core/harness/conversation-client";
-import type { HarnessResponse, HarnessTaskSummary } from "@/core/harness/contracts";
+import { harnessPublicRequestSchema, type HarnessResponse, type HarnessTaskSummary } from "@/core/harness/contracts";
 import { createHarnessTask } from "@/core/harness/task-state";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { semanticFixture } from "@/core/semantic/test-fixture";
 import { saveSemanticModel } from "@/core/semantic/model";
 import { activeAssistantSession, createAssistantSessions, newAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
 import { createStudioAssistantActions, harnessUiClock, useStudioAssistantState, type StudioAssistantState, type StudioAssistantActionsContext } from "./assistant";
+import { composerNotebookContext } from "./notebook-context-selection";
+import type { NotebookDocument } from "@/core/notebook/contracts";
 
 vi.mock("@/core/harness/client", async (original) => ({ ...await original<object>(), requestHarnessTask: vi.fn() }));
 vi.mock("@/core/harness/conversation-client", () => ({
@@ -54,7 +56,160 @@ beforeEach(() => {
   } }));
 });
 
+describe("explicit Notebook focus request composition", () => {
+  const document: NotebookDocument = { name: "Synthetic notebook", revision: 2, cells: [
+    { id: "parameter", kind: "parameter", title: "Current threshold", outputName: "threshold", parameter: { type: "number", value: 3 } },
+    { id: "summary", kind: "text", title: "Current summary", markdown: "Synthetic static definition" },
+  ] };
+  it.each(["agent", "notebook", "canvas"] as const)("sends stable explicit IDs with the current definition (%s)", async (notebookMode) => {
+    const { state } = context();
+    const sourceIds = [state.activeDataSource!.id];
+    state.notebookContext = composerNotebookContext(document, sourceIds, ["summary", "parameter"], notebookMode);
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    const request = vi.mocked(requestHarnessTask).mock.calls[0][0];
+    expect(request.notebookContext).toEqual({ document, sourceIds, selectedCellIds: ["summary", "parameter"] });
+    expect(Object.keys(request.notebookContext!)).toEqual(["document", "sourceIds", "selectedCellIds"]);
+    expect(request.notebookContext?.document).toBe(document);
+    expect(request.notebookContext?.sourceIds).toEqual(sourceIds);
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][1]?.stream).toBe(true);
+  });
+  it("does not introduce implicit Notebook context to an unselected canvas request", async () => {
+    const { state } = context();
+    state.notebookContext = composerNotebookContext(document, [state.activeDataSource!.id], [], "canvas");
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][0]).not.toHaveProperty("notebookContext");
+  });
+  it("AI workbench submits the current document without manual Cell focus or changing its definition", async () => {
+    const { state } = context();
+    const previous = structuredClone(document), sourceIds = [state.activeDataSource!.id];
+    state.notebookContext = composerNotebookContext(document, sourceIds, [], "agent");
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][0].notebookContext).toEqual({ document, sourceIds });
+    expect(document).toEqual(previous);
+  });
+  it("permits a viewer to submit focus metadata without adopting or mutating the document", async () => {
+    const { state } = context();
+    state.role = "viewer";
+    state.notebookContext = composerNotebookContext(document, [state.activeDataSource!.id], ["parameter"], "canvas");
+    const previous = structuredClone(document);
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][0].notebookContext?.selectedCellIds).toEqual(["parameter"]);
+    expect(document).toEqual(previous);
+    // The existing request path clears a preview, but never applies a definition.
+    expect(state.setExecution).toHaveBeenCalledExactlyOnceWith({ ...state.execution, preview: null });
+  });
+  it("does not submit a selection while Notebook editing or execution is busy", async () => {
+    const { state } = context();
+    state.notebookContext = composerNotebookContext(document, [], ["summary"], "canvas");
+    state.notebookInteractionBusy = true;
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(state.notebookContext?.selectedCellIds).toEqual(["summary"]);
+  });
+});
+
+describe("request recipe scope", () => {
+  function scopedContext(relevantCount: number, unrelatedCount = 39) {
+    const result = context(), { state } = result;
+    const selected = state.activeDataSource!;
+    const unrelated = { ...structuredClone(selected), id: "dataset_unrelated", name: "Unrelated source" };
+    state.execution.present.dataSources.push(unrelated);
+    state.notebookContext = { document: { name: "Selected notebook", revision: 0, cells: [] }, sourceIds: [selected.id] };
+    const template = state.dataProduct.recipes[0];
+    state.dataProduct.recipes = [
+      ...Array.from({ length: unrelatedCount }, (_, index) => ({ ...structuredClone(template), id: `unrelated_${index}`, sourceDatasetId: unrelated.id })),
+      ...Array.from({ length: relevantCount }, (_, index) => ({ ...structuredClone(template), id: `relevant_${index}`, sourceDatasetId: selected.id })),
+    ];
+    return result;
+  }
+
+  it("sends the selected recipe after 39 unrelated recipes without altering project data", async () => {
+    const { state } = scopedContext(1);
+    const before = structuredClone(state.dataProduct);
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    const request = vi.mocked(requestHarnessTask).mock.calls[0][0];
+    expect(request.recipes.map((recipe) => recipe.id)).toEqual(["relevant_0"]);
+    expect(harnessPublicRequestSchema.safeParse(request).success).toBe(true);
+    expect(state.dataProduct).toEqual(before);
+  });
+
+  it("retains every recipe for all Notebook sources, not only the active source", async () => {
+    const { state } = scopedContext(1, 2);
+    state.notebookContext!.sourceIds.push("dataset_unrelated");
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][0].recipes.map((recipe) => recipe.id))
+      .toEqual(["unrelated_0", "unrelated_1", "relevant_0"]);
+  });
+
+  it("uses current-page bindings and explicit source mentions when there is no Notebook", async () => {
+    const { state } = scopedContext(1, 2);
+    state.notebookContext = undefined;
+    state.activeDataSource = undefined;
+    state.activePageId = "page_customers";
+    await createStudioAssistantActions(state).handleGenerateAiPlan("检查当前页面绑定的数据，以及 Unrelated source 的配方");
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][0].recipes.map((recipe) => recipe.id))
+      .toEqual(["unrelated_0", "unrelated_1", "relevant_0"]);
+  });
+
+  it.each([true, false])("sends no recipes when the current source scope is empty (Notebook %s)", async (notebook) => {
+    const { state } = scopedContext(1);
+    state.notebookContext = notebook ? { ...state.notebookContext!, sourceIds: [] } : undefined;
+    state.activeDataSource = undefined;
+    state.execution.present.pages.find((page) => page.id === state.activePageId)!.root.children = [];
+    await createStudioAssistantActions(state).handleGenerateAiPlan("说明当前工作区");
+    const request = vi.mocked(requestHarnessTask).mock.calls[0][0];
+    expect(request.recipes).toEqual([]);
+    expect(harnessPublicRequestSchema.safeParse(request).success).toBe(true);
+  });
+
+  it("preserves all 20 relevant recipes at the public request boundary", async () => {
+    const { state } = scopedContext(20);
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    const request = vi.mocked(requestHarnessTask).mock.calls[0][0];
+    expect(request.recipes.map((recipe) => recipe.id)).toEqual(Array.from({ length: 20 }, (_, index) => `relevant_${index}`));
+    expect(harnessPublicRequestSchema.safeParse(request).success).toBe(true);
+  });
+
+  it("blocks 21 relevant recipes explicitly before clearing drafts, previews, or persisting a task", async () => {
+    const { state, values } = scopedContext(21);
+    const before = structuredClone(state.dataProduct);
+    expect(harnessPublicRequestSchema.shape.recipes.safeParse(state.dataProduct.recipes
+      .filter((recipe) => recipe.sourceDatasetId === state.activeDataSource!.id)).success).toBe(false);
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(values.aiRequestStatus).toBe("error");
+    expect(values.aiRequestError).toContain("21 个相关数据配方");
+    expect(values.aiRequestError).toContain("最多 20 个");
+    expect(state.assistant.setAiInstruction).not.toHaveBeenCalled();
+    expect(state.setExecution).not.toHaveBeenCalled();
+    expect(state.auditCurrentPreviewCancellation).not.toHaveBeenCalled();
+    expect(state.persistExplicitly).not.toHaveBeenCalled();
+    expect(values.harnessTasks).toEqual([]);
+    expect(state.assistant.harnessRequestActiveRef.current).toBe(false);
+    expect(state.dataProduct).toEqual(before);
+  });
+});
+
 describe("聊天控制器保持请求、会话与确认边界", () => {
+  it("does not include transient diagnostic code in a subsequent chat request", async () => {
+    const { state } = context();
+    const source = "diagnostic-only-synthetic-source";
+    const task = { ...createHarnessTask("diagnostic_previous", "检查单元", state.activePageId, "editor", harnessUiClock),
+      state: "failed" as const, resultMessage: "单元运行失败。", notebookDiagnostics: {
+        version: 1 as const, baseRevision: 0, status: "unavailable" as const, omittedCellCount: 0,
+        cells: [{ cellId: "python_example", kind: "python" as const, title: "测试", status: "unknown" as const,
+          source, sourceChars: source.length, sourceTruncated: false }],
+      } };
+    state.assistant.harnessTasks = [task];
+    state.assistant.assistantConversation = [{ id: "diagnostic_turn", taskId: task.id, pageId: state.activePageId,
+      instruction: "检查单元", response: "单元运行失败。", state: "failed", createdAt: task.createdAt }];
+    await createStudioAssistantActions(state).handleGenerateAiPlan("解释前一次任务的失败状态");
+    const request = vi.mocked(requestHarnessTask).mock.calls[0][0];
+    expect(request.conversationContext?.previousAssistantMessage).toBe("单元运行失败。");
+    expect(JSON.stringify(request)).not.toContain(source);
+    expect(JSON.stringify(request)).not.toContain("notebookDiagnostics");
+    expect(task.notebookDiagnostics.cells[0].source).toBe(source);
+  });
   it("switches only to a current-project thread and restores its draft, reply and task", () => {
     const { state, values } = context();
     const session = newAssistantSession([{ id: "turn", instruction: "另一个问题", response: "独立回答", createdAt: new Date().toISOString(), state: "success", taskId: "saved-task" }]);

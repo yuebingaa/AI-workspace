@@ -26,3 +26,8 @@
 *.key
 *.pfx
 *.p12
+sql-connections.private.json
+credentials.private.json
+initdb-password.private.txt
+failure.private.log
+postgres.private.log

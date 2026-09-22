@@ -1,11 +1,16 @@
 import { connectionDescriptorSchema, type ConnectionDescriptor } from "../contracts";
 import { connectionConfigSchema, type ConnectionConfig } from "../configuration";
+import { readLocalConnectionSettings } from "./local-config";
 export type { ConnectionConfig } from "../configuration";
 
 export function readConnectionConfigs(env: NodeJS.ProcessEnv = process.env): ConnectionConfig[] {
-  if (!env.STUDIO_SQL_CONNECTIONS) return [];
-  try { return connectionConfigSchema.parse(JSON.parse(env.STUDIO_SQL_CONNECTIONS)); }
-  catch { throw new Error("数据库连接配置无效，请检查服务端 STUDIO_SQL_CONNECTIONS"); }
+  const local = readLocalConnectionSettings(env);
+  try {
+    const configured = env.STUDIO_SQL_CONNECTIONS ? connectionConfigSchema.parse(JSON.parse(env.STUDIO_SQL_CONNECTIONS)) : [];
+    // Duplicate IDs fail closed instead of silently changing the connected host
+    // or privilege when a local settings file is introduced or edited.
+    return connectionConfigSchema.parse([...configured, ...(local?.connections ?? [])]);
+  } catch { throw new Error("数据库连接配置无效，请检查服务端 STUDIO_SQL_CONNECTIONS 与私有连接文件（连接 ID 不可重复）"); }
 }
 export function listConnections(project: string | null, forAi = false): ConnectionDescriptor[] {
   return readConnectionConfigs().filter((item) => item.projects.includes(project ?? "local") && (!forAi || item.allowAi))
