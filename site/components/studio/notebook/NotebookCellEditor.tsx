@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import type { DataSourceDefinition } from "@/core/models";
 import type { SemanticModel } from "@/core/semantic/contracts";
 import { notebookCellSchema, type NotebookCell } from "@/core/notebook/definition";
@@ -24,25 +24,40 @@ export function NotebookCellEditor(props: NotebookCellEditorProps) {
 }
 
 function NotebookStandardCellEditor({ cell, availableInputs, sources, models, connections = [], disabled, codeMode = false, onSave, onCancel }: NotebookCellEditorProps) {
+  const formRef = useRef<HTMLFormElement>(null);
   const [draft, setDraft] = useState(cell);
   const [error, setError] = useState("");
   const [recipeCode, setRecipeCode] = useState(codeMode);
   const [recipeSource, setRecipeSource] = useState(cell.kind === "transform" ? JSON.stringify(cell.steps, null, 2) : "");
+  // Keep trailing newlines while typing; normalize file names only on save.
+  const [fileNamesSource, setFileNamesSource] = useState(cell.kind === "python" ? cell.fileNames.join("\n") : "");
   const [lists, setLists] = useState({ dimensions: cell.kind === "semanticQuery" ? cell.dimensions.join(", ") : "",
     measures: cell.kind === "semanticQuery" ? cell.measures.join(", ") : "", columns: cell.kind === "table" ? cell.columns.join(", ") : "",
     valueFields: cell.kind === "chart" ? cell.valueFields.join(", ") : "" });
   const outputs = notebookOutputCells(availableInputs);
   const patch = (value: Partial<NotebookCell>) => setDraft({ ...draft, ...value } as NotebookCell);
   const list = (value: string) => value.split(/[,，]/u).map((item) => item.trim()).filter(Boolean);
+  function validateRecipeNumbers() {
+    // Invalid number drafts intentionally do not overwrite the last valid recipe.
+    // Never serialize that older value while an unfinished input is still visible.
+    const invalid = formRef.current?.querySelector<HTMLInputElement>('[data-recipe-number]:invalid, [data-recipe-number][aria-invalid="true"]');
+    if (!invalid) return true;
+    setError("请先修正配方中的无效数值，再保存或切换规则代码。");
+    invalid.focus();
+    invalid.reportValidity();
+    return false;
+  }
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (disabled || !validateRecipeNumbers()) return;
     const value = draft.kind === "semanticQuery" ? { ...draft, dimensions: list(lists.dimensions), measures: list(lists.measures) }
       : draft.kind === "table" ? { ...draft, columns: list(lists.columns) }
-        : draft.kind === "chart" ? { ...draft, valueFields: list(lists.valueFields) } : draft;
+        : draft.kind === "chart" ? { ...draft, valueFields: list(lists.valueFields) }
+          : draft.kind === "python" ? { ...draft, fileNames: fileNamesSource.split(/\r?\n/u).filter(Boolean) } : draft;
     try { onSave(draft.kind === "transform" && recipeCode ? applyRecipeSource(draft, recipeSource) : notebookCellSchema.parse(value)); } catch (caught) { setError(caught instanceof Error ? caught.message : "单元格式无效"); }
   }
   function changeRecipeMode(code: boolean) {
-    if (draft.kind !== "transform" || code === recipeCode) return;
+    if (disabled || draft.kind !== "transform" || code === recipeCode || (code && !validateRecipeNumbers())) return;
     try {
       if (code) setRecipeSource(JSON.stringify(draft.steps, null, 2));
       else setDraft(applyRecipeSource(draft, recipeSource));
@@ -50,7 +65,7 @@ function NotebookStandardCellEditor({ cell, availableInputs, sources, models, co
     } catch (caught) { setError(caught instanceof Error ? caught.message : "处理规则无效"); }
   }
   const model = draft.kind === "semanticQuery" ? models.find((item) => item.id === draft.modelId) : undefined;
-  return <form className="notebook-editor" onSubmit={submit}>
+  return <form ref={formRef} className="notebook-editor" onSubmit={submit}>
     <fieldset disabled={disabled}>
       {(draft.kind === "sql" || draft.kind === "python" || "inputCellId" in draft) && <small className="notebook-wide">按依赖关系运行，不受页面排列限制；输入不能选择自身或下游单元。</small>}
       <label>单元名称<input value={draft.title} maxLength={120} required onChange={(event) => patch({ title: event.target.value })} /></label>
@@ -72,7 +87,7 @@ function NotebookStandardCellEditor({ cell, availableInputs, sources, models, co
           <input type="checkbox" checked={draft.inputCellIds.includes(item.id)} onChange={(event) => patch({ inputCellIds: event.target.checked ? [...draft.inputCellIds, item.id] : draft.inputCellIds.filter((id) => id !== item.id) })} />
           <code>{item.outputName}</code><span>{item.title}</span>
         </label>)}</div>
-        <label className="notebook-wide">原始文件（每行一个文件名，可选）<textarea aria-label="Python 原始文件" rows={2} value={draft.fileNames.join("\n")} onChange={(event) => patch({ fileNames: event.target.value.split(/\r?\n/u).filter(Boolean) })} /></label>
+        <label className="notebook-wide">原始文件（每行一个文件名，可选）<textarea aria-label="Python 原始文件" rows={2} value={fileNamesSource} onChange={(event) => setFileNamesSource(event.target.value)} /></label>
         <div className="notebook-wide"><span className="notebook-code-label">Python</span><NotebookCodeEditor label="Python" value={draft.code} maxLength={20000} onChange={(code) => patch({ code })} /></div>
         <small className="notebook-wide">已提供 pd（pandas）、np（NumPy）和 openpyxl。把结果 DataFrame 赋给 {draft.outputName}，后续 SQL 可直接使用。原始文件来自本次导入或当前项目，使用 <code>pd.read_excel(files[&quot;文件名.xlsx&quot;])</code> 读取。每次运行重新计算，单元限时 10 秒。</small>
       </>}

@@ -13,7 +13,7 @@ export class AgentEngineSelection {
   status(dsh: AgentEngineSettings["dsh"]): AgentEngineSettings {
     return { engine: this.engine, revision: this.revision, activeTasks: this.activeTasks,
       persistence: "process-memory", dsh: { ...dsh }, plugins: [{
-        id: "dsh-notebook", name: "Notebook 数据分析", description: "已选授权数据源的 Data / SQL / 表格 / 图表；草稿需人工采用。",
+        id: "dsh-notebook", name: "Notebook 数据分析", description: "已选授权数据源的 Data / SQL / 整理 / 表格 / 图表 / 说明 / 参数；说明可引用本轮完整单行结果，参数以单行表传入本地 SQL 或 Python。选择单表语义模型后可用语义查询，沿用固定指标口径。草稿需人工采用。",
         tools: ["cellSearch", "editNotebookCells", "runNotebookCells", "submitNotebookDraft"],
       }, {
         id: "dsh-excel-python", name: "Excel 原件与 Python", description: "按本次附件开放原件检查与有限预览；Python 通过 Notebook 沙箱执行，须部署能力可用。",

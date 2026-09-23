@@ -6,10 +6,11 @@ import { analyzeNotebookOutputRenames } from "@/core/notebook/output-renames";
 import { captureNotebookRunExpectation, parseNotebookRunReceipt } from "@/core/notebook/run-receipt";
 import { StudioValidationError } from "@/core/schemas";
 import type { HarnessRequest, HarnessToolExecutionResult, HarnessToolName } from "./contracts";
-import type { HarnessToolContext } from "./tool-registry";
+import type { HarnessToolContext } from "./tools/contracts";
 import { createHarnessNotebookArtifact } from "./notebook";
 import { notebookTextResults } from "./notebook-text-results";
 import { cellSearchSchema, searchNotebookCellSession } from "./notebook-cell-search";
+import { NotebookSubmissionError } from "./notebook-submission-error";
 export { cellSearchSchema } from "./notebook-cell-search";
 
 // One instance per Harness task. Never persisted or shared across requests.
@@ -142,7 +143,9 @@ export async function runNotebookCells(args: z.infer<typeof notebookSessionVersi
   state.runVersion = state.editVersion;
   state.lastRunVersion = state.editVersion;
   if (diagnosticGeneration !== undefined) context.notebookDiagnostics?.recordRun(diagnosticGeneration, run);
-  return { summary: run.status === "success" ? `${run.cells.length} 个单元试运行通过，可提交修改对照。`
+  return { summary: run.status === "success" ? state.editVersion
+    ? `${run.cells.length} 个单元试运行通过，可提交修改对照。`
+    : `${run.cells.length} 个单元试运行通过。本轮未修改单元，可依据本次有效结果回答；若请求需要修改，请先编辑并重新运行，通过后再提交。`
     : "单元试运行未通过。请根据具体错误修改草稿后重跑，当前没有可采用的结果。",
     data: { editVersion: state.editVersion, runId: run.runId, status: run.status,
       ...notebookTextResults(run),
@@ -154,18 +157,20 @@ export async function runNotebookCells(args: z.infer<typeof notebookSessionVersi
       results: run.cells.filter((cell) => cell.table && artifact.cells.find((item) => item.id === cell.cellId)?.kind !== "data").slice(-3)
         .map((cell) => ({ cellId: cell.cellId, resultRef: cell.resultRef, fields: cell.table!.fields,
           rows: cell.table!.rows.slice(0, 5), returnedRows: cell.table!.rows.length, truncated: cell.table!.truncated })),
-      next: run.status === "success" ? "submitNotebookDraft" : "editNotebookCells" } };
+      ...(run.status !== "success" ? { next: "editNotebookCells" }
+        : state.editVersion ? { next: "submitNotebookDraft" } : {}) } };
 }
 
 export function submitNotebookDraft(args: z.infer<typeof notebookSessionVersionSchema>, context: HarnessToolContext): HarnessToolExecutionResult {
-  const state = session(context, args.editVersion);
-  if (!state.editVersion) fail("尚未修改任何单元。");
-  if (state.runVersion !== state.editVersion || state.run?.status !== "success") fail("当前草稿尚未完整试运行通过，请先修正并运行单元。");
+  const state = session(context);
+  if (state.editVersion !== args.editVersion) throw new NotebookSubmissionError("notebook_submit_version_stale");
+  if (!state.editVersion) throw new NotebookSubmissionError("notebook_submit_no_changes");
+  if (state.runVersion !== state.editVersion || state.run?.status !== "success") throw new NotebookSubmissionError("notebook_submit_run_required");
   const artifact = artifactFor(state.document, context);
   const expected = captureNotebookRunExpectation({ name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells }, "ai");
   let run: NotebookRun;
   try { run = parseNotebookRunReceipt(state.run, expected); }
-  catch { fail("执行回执与本次草稿不一致，不能作为验证证据。"); }
+  catch { throw new NotebookSubmissionError("notebook_submit_receipt_mismatch"); }
   artifact.executionEvidence = { runId: run.runId, status: "success",
     completedCellIds: run.cells.map((cell) => cell.cellId),
     summary: `${run.cells.length} 个单元已试运行；图表还需在 Notebook 中查看渲染结果。` };

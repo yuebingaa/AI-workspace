@@ -6,13 +6,16 @@ import { chromium } from 'playwright-core';
 import { createServer } from 'vite';
 
 const unsupported = process.argv[2] === '--unsupported-cell';
-assert.ok(process.argv.length === 2 || (unsupported && process.argv.length === 3), 'Only --unsupported-cell accepted; no user project, credentials or model options');
+const submitNoChanges = process.argv[2] === '--submit-no-changes';
+assert.ok(process.argv.length === 2 || ((unsupported || submitNoChanges) && process.argv.length === 3), 'Only --unsupported-cell or --submit-no-changes accepted; no user project, credentials or model options');
 const base = 'http://127.0.0.1:3001', siteRoot = process.cwd();
-const directory = resolve(`.runtime/dsh-${unsupported ? 'unsupported' : 'diagnostic'}-browser-2026-09-22`, `browser-${Date.now()}`);
+const directory = resolve(`.runtime/dsh-${unsupported ? 'unsupported' : submitNoChanges ? 'submit-diagnostic' : 'diagnostic'}-browser-2026-09-22`, `browser-${Date.now()}`);
 await mkdir(directory, { recursive: true });
-const instruction = unsupported ? '离线验收：检查不支持的 Notebook 单元，不调用模型或工具。' : '离线验收：检查 Notebook 工具参数错误提示，不生成或采用草稿。';
-const diagnostic = unsupported ? /notebook_cell_unsupported/u : /query: invalid_type/u;
-const report = { passed: false, fixture: true, scope: `Actual DSH engine + ${unsupported ? 'real bridge unsupported-cell preflight' : 'cellSearch validation'} + public-safe trace renderer. Fixed driver and synthetic trusted context; buffered browser SSE replay. Not public handler/SDK/model/DB verification.`,
+const instruction = unsupported ? '离线验收：检查不支持的 Notebook 单元，不调用模型或工具。' : submitNoChanges
+  ? '离线验收：尝试提交未修改的 Notebook 草稿；仅展示拒绝原因，不编辑或采用。'
+  : '离线验收：检查 Notebook 工具参数错误提示，不生成或采用草稿。';
+const diagnostic = unsupported ? /python_unavailable/u : submitNoChanges ? /notebook_submit_no_changes/u : /query: invalid_type/u;
+const report = { passed: false, fixture: true, scope: `Actual DSH engine + ${unsupported ? 'real bridge unsupported-cell preflight' : submitNoChanges ? 'canonical bridge submit(editVersion:0) rejection' : 'cellSearch validation'} + public-safe trace renderer. Fixed driver and synthetic trusted context; buffered browser SSE replay. Not public handler/SDK/model/DB verification.`,
   screenshots: [], pageErrors: [], routeErrors: [], forbidden: [], visualReview: 'pending actual image review' };
 const environment = process.env, originalFetch = globalThis.fetch;
 const allowed = new Set(['systemroot', 'windir', 'path', 'temp', 'tmp', 'comspec', 'pathext', 'number_of_processors', 'programfiles', 'programfiles(x86)', 'localappdata']);
@@ -27,6 +30,13 @@ async function status() {
 }
 async function shot(name, evidence) {
   await page.screenshot({ path: join(directory, name), fullPage: false }); report.screenshots.push({ name, evidence, actualImageReviewed: false });
+}
+async function formalState() {
+  return page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('datacanvas-ai:studio:v1'));
+    if (!state?.appSpec || !state?.dataProduct) throw new Error('Isolated browser state unavailable');
+    return { appSpec: state.appSpec, notebooks: state.dataProduct.notebooks ?? {} };
+  });
 }
 try {
   report.initialEngine = await status(); assert.equal(report.initialEngine.activeTasks, 0);
@@ -45,7 +55,7 @@ try {
       if (method === 'POST' && url.pathname === '/api/ai/harness/stream') {
         assert.equal(++calls, 1); assert.equal(request.headers()['x-agentcanvas-project'], undefined);
         const payload = request.postDataJSON(); assert.equal(payload.instruction, instruction);
-        const result = await createToolDiagnosticFixture(payload, unsupported); report.engineEvidence = result.evidence;
+        const result = await createToolDiagnosticFixture(payload, submitNoChanges ? 'submit-no-changes' : unsupported); report.engineEvidence = result.evidence;
         await writeFile(join(directory, 'fixture-task.json'), JSON.stringify(result.task, null, 2));
         return await route.fulfill({ status: 200, contentType: 'text/event-stream; charset=utf-8', body: result.body });
       }
@@ -57,16 +67,26 @@ try {
   });
   page = await context.newPage(); page.setDefaultTimeout(20000); page.on('pageerror', error => report.pageErrors.push(error.name));
   await page.goto(base, { waitUntil: 'networkidle', timeout: 60000 }); await page.getByRole('tab', { name: 'AI 工作台', exact: true }).click();
+  await page.waitForFunction(() => Boolean(localStorage.getItem('datacanvas-ai:studio:v1')));
+  const before = await formalState();
   await page.getByRole('textbox', { name: 'AI 指令', exact: true }).fill(instruction); await page.getByRole('button', { name: '发送 AI 指令', exact: true }).click();
   const trace = page.locator('.conversation-turn').last().locator('.harness-trace'); await trace.waitFor();
   await page.getByRole('button', { name: '取消 AI 请求', exact: true }).waitFor({ state: 'hidden' });
   if (await trace.getAttribute('open') === null) await trace.locator('summary').first().click();
-  await trace.getByText(diagnostic).waitFor(); assert.match(await trace.innerText(), unsupported ? /未启动模型或工具/u : /invalid_tool_arguments/u);
+  await trace.getByText(diagnostic).waitFor(); assert.match(await trace.innerText(), unsupported ? /未启动模型或工具/u
+    : submitNoChanges ? /本轮没有单元修改，不能生成修改草稿/u : /invalid_tool_arguments/u);
   assert.equal(await page.locator('.notebook-assistant-artifact').count(), 0);
   await trace.getByText(diagnostic).scrollIntoViewIfNeeded();
-  await shot('01-safe-diagnostic-1440.png', unsupported ? 'Actual engine/bridge rejected a synthetic text cell before any model/tool call; explicit trusted-context SSE fixture.' : 'Actual engine caught invalid query:null, emitted only safe query/invalid_type, then actual corrected search succeeded. Explicit fixed-driver SSE fixture.');
+  await shot('01-safe-diagnostic-1440.png', unsupported ? 'Actual engine/bridge rejected a disabled Python cell before any model/tool call; explicit trusted-context SSE fixture.' : submitNoChanges
+    ? 'Actual canonical bridge submit(editVersion:0) rejected no changes; fixed driver with synthetic trusted context and SSE replay. No editing, execution, adoption or paid model.'
+    : 'Actual engine caught invalid query:null, emitted only safe query/invalid_type, then actual corrected search succeeded. Explicit fixed-driver SSE fixture.');
   await page.setViewportSize({ width: 1024, height: 900 }); await trace.getByText(diagnostic).scrollIntoViewIfNeeded();
   await shot('02-safe-diagnostic-1024.png', 'Safe diagnostic remains readable at narrow desktop width; explicitly fixture-only, not a reconstruction of historical model arguments.');
+  if (submitNoChanges) await page.waitForFunction(() => JSON.parse(localStorage.getItem('datacanvas-ai:studio:v1'))?.harnessTasks
+    ?.some(task => task.state === 'failed' && task.trace?.some(event => event.message?.includes('notebook_submit_no_changes'))));
+  assert.deepEqual(await formalState(), before);
+  report.formalState = { browserNotebookUnchanged: true, browserAppSpecUnchanged: true,
+    notebookCount: Object.keys(before.notebooks).length, adoptionAttempted: false };
   report.finalEngine = await status(); assert.deepEqual(report.finalEngine, report.initialEngine);
   assert.equal(calls, 1); assert.equal(report.routeErrors.length, 0); assert.equal(report.pageErrors.length, 0); assert.equal(report.forbidden.length, 0); report.passed = true;
 } catch (error) {

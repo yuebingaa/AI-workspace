@@ -28,6 +28,35 @@ describe("Notebook preview sorting and pagination", () => {
     expect(result.rows.slice(-3).map((row) => row.index)).toEqual([0, 4, 5]);
     expect(result.rows.filter((row) => row.value === 2).map((row) => row.index)).toEqual([1, 2]);
   });
+  it.each(["toString", "constructor", "__proto__", "hasOwnProperty"].flatMap((fieldName) =>
+    (["ascending", "descending"] as const).map((direction) => ({ fieldName, direction })),
+  ))("keeps missing prototype-named values with NULL in $fieldName $direction order", (sort) => {
+    const input: DataTable = {
+      fields: [{ name: sort.fieldName, label: "值", type: "string" }],
+      rows: [{ index: 0 }, { index: 1, [sort.fieldName]: "zebra" }, { index: 2, [sort.fieldName]: "alpha" }, { index: 3, [sort.fieldName]: null }],
+      truncated: false,
+    };
+    const before = structuredClone(input);
+    input.rows.forEach(Object.freeze);
+    input.fields.forEach(Object.freeze);
+    Object.freeze(input.rows); Object.freeze(input.fields); Object.freeze(input);
+    const expected = sort.direction === "ascending" ? [2, 1, 0, 3] : [1, 2, 0, 3];
+    expect(notebookOrderedPreview(input, sort).rows.map((row) => row.index)).toEqual(expected);
+    expect(notebookTablePreview(input, sort, 0).rows.map((row) => row.index)).toEqual(expected);
+    expect(input).toEqual(before);
+  });
+  it.each(["toString", "constructor", "__proto__", "hasOwnProperty"])("preserves real own values for the %s field", (fieldName) => {
+    const input: DataTable = {
+      fields: [{ name: fieldName, label: "值", type: "string" }],
+      rows: [{ [fieldName]: "zebra" }, { [fieldName]: "alpha" }],
+      truncated: false,
+    };
+    const before = structuredClone(input);
+    expect(notebookOrderedPreview(input, { fieldName, direction: "ascending" }).rows.map((row) => row[fieldName])).toEqual(["alpha", "zebra"]);
+    expect(notebookOrderedPreview(input, { fieldName, direction: "descending" }).rows.map((row) => row[fieldName])).toEqual(["zebra", "alpha"]);
+    expect(notebookOrderedPreview(input, null).rows).toBe(input.rows);
+    expect(input).toEqual(before);
+  });
   it("preserves exact numeric strings, leading zeros and empty strings as text", () => {
     const input = table(["9007199254740993.00002", "9007199254740993.00001", "10", "2", "001", "", null], "string");
     expect(values(notebookTablePreview(input, ascending, 0))).toEqual(["", "001", "10", "2", "9007199254740993.00001", "9007199254740993.00002", null]);

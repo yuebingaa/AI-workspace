@@ -1,5 +1,6 @@
 import type { DataRecipeStep, RecipeOperand } from "@/core/models";
 import { useState } from "react";
+import { RecipeNumberInput } from "./RecipeNumberInput";
 
 const labels: Record<DataRecipeStep["type"], string> = {
   selectFields: "选择字段", filter: "筛选", renameField: "重命名", castField: "转换类型",
@@ -24,7 +25,8 @@ function initial(type: DataRecipeStep["type"], id: string): DataRecipeStep {
 }
 function Operand({ label, value, onChange }: { label: string; value: RecipeOperand; onChange: (value: RecipeOperand) => void }) {
   return <label>{label}<select value={value.kind} onChange={(event) => onChange(event.target.value === "field" ? { kind: "field", field: "field" } : { kind: "literal", value: 1 })}><option value="field">字段</option><option value="literal">常数</option></select>
-    <input aria-label={label} type={value.kind === "literal" ? "number" : "text"} step="any" required value={value.kind === "field" ? value.field : value.value} onChange={(event) => onChange(value.kind === "field" ? { ...value, field: event.target.value } : { ...value, value: Number(event.target.value) })} /></label>;
+    {value.kind === "literal" ? <RecipeNumberInput label={label} value={value.value} onChange={(number) => onChange({ ...value, value: number })} />
+      : <input aria-label={label} required value={value.field} onChange={(event) => onChange({ ...value, field: event.target.value })} />}</label>;
 }
 export function RecipeStepsEditor({ steps, onChange }: { steps: DataRecipeStep[]; onChange: (steps: DataRecipeStep[]) => void }) {
   function replace(index: number, step: DataRecipeStep) { onChange(steps.map((item, i) => i === index ? step : item)); }
@@ -39,7 +41,9 @@ export function RecipeStepsEditor({ steps, onChange }: { steps: DataRecipeStep[]
       {step.type === "filter" && <>
         <label>条件<select value={step.operator} onChange={(event) => replace(index, { ...step, operator: event.target.value as typeof step.operator })}>{[["equals", "等于"], ["notEquals", "不等于"], ["contains", "包含"], ["greaterThan", "大于"], ["greaterThanOrEqual", "大于等于"], ["lessThan", "小于"], ["lessThanOrEqual", "小于等于"]].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label>值类型<select value={typeof step.value} onChange={(event) => replace(index, { ...step, value: event.target.value === "number" ? 0 : event.target.value === "boolean" ? true : "" })}><option value="string">文本</option><option value="number">数字</option><option value="boolean">布尔</option></select></label>
-        <label>值{typeof step.value === "boolean" ? <select value={String(step.value)} onChange={(event) => replace(index, { ...step, value: event.target.value === "true" })}><option>true</option><option>false</option></select> : <input type={typeof step.value === "number" ? "number" : "text"} step="any" value={step.value} onChange={(event) => replace(index, { ...step, value: typeof step.value === "number" ? Number(event.target.value) : event.target.value })} />}</label>
+        <label>值{typeof step.value === "boolean" ? <select value={String(step.value)} onChange={(event) => replace(index, { ...step, value: event.target.value === "true" })}><option>true</option><option>false</option></select>
+          : typeof step.value === "number" ? <RecipeNumberInput value={step.value} onChange={(value) => replace(index, { ...step, value })} />
+            : <input type="text" value={step.value} onChange={(event) => replace(index, { ...step, value: event.target.value })} />}</label>
       </>}
       {step.type === "deriveField" && <>
         <label>显示名称<input required value={step.label} onChange={(event) => replace(index, { ...step, label: event.target.value })} /></label>
@@ -58,7 +62,7 @@ export function RecipeStepsEditor({ steps, onChange }: { steps: DataRecipeStep[]
         <button type="button" disabled={step.aggregations.length >= 20} onClick={() => replace(index, { ...step, aggregations: [...step.aggregations, { field: "amount", aggregation: "sum", as: `total_${step.aggregations.length + 1}`, label: "合计" }] })}>添加指标</button>
       </>}
       {step.type === "sort" && step.by.map((sort, s) => <div key={s}><label>排序字段<input required value={sort.field} onChange={(event) => replace(index, { ...step, by: step.by.map((item, i) => i === s ? { ...item, field: event.target.value } : item) })} /></label><label>顺序<select value={sort.direction} onChange={(event) => replace(index, { ...step, by: step.by.map((item, i) => i === s ? { ...item, direction: event.target.value as "asc" | "desc" } : item) })}><option value="asc">升序</option><option value="desc">降序</option></select></label></div>)}
-      {step.type === "limit" && <label>行数<input type="number" min={1} max={10_000} required value={step.count} onChange={(event) => replace(index, { ...step, count: Number(event.target.value) })} /></label>}
+      {step.type === "limit" && <label>行数<RecipeNumberInput min={1} max={10_000} integer value={step.count} onChange={(count) => replace(index, { ...step, count })} /></label>}
       {step.type === "sort" && <div><button type="button" disabled={step.by.length >= 10} onClick={() => replace(index, { ...step, by: [...step.by, { field: "field", direction: "asc" }] })}>添加排序字段</button><button type="button" disabled={step.by.length <= 1} onClick={() => replace(index, { ...step, by: step.by.slice(0, -1) })}>移除末尾排序</button></div>}
       <div><button type="button" disabled={index === 0} onClick={() => { const next = [...steps]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; onChange(next); }}>上移步骤</button><button type="button" disabled={steps.length <= 1} onClick={() => onChange(steps.filter((_, i) => i !== index))}>删除步骤</button></div>
     </div>)}

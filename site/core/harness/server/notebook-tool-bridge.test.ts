@@ -93,7 +93,7 @@ describe("独立 Notebook 工具桥", () => {
       const tools = bridge.catalog();
       const edit = tools.find((tool) => tool.name === "editNotebookCells")!;
       const search = tools.find((tool) => tool.name === "cellSearch")!;
-      expect(edit.description).not.toMatch(/createPythonCell|Python 用专用工具|text 可选|parameter\.type/u);
+      expect(edit.description).not.toMatch(/createPythonCell|Python 用专用工具|text 可选/u);
       expect(edit.description).toContain("cellSearch 返回的 editVersion");
       expect(edit.description).toContain("同 ID 单元须完整替换");
       expect(edit.description).toContain("既有 Data 单元及其 ID、来源必须保留");
@@ -110,8 +110,10 @@ describe("独立 Notebook 工具桥", () => {
       expect(JSON.stringify(edit.parameters).includes('"const":"warehouseSql"')).toBe(profile !== "csv");
       expect(JSON.stringify(edit.parameters).includes('"const":"transform"')).toBe(profile !== "csv");
       expect(edit.description.includes("steps 沿用原数据配方 Schema 校验与执行")).toBe(profile !== "csv");
-      expect(JSON.stringify(edit.parameters)).not.toContain('"const":"text"');
-      expect(JSON.stringify(edit.parameters)).not.toContain('"const":"parameter"');
+      expect(JSON.stringify(edit.parameters).includes('"const":"text"')).toBe(profile !== "csv");
+      expect(edit.description.includes("text 说明单元")).toBe(profile !== "csv");
+      expect(JSON.stringify(edit.parameters).includes('"const":"parameter"')).toBe(profile !== "csv");
+      expect(edit.description.includes("parameter.type")).toBe(profile !== "csv");
       expect(search.description).toContain("可直接传 {}");
       expect(search.description).toContain("不是 document.revision / baseRevision");
       expect(search.description).toContain("不要填 null 或空 ID");
@@ -380,6 +382,157 @@ describe("独立 Notebook 工具桥", () => {
   });
 });
 
+describe("网站 Notebook 参数单元", () => {
+  const parameter: NotebookCell = { id: "region", kind: "parameter", title: "地区选择", outputName: "region_pick",
+    parameter: { type: "select", value: "East", options: ["East", "South"] } };
+  const query: NotebookCell = { id: "filtered", kind: "sql", title: "参数汇总", inputCellIds: ["data", "region"], outputName: "filtered_sales",
+    sql: "SELECT region, SUM(amount)::DOUBLE AS revenue FROM sales_data WHERE region = (SELECT value FROM region_pick) GROUP BY region" };
+
+  it("保留已有参数，修改后旧回执失效；重跑150→80后才能提交，正式定义不变", async () => {
+    const { options, runs } = await notebookFixture();
+    options.request.notebookContext!.document.cells.push(parameter, query);
+    const before = structuredClone(options.request), bridge = createNotebookToolBridge(options);
+    try {
+      await bridge.execute("runNotebookCells", { editVersion: 0 });
+      expect(runs[0].cells.find(cell => cell.cellId === "filtered")?.table?.rows).toEqual([{ region: "East", revenue: 150 }]);
+      await bridge.execute("editNotebookCells", { editVersion: 0, cells: [{ ...parameter,
+        parameter: { type: "select", value: "South", options: ["East", "South"] } }] });
+      await expect(bridge.execute("submitNotebookDraft", { editVersion: 1 })).rejects.toThrow();
+      await bridge.execute("runNotebookCells", { editVersion: 1 });
+      expect(runs[1].cells.find(cell => cell.cellId === "filtered")?.table?.rows).toEqual([{ region: "South", revenue: 80 }]);
+      await bridge.execute("submitNotebookDraft", { editVersion: 1 });
+      expect(bridge.getVerifiedDraft()?.lineage.find(item => item.cellId === "filtered")?.dependsOn).toEqual(["data", "region"]);
+      expect(options.request).toEqual(before);
+    } finally { bridge.close(); }
+  });
+
+  it.each([
+    { type: "text", value: "East'); DROP TABLE sales_data; -- {{ignore}}" },
+    { type: "number", value: 0.5 },
+    { type: "date", value: "2026-09-22" },
+    { type: "select", value: "South", options: ["East", "South"] },
+  ] as const)("$type 参数以结构化value表进入真实SQL，不当代码/模板执行", async value => {
+    const { options, runs } = await notebookFixture(), bridge = createNotebookToolBridge(options);
+    try {
+      await bridge.execute("editNotebookCells", { editVersion: 0, cells: [
+        { ...parameter, parameter: value }, { ...query, inputCellIds: ["region"], sql: "SELECT value FROM region_pick" },
+      ] });
+      await bridge.execute("runNotebookCells", { editVersion: 1 });
+      expect(runs[0].status).toBe("success");
+      const output = runs[0].cells.find(cell => cell.cellId === "filtered")?.table;
+      // SQL date representation is adapter-owned; compare its explicit calendar date.
+      if (value.type === "date") expect(String(output?.rows[0].value).slice(0, 10)).toBe(value.value);
+      else expect(output?.rows).toEqual([{ value: value.value }]);
+      await bridge.execute("submitNotebookDraft", { editVersion: 1 });
+      expect(bridge.getVerifiedDraft()?.cells.find(cell => cell.id === "region")).toEqual({ ...parameter, parameter: value });
+    } finally { bridge.close(); }
+  });
+
+  it.each([
+    { type: "select", value: "Outside", options: ["East"] },
+    { type: "select", value: "East", options: ["East", "East"] },
+    { type: "date", value: "2026-02-30" },
+    { type: "number", value: Number.MAX_SAFE_INTEGER + 1 },
+    { type: "number", value: Number.POSITIVE_INFINITY },
+    { type: "text", value: "literal", code: "execute" },
+  ])("非法参数不推进版本或调用执行器：%j", async value => {
+    const { options } = await notebookFixture(), runner = vi.fn(options.notebookRunner);
+    const bridge = createNotebookToolBridge({ ...options, notebookRunner: runner });
+    try {
+      await expect(bridge.execute("editNotebookCells", { editVersion: 0, cells: [{ ...parameter, parameter: value }] }))
+        .rejects.toBeInstanceOf(HarnessToolArgumentsError);
+      expect((await bridge.execute("cellSearch", {})).data).toMatchObject({ editVersion: 0, totalCells: 1 });
+      expect(runner).not.toHaveBeenCalled(); expect(bridge.getVerifiedDraft()).toBeUndefined();
+    } finally { bridge.close(); }
+  });
+
+  it("参数不增加来源授权；无数据上下文与旧CSV初始参数仍拒绝", async () => {
+    const { options } = await notebookFixture();
+    removeSources(options); options.request.notebookContext!.document.cells = [parameter];
+    expect(() => createNotebookToolBridge(options)).toThrow(expect.objectContaining({ code: "missing_data_context" }));
+    const { options: csv } = await fixture(); csv.request.notebookContext!.document.cells.push(parameter);
+    expect(() => createNotebookToolBridge(csv)).toThrow(expect.objectContaining({ code: "notebook_cell_unsupported" }));
+  });
+});
+
+describe("网站 Notebook 说明单元", () => {
+  const total: NotebookCell = { id: "total", kind: "sql", title: "销售总收入", inputCellIds: ["data"],
+    outputName: "sales_total", sql: "SELECT SUM(amount)::DOUBLE AS revenue FROM sales_data" };
+  const note: Extract<NotebookCell, { kind: "text" }> = { id: "note", kind: "text", title: "结论",
+    markdown: "销售总收入：{{total}}", references: [{ key: "total", cellId: "total", field: "revenue" }] };
+
+  it("已有静态说明可检索与编辑，旧花括号和HTML字样保留为文本；CSV仍拒绝", async () => {
+    const { options, runs } = await notebookFixture();
+    const legacy: NotebookCell = { id: "legacy", kind: "text", title: "说明", markdown: "旧 {{unbound}} <b>文字</b>" };
+    options.request.notebookContext!.document.cells.push(legacy);
+    const before = structuredClone(options.request), bridge = createNotebookToolBridge(options);
+    try {
+      expect((await bridge.execute("cellSearch", {})).data).toMatchObject({ editVersion: 0, totalCells: 2 });
+      await bridge.execute("editNotebookCells", { editVersion: 0, cells: [{ ...legacy, markdown: legacy.markdown + "。" }] });
+      await bridge.execute("runNotebookCells", { editVersion: 1 });
+      expect(runs[0].cells.find(cell => cell.cellId === "legacy")).toMatchObject({ status: "success" });
+      await bridge.execute("submitNotebookDraft", { editVersion: 1 });
+      expect(bridge.getVerifiedDraft()?.cells[1]).toEqual({ ...legacy, markdown: legacy.markdown + "。" });
+      expect(options.request).toEqual(before);
+    } finally { bridge.close(); }
+    options.profile = "csv";
+    expect(() => createNotebookToolBridge(options)).toThrow(expect.objectContaining({ code: "notebook_cell_unsupported" }));
+  });
+
+  it("真实SQL单行230通过绑定进入说明预览及草稿，正式定义与数据不变", async () => {
+    const { options, runs } = await notebookFixture(), before = structuredClone({ request: options.request, data: options.dataRuntime });
+    const bridge = createNotebookToolBridge(options);
+    try {
+      await bridge.execute("editNotebookCells", { editVersion: 0, cells: [note, total] });
+      await expect(bridge.execute("submitNotebookDraft", { editVersion: 1 })).rejects.toThrow("尚未完整试运行通过");
+      const result = await bridge.execute("runNotebookCells", { editVersion: 1 });
+      expect(result.data).toMatchObject({ status: "success", textResults: [{ cellId: "note", text: "销售总收入：230", truncated: false }] });
+      expect(runs[0].cells.find(cell => cell.cellId === "note")).toMatchObject({ status: "success", text: "销售总收入：230" });
+      await bridge.execute("submitNotebookDraft", { editVersion: 1 });
+      const draft = bridge.getVerifiedDraft();
+      expect(draft?.lineage.find(item => item.cellId === "note")).toEqual({ cellId: "note", dependsOn: ["total"] });
+      expect(draft?.cells.find(cell => cell.id === "note")).toEqual(note);
+      expect({ request: options.request, data: options.dataRuntime }).toEqual(before);
+    } finally { bridge.close(); }
+  });
+
+  it.each(["expression", "undeclared", "outside", "self", "extra-access"])("非法说明 %s 不推进草稿且不调用执行器", async variant => {
+    const { options } = await notebookFixture(), runner = vi.fn(options.notebookRunner);
+    const invalid = structuredClone(note);
+    if (variant === "expression") invalid.markdown = "{{total + 1}}";
+    if (variant === "undeclared") invalid.markdown = "{{other}}";
+    if (variant === "outside") invalid.references![0].cellId = "outside";
+    if (variant === "self") invalid.references![0].cellId = "note";
+    if (variant === "extra-access") Object.assign(invalid, { fileNames: ["outside.csv"], connectionId: "outside" });
+    const bridge = createNotebookToolBridge({ ...options, notebookRunner: runner });
+    try {
+      await expect(bridge.execute("editNotebookCells", { editVersion: 0, cells: [total, invalid] })).rejects.toThrow();
+      expect((await bridge.execute("cellSearch", {})).data).toMatchObject({ editVersion: 0, totalCells: 1 });
+      expect(bridge.getVerifiedDraft()).toBeUndefined(); expect(runner).not.toHaveBeenCalled();
+    } finally { bridge.close(); }
+  });
+
+  it("多行引用不能提交，修为真实单行汇总并重新运行后才可提交", async () => {
+    const { options, runs } = await notebookFixture(), before = structuredClone(options.request);
+    const bridge = createNotebookToolBridge(options);
+    try {
+      await bridge.execute("editNotebookCells", { editVersion: 0, cells: [{ ...note,
+        references: [{ key: "total", cellId: "data", field: "amount" }] }] });
+      await bridge.execute("runNotebookCells", { editVersion: 1 });
+      expect(runs[0].status).toBe("failure");
+      expect(runs[0].cells.find(cell => cell.cellId === "note")).toMatchObject({ status: "failure" });
+      await expect(bridge.execute("submitNotebookDraft", { editVersion: 1 })).rejects.toThrow();
+      expect(bridge.getVerifiedDraft()).toBeUndefined();
+      await bridge.execute("editNotebookCells", { editVersion: 1, cells: [total, note] });
+      await bridge.execute("runNotebookCells", { editVersion: 2 });
+      expect(runs[1].cells.find(cell => cell.cellId === "note")?.text).toBe("销售总收入：230");
+      await bridge.execute("submitNotebookDraft", { editVersion: 2 });
+      expect(bridge.getVerifiedDraft()?.executionEvidence?.status).toBe("success");
+      expect(options.request).toEqual(before);
+    } finally { bridge.close(); }
+  });
+});
+
 describe("网站 Notebook 工具桥的授权能力配置", () => {
   it("已有 transform 不阻止初始化，编辑后真实 SQL 150/80 并提交，正式定义与数据保持不变", async () => {
     const { options, runs } = await notebookFixture();
@@ -453,16 +606,19 @@ describe("网站 Notebook 工具桥的授权能力配置", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it.each(["missing-notebook", "missing-page", "text", "parameter", "semanticQuery"])("初始化 %s 返回有限诊断，仍不调用模型或运行器", async kind => {
+  it.each(["missing-notebook", "missing-page", "disabled-python", "semanticQuery"])("初始化 %s 返回有限诊断，仍不调用模型或运行器", async kind => {
     const { options } = await notebookFixture();
     const runner = vi.fn(options.notebookRunner);
     if (kind === "missing-notebook") delete options.request.notebookContext;
     else if (kind === "missing-page") options.request.pageId = "missing_page";
-    else if (kind === "text") options.request.notebookContext!.document.cells.push({ id: "note", kind, title: "说明", markdown: "Synthetic" });
-    else if (kind === "parameter") options.request.notebookContext!.document.cells.push({ id: "param", kind, title: "参数", outputName: "param_value", parameter: { type: "number", value: 1 } });
+    else if (kind === "disabled-python") {
+      options.notebookCapabilities = { python: { enabled: false, reason: "测试关闭" } };
+      options.request.notebookContext!.document.cells.push(pythonCell);
+    }
     else options.request.notebookContext!.document.cells.push({ id: "semantic", kind: "semanticQuery", title: "语义查询",
       inputCellId: "data", modelId: "model", modelVersion: 1, dimensions: [], measures: ["amount"], limit: 10, outputName: "semantic_data" });
-    const code = kind === "missing-notebook" ? "missing_notebook_context" : kind === "missing-page" ? "workspace_unavailable" : "notebook_cell_unsupported";
+    const code = kind === "missing-notebook" ? "missing_notebook_context" : kind === "missing-page" ? "workspace_unavailable"
+      : kind === "semanticQuery" ? "semantic_model_unavailable" : "python_unavailable";
     expect(() => createNotebookToolBridge({ ...options, notebookRunner: runner })).toThrow(new NotebookBridgePreflightError(code));
     expect(runner).not.toHaveBeenCalled();
   });
@@ -615,14 +771,14 @@ describe("网站 Notebook 工具桥的授权能力配置", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it("能力与端口双重控制可选工具；schema 只开放七类，额外工具仍拒绝", async () => {
+  it("能力与端口双重控制可选工具；schema 只开放八类，额外工具仍拒绝", async () => {
     const { options } = await notebookFixture();
     const bridge = createNotebookToolBridge(options);
     try {
       expect(bridge.catalog()).toHaveLength(4);
       const schema = JSON.stringify(bridge.catalog().find((tool) => tool.name === "editNotebookCells")!.parameters);
-      for (const kind of ["data", "sql", "table", "chart", "python", "warehouseSql", "transform"]) expect(schema).toContain(`"const":"${kind}"`);
-      for (const kind of ["text", "parameter", "semanticQuery"]) expect(schema).not.toContain(`"const":"${kind}"`);
+      for (const kind of ["data", "sql", "table", "chart", "python", "warehouseSql", "transform", "text", "parameter"]) expect(schema).toContain(`"const":"${kind}"`);
+      expect(schema).not.toContain('"const":"semanticQuery"');
       for (const tool of ["getKernelPackagesInfo", "inspectEdsRawWorkbook", "readEdsRawRows", "inspectConnectionSchema", "callMcpTool", "createPythonCell"]) {
         await expect(bridge.execute(tool, {})).rejects.toThrow("不允许调用该工具");
       }

@@ -87,3 +87,18 @@ export function notebookSearchFailureMessage(body, toolName) {
     || typeof body.error.code !== 'string' || !Object.hasOwn(searchFailures, body.error.code)) return;
   return `cellSearch 检索失败（${body.error.code}）：${searchFailures[body.error.code]}`;
 }
+
+const submissionFailures = Object.freeze({
+  notebook_submit_version_stale: '草稿版本已变化。先用 cellSearch 读取最新 editVersion，不要使用文档 revision 或重复提交旧版本。',
+  notebook_submit_no_changes: '本轮没有单元修改，不能生成修改草稿。不要重复提交或制造空修改；需要更改时先完成实际编辑并重新运行。',
+  notebook_submit_run_required: '当前修改尚未完整试运行通过。先运行当前 editVersion；若运行失败，按错误修正并重新运行，通过后再提交。',
+  notebook_submit_receipt_mismatch: '执行回执与当前草稿不一致，不能作为提交证据。先重新检索当前版本并真实运行，通过后再提交。',
+});
+
+/** Tool identity and exact finite DTOs bound diagnostics in both the UI and SDK. */
+export function notebookToolFailureMessage(body, toolName) {
+  if (toolName === 'cellSearch') return notebookSearchFailureMessage(body, toolName);
+  if (toolName !== 'submitNotebookDraft' || !hasKeys(body, ['error']) || !hasKeys(body.error, ['code'])
+    || typeof body.error.code !== 'string' || !Object.hasOwn(submissionFailures, body.error.code)) return;
+  return `submitNotebookDraft 提交失败（${body.error.code}）：${submissionFailures[body.error.code]}`;
+}

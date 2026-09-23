@@ -10,6 +10,11 @@ export function nextNotebookPreviewSort(current: NotebookPreviewSort, fieldName:
 }
 
 type Value = DataTable["rows"][number][string] | undefined;
+/** A missing column is not an inherited object member, even for names such as toString. */
+export function notebookPreviewValue(row: DataTable["rows"][number], fieldName: string): Value {
+  return Object.hasOwn(row, fieldName) ? row[fieldName] : undefined;
+}
+
 function compareValues(left: Value, right: Value, type: DataTable["fields"][number]["type"]): number {
   if (type === "number") {
     if (typeof left === "number" && typeof right === "number") return left < right ? -1 : left > right ? 1 : 0;
@@ -29,7 +34,7 @@ export function notebookOrderedPreview(table: DataTable, sort: NotebookPreviewSo
   const field = sort ? table.fields.find((item) => item.name === sort.fieldName) : undefined;
   const activeSort = field ? sort : null;
   const ordered = activeSort && field ? table.rows.map((row, index) => ({ row, index })).sort((a, b) => {
-    const left = a.row[field.name], right = b.row[field.name];
+    const left = notebookPreviewValue(a.row, field.name), right = notebookPreviewValue(b.row, field.name);
     if (left == null || right == null) return left == null && right == null ? a.index - b.index : left == null ? 1 : -1;
     const comparison = compareValues(left, right, field.type);
     return (activeSort.direction === "ascending" ? comparison : -comparison) || a.index - b.index;

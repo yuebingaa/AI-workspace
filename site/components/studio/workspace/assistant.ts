@@ -8,7 +8,7 @@ import { HarnessClientError, requestHarnessTask } from "@/core/harness/client";
 import { DEFAULT_HARNESS_LIMITS, MAX_HARNESS_IMAGE_ATTACHMENTS, MAX_HARNESS_IMAGE_BYTES, MAX_HARNESS_TOTAL_IMAGE_BYTES, MAX_HARNESS_REQUEST_RECIPES, type HarnessExecutionTiming, type HarnessTaskSummary } from "@/core/harness/contracts";
 import { appendAssistantConversationTurn, assistantConversationFromHarnessTasks, isLightweightConversation, isUiMutationCapabilityQuestion, lightweightConversationReply, uiMutationCapabilityReply, type AssistantConversationTurn } from "@/core/harness/conversation";
 import { harnessConversationId, clearHarnessConversations } from "@/core/harness/conversation-client";
-import { activeAssistantSession, createAssistantSessions, MAX_ASSISTANT_SESSIONS, newAssistantSession, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
+import { activeAssistantSession, assistantSessionsForPage, createAssistantSessions, MAX_ASSISTANT_SESSIONS, MAX_PROJECT_ASSISTANT_SESSIONS, newAssistantSession, restoreAssistantSessions, selectAssistantPage, selectAssistantSession, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
 import { failureResponse } from "@/core/harness/failure-response";
 import { instructionRequestsRawWorkbook } from "@/core/harness/raw-workbook";
 import { resolveHarnessPageDataSourceIds } from "@/core/harness/source-scope";
@@ -21,6 +21,7 @@ import type { HarnessPublicRequest } from "@/core/harness/contracts";
 import type { AiRequestUiStatus } from "../AiBuilderAssistant";
 import type { ImportedWorkbookAttachment } from "../CsvUploadDialog";
 import type { PersistWorkspace, WorkspaceFeedback, WorkspacePreviewBindings } from "./contracts";
+import { assistantTurnState } from "./assistant-turn-state";
 
 export const harnessUiClock: HarnessTaskClock = {
   now: () => new Date(),
@@ -42,11 +43,11 @@ function initialHarnessTiming(): HarnessExecutionTiming {
   };
 }
 
-export function useStudioAssistantState(repurchaseChangeSet: ChangeSet) {
+export function useStudioAssistantState(repurchaseChangeSet: ChangeSet, activePageId?: string) {
   const [aiChangeSet, setAiChangeSet] = useState<ChangeSet>(() => structuredClone(repurchaseChangeSet));
   const [aiMessage, setAiMessage] = useState("我已检查数据结构和当前画布，建议先预览以下结构化变更。");
   const [aiMetadata, setAiMetadata] = useState<AiPlanMetadata | null>(null);
-  const [assistantSessions, setAssistantSessions] = useState(createAssistantSessions);
+  const [assistantSessions, setAssistantSessions] = useState(() => createAssistantSessions([], activePageId));
   const selectedSession = activeAssistantSession(assistantSessions);
   const aiInstruction = selectedSession.draft;
   const setAiInstruction = useCallback((value: SetStateAction<string>) => setAssistantSessions((sessions) => {
@@ -54,8 +55,15 @@ export function useStudioAssistantState(repurchaseChangeSet: ChangeSet) {
     if (draft === activeAssistantSession(sessions).draft) return sessions;
     return updateActiveAssistantSession(sessions, { draft });
   }), []);
-  const [aiImageAttachments, setAiImageAttachments] = useState<File[]>([]);
-  const [lastSubmittedImages, setLastSubmittedImages] = useState<File[]>([]);
+  const [sessionImages, setSessionImages] = useState<Record<string, { draft: File[]; submitted: File[] }>>({});
+  const aiImageAttachments = sessionImages[selectedSession.id]?.draft ?? [];
+  const lastSubmittedImages = sessionImages[selectedSession.id]?.submitted ?? [];
+  const setAiImageAttachments = useCallback((draft: File[]) => setSessionImages((current) => ({
+    ...current, [selectedSession.id]: { submitted: current[selectedSession.id]?.submitted ?? [], draft },
+  })), [selectedSession.id]);
+  const setLastSubmittedImages = useCallback((submitted: File[]) => setSessionImages((current) => ({
+    ...current, [selectedSession.id]: { draft: current[selectedSession.id]?.draft ?? [], submitted },
+  })), [selectedSession.id]);
   const [lastSubmittedInstruction, setLastSubmittedInstruction] = useState("");
   const [aiRequestStatus, setAiRequestStatus] = useState<AiRequestUiStatus>("idle");
   const [aiRequestError, setAiRequestError] = useState<string | null>(null);
@@ -68,12 +76,30 @@ export function useStudioAssistantState(repurchaseChangeSet: ChangeSet) {
     return updateActiveAssistantSession(sessions, { turns });
   }), []);
   const [isSessionChanging, setIsSessionChanging] = useState(false);
-  const sessionImagesRef = useRef(new Map<string, { draft: File[]; submitted: File[] }>());
   const [lastHarnessTaskId, setLastHarnessTaskId] = useState("");
   const [isLocalAssistantReply, setIsLocalAssistantReply] = useState(false);
   const aiRequestAbortRef = useRef<AbortController | null>(null);
   const harnessRequestActiveRef = useRef(false);
   useEffect(() => () => aiRequestAbortRef.current?.abort(), []);
+  // Adjust the owning component before children render, including page changes
+  // from imports / previews, so the previous interface's chat never flashes.
+  if (activePageId && selectedSession.pageId !== activePageId) {
+    const next = selectAssistantPage(restoreAssistantSessions(assistantSessions, [], activePageId, harnessTasks), activePageId);
+    const target = activeAssistantSession(next), last = target.turns.at(-1);
+    const task = harnessTasks.find((item) => item.id === last?.taskId && item.pageId === activePageId);
+    const pending = task?.state === "awaitingConfirmation" && task.pendingChangeSet;
+    const restored = assistantTurnState(last);
+    setAssistantSessions(next);
+    setLastSubmittedInstruction(last?.instruction ?? "");
+    setLastHarnessTaskId(last?.taskId ?? "");
+    setAiMessage(last?.response ?? "从一个新问题开始。");
+    setAiMetadata(null);
+    setAiRequestStatus(pending ? "success" : restored.requestStatus);
+    setAiRequestError(pending ? null : restored.requestError);
+    setHasValidAiPlan(Boolean(pending));
+    setIsLocalAssistantReply(!last?.taskId);
+    if (pending) setAiChangeSet(pending);
+  }
   return {
     aiChangeSet,
     setAiChangeSet,
@@ -103,7 +129,7 @@ export function useStudioAssistantState(repurchaseChangeSet: ChangeSet) {
     setAssistantSessions,
     isSessionChanging,
     setIsSessionChanging,
-    sessionImagesRef,
+    clearSessionImages: () => setSessionImages({}),
     lastHarnessTaskId,
     setLastHarnessTaskId,
     isLocalAssistantReply,
@@ -140,7 +166,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     setExecution, setPendingPuckChangeSet, setPendingChangeSource, setCanvasMode,
     auditCurrentPreviewCancellation, setValidationError, setSaveLabel,
   } = context;
-  const { assistantSessions, setAssistantSessions, sessionImagesRef, setIsSessionChanging } = context.assistant;
+  const { assistantSessions, setAssistantSessions, setIsSessionChanging } = context.assistant;
   const selectedSession = activeAssistantSession(assistantSessions);
 
   async function handleGenerateAiPlan(
@@ -148,6 +174,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     retryOfTaskId?: string,
     analysisContext?: { dataSourceId: string; rawWorkbook?: File },
   ) {
+    if (selectedSession.pageId && selectedSession.pageId !== activePageId) return;
     if (context.notebookInteractionBusy) {
       setAiRequestError("请先保存或取消 Notebook 单元编辑，并等待当前查询结束，再交给 AI 处理。");
       return;
@@ -382,7 +409,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     catch { setAiRequestError("服务端上下文清除失败，尚未清除聊天。请稍后重试。"); return; }
     finally { harnessRequestActiveRef.current = false; setIsSessionChanging(false); }
     setAssistantConversation([]);
-    const nextSessions = updateActiveAssistantSession(assistantSessions, { turns: [], draft: "", title: "新会话", pageIds: [], contextId: newAssistantSession().contextId });
+    const nextSessions = updateActiveAssistantSession(assistantSessions, { turns: [], draft: "", title: "新会话", pageIds: selectedSession.pageId ? [selectedSession.pageId] : [], contextId: newAssistantSession().contextId });
     setAssistantSessions(nextSessions);
     setLastSubmittedInstruction("");
     setLastHarnessTaskId("");
@@ -401,33 +428,32 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
   function activateSession(nextSessions: AssistantSessions) {
     if (harnessRequestActiveRef.current || context.assistant.isSessionChanging || context.conversationSwitchBlocked || context.notebookInteractionBusy) return;
     const target = activeAssistantSession(nextSessions);
-    sessionImagesRef.current.set(selectedSession.id, { draft: aiImageAttachments, submitted: lastSubmittedImages });
     setAssistantSessions(nextSessions);
-    setAiImageAttachments(sessionImagesRef.current.get(target.id)?.draft ?? []);
-    setLastSubmittedImages(sessionImagesRef.current.get(target.id)?.submitted ?? []);
     const last = target.turns.at(-1);
     const task = last?.taskId ? harnessTasks.find((candidate) => candidate.id === last.taskId) : undefined;
-    setLastHarnessTaskId(task?.id ?? "");
+    const restoredTurn = assistantTurnState(last);
+    const pending = task?.state === "awaitingConfirmation" && task.pendingChangeSet;
+    setLastHarnessTaskId(last?.taskId ?? "");
     setLastSubmittedInstruction(last?.instruction ?? "");
     setAiMessage(last?.response ?? "从一个新问题开始。");
-    setAiMetadata(null); setAiRequestError(null); setValidationError(null);
-    setAiRequestStatus(last ? last.state === "failed" ? "error" : last.state : "idle");
-    setIsLocalAssistantReply(!task);
-    const pending = task?.state === "awaitingConfirmation" && task.pendingChangeSet;
+    setAiMetadata(null); setAiRequestError(pending ? null : restoredTurn.requestError); setValidationError(null);
+    setAiRequestStatus(pending ? "success" : restoredTurn.requestStatus);
+    setIsLocalAssistantReply(!last?.taskId);
     setHasValidAiPlan(Boolean(pending));
     if (pending) setAiChangeSet(pending);
     persistExplicitly(execution, auditRecords, queryRecords, dataProduct, harnessTasks, edsWorkspace, target.turns, nextSessions);
   }
 
   function handleSelectAssistantSession(id: string) {
-    if (id === assistantSessions.activeId || !assistantSessions.items.some((item) => item.id === id)) return;
-    activateSession({ ...assistantSessions, activeId: id });
+    if (id === assistantSessions.activeId || !assistantSessions.items.some((item) => item.id === id && (!item.pageId || item.pageId === activePageId))) return;
+    activateSession(selectAssistantSession(assistantSessions, id));
   }
   function handleNewAssistantSession() {
     if (!selectedSession.turns.length && !aiInstruction && !aiImageAttachments.length) return;
-    if (assistantSessions.items.length >= MAX_ASSISTANT_SESSIONS) { setAiRequestError(`当前项目最多保留 ${MAX_ASSISTANT_SESSIONS} 个会话。`); return; }
-    const session = newAssistantSession();
-    activateSession({ activeId: session.id, items: [...assistantSessions.items, session] });
+    if (assistantSessionsForPage(assistantSessions, activePageId).length >= MAX_ASSISTANT_SESSIONS) { setAiRequestError(`当前界面最多保留 ${MAX_ASSISTANT_SESSIONS} 个会话。`); return; }
+    if (assistantSessions.items.length >= MAX_PROJECT_ASSISTANT_SESSIONS) { setAiRequestError("项目会话容量已满，请先备份并整理项目。"); return; }
+    const session = newAssistantSession([], activePageId);
+    activateSession(selectAssistantSession({ ...assistantSessions, items: [...assistantSessions.items, session] }, session.id));
   }
 
 

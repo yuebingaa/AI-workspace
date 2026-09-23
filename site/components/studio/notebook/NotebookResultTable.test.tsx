@@ -74,4 +74,28 @@ describe("Notebook preview CSV affordance", () => {
     render(input, scope);
     expect({ input, scope }).toEqual(before);
   });
+  it.each(["toString", "constructor", "__proto__", "hasOwnProperty"])("renders missing %s values as NULL while preserving own values", (fieldName) => {
+    const input: NotebookTable = {
+      fields: [{ name: fieldName, label: "合成字段", type: "string" }],
+      rows: [{}, { [fieldName]: "own value" }, { [fieldName]: null }, { [fieldName]: "" }, { [fieldName]: 0 }, { [fieldName]: false }],
+      truncated: false,
+    };
+    const scope = availability(input.rows.length);
+    const before = structuredClone({ input, scope });
+    input.rows.forEach(Object.freeze);
+    input.fields.forEach(Object.freeze);
+    Object.freeze(input.rows); Object.freeze(input.fields); Object.freeze(input); Object.freeze(scope);
+    const html = render(input, scope);
+    expect(html.match(/<td[^>]*>.*?<\/td>/gu)).toEqual([
+      '<td title="NULL"><span class="notebook-null">NULL</span></td>',
+      '<td title="own value">own value</td>',
+      '<td title="NULL"><span class="notebook-null">NULL</span></td>',
+      '<td title=""></td>',
+      '<td title="0">0</td>',
+      '<td title="false">false</td>',
+    ]);
+    expect(html).not.toContain("[native code]");
+    expect(html).not.toContain("[object Object]");
+    expect({ input, scope }).toEqual(before);
+  });
 });

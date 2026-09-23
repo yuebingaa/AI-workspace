@@ -36,6 +36,47 @@ const options = () => ({ mode: { allowRun: true, requireOutput: true }, finalRes
 });
 
 describe("conservative DSH read-only task mode", () => {
+  it.each(["总结当前Notebook的结构", "解释当前SQL里的结论字段来源", "概括一下已有单元的作用"])("preserves explicit definition questions containing conclusion words: %s", instruction => {
+    expect(resolveDshReadonlyMode(request(instruction))).toEqual({ allowRun: true, requireOutput: false });
+  });
+  it.each(["总结当前Notebook的结构，再预测下个月", "解释陌生文件里的结论字段来源", "总结当前Notebook的结构并导出", "总结当前Notebook的结构，分析北京增长", "解释当前SQL里的结论并读取其他文件字段来源"])("does not relax definition routing for other sources or extra goals: %s", instruction => {
+    expect(resolveDshReadonlyMode(request(instruction))).toBeUndefined();
+  });
+  it("requires output if a definition explanation is combined with a conclusion request", () => {
+    expect(resolveDshReadonlyMode(request("总结当前Notebook的结构，给我一个分析结论")))
+      .toEqual({ allowRun: true, requireOutput: true });
+  });
+  it.each([
+    "帮我看一下，能不能给我一个分析的结论", "帮我看看，能否给出分析结论？",
+    "请给我当前分析的结论", "能不能总结一下已有分析结果？", "帮我总结当前Notebook的结果",
+    "概括一下本次分析结果", "请根据现有结果给出一个分析结论", "请说明当前分析结论",
+    "当前分析的结论是什么？", "可以给我一个结论吗？", "请给我分析的总结",
+    "不要修改单元，帮我总结一下已有分析结果",
+  ])("recognizes a conclusion request as an output question: %s", instruction => {
+    expect(resolveDshReadonlyMode(request(instruction))).toEqual({ allowRun: true, requireOutput: true });
+  });
+  it.each([
+    "给我分析结论，并新增图表", "请总结当前结果然后导出Excel", "帮我看一下，按月计算销售额，再给我结论",
+    "请给我北京销售增长的分析结论", "总结一下陌生文件的分析结果", "总结 input 文件的分析结果",
+    "给出分析结论，把收入提高10%", "总结现有结果并预测下个月", "先重新分析，再给我结论",
+  ])("does not hide additional goals or unresolved named subjects in a conclusion request: %s", instruction => {
+    expect(resolveDshReadonlyMode(request(instruction))).toBeUndefined();
+    expect(isDshExistingAnalysisRequest(request(instruction))).toBe(false);
+  });
+  it("matches conclusion subjects only to selected source names and preserves explicit no-run", () => {
+    const input = request("总结 input 文件的分析结果");
+    const source = input.appSpec.dataSources[0];
+    source.name = "input.xlsx";
+    expect(resolveDshReadonlyMode(input)).toBeUndefined();
+    input.notebookContext!.sourceIds.push(source.id);
+    expect(resolveDshReadonlyMode(input)).toEqual({ allowRun: true, requireOutput: true });
+    input.instruction = "请给出 input.xlsx 文件的分析结论。";
+    expect(resolveDshReadonlyMode(input)).toEqual({ allowRun: true, requireOutput: true });
+    source.name = "input-other.xlsx";
+    expect(resolveDshReadonlyMode(input)).toBeUndefined();
+    input.instruction = "不要运行，帮我看一下，能不能给我一个分析的结论";
+    expect(resolveDshReadonlyMode(input)).toEqual({ allowRun: false, requireOutput: false });
+  });
   it.each(["现在是分析了什么东西出来", "查看当前 SQL 单元的运行结果", "说明已有分析结果", "当前总计是多少？"])("recognizes an existing result question: %s", instruction => {
     expect(resolveDshReadonlyMode(request(instruction))).toEqual({ allowRun: true, requireOutput: true });
   });
@@ -114,6 +155,33 @@ describe("bounded existing-analysis delivery option, not tool routing", () => {
 });
 
 describe("DSH read-only evidence verification", () => {
+  it.each(["run", "output"] as const)("does not count a known parameter %s as business result evidence", evidence => {
+    const input = { ...options(), parameterCellIds: ["summary"], observations: evidence === "run" ? [search(), directRun()] : [search(), run(), output()] };
+    const before = structuredClone(input);
+    expect(verifyDshReadonlyAnswer(input)).toMatchObject({ valid: false, issue: expect.stringContaining("结果问题缺少") });
+    expect(input).toEqual(before);
+  });
+  it("still permits definition-only explanation of a known parameter", () => {
+    expect(verifyDshReadonlyAnswer({ ...options(), parameterCellIds: ["summary"], mode: { allowRun: false, requireOutput: false },
+      observations: [search()], finalResponse: "参数当前定义为150；未运行业务计算。" })).toMatchObject({ valid: true, issue: "" });
+  });
+  it("retains actual SQL evidence alongside valid parameters, but still validates every result reference", () => {
+    const data = directRunData(), parameter = structuredClone(data.results[0]);
+    parameter.cellId = "minimum"; parameter.resultRef.cellId = "minimum"; parameter.resultRef.resultId = "run:minimum";
+    data.completedCellIds.push("minimum"); data.results.unshift(parameter);
+    const input = { ...options(), parameterCellIds: ["minimum"], observations: [search(), { ...directRun(), data }] };
+    expect(verifyDshReadonlyAnswer(input)).toMatchObject({ valid: true, issue: "" });
+    parameter.resultRef.runId = "old_run";
+    expect(verifyDshReadonlyAnswer(input).valid).toBe(false);
+  });
+  it("keeps a real SQL result valid when a later parameter output is inspected", () => {
+    const parameterOutput = outputData();
+    parameterOutput.cells[0].id = "minimum"; parameterOutput.output.cellId = "minimum";
+    parameterOutput.output.resultRef.cellId = "minimum";
+    const data = directRunData(); data.completedCellIds.push("minimum");
+    expect(verifyDshReadonlyAnswer({ ...options(), parameterCellIds: ["minimum"],
+      observations: [search(), { ...directRun(), data }, { ...output(), data: parameterOutput }] })).toMatchObject({ valid: true });
+  });
   it("accepts only current-run AI result evidence and leaves input observations unchanged", () => {
     const input = options(), before = structuredClone(input);
     expect(verifyDshReadonlyAnswer(input)).toMatchObject({ valid: true, issue: "", evidenceIds: ["search", "run", "output"] });

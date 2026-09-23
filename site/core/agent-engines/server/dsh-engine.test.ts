@@ -75,15 +75,47 @@ describe("DSH simple file-analysis terminal delivery", () => {
     test.request.notebookContext!.document.cells.push(...structuredClone(additions));
     return test;
   }
-  async function readAndRun(input: DshDriverInput, expectedNext?: string) {
+  async function readAndRun(input: DshDriverInput, expectedNext?: string | null) {
     await call(input, "cellSearch", {});
     const result = await call(input, "runNotebookCells", { editVersion: 0 });
     expect(result.data).toMatchObject({ status: "success", results: expect.arrayContaining([
       expect.objectContaining({ cellId: "totals", rows: [{ region: "East", revenue: 150 }, { region: "South", revenue: 80 }] }),
     ]) });
-    expect(result.data).toMatchObject({ next: expectedNext ?? (input.context.completion ? "answer_or_edit" : "submitNotebookDraft") });
+    const next = expectedNext === undefined ? (input.context.completion ? "answer_or_edit" : undefined) : expectedNext;
+    if (next) expect(result.data).toMatchObject({ next });
+    else expect(result.data).not.toHaveProperty("next");
     return { finalResponse: "本轮已有步骤的结果：East收入150，South收入80。未新增分析步骤。" };
   }
+
+  it.each(["帮我看一下，能不能给我一个分析的结论", "请总结已有分析结果"])("delivers the conclusion after two searches and one real run without edit or submit: %s", async instruction => {
+    const { request, options } = await existingFixture(instruction), before = structuredClone(request);
+    const task = await runDshEngine(request, { ...options, driver: async input => {
+      expect(input.context.completion).toMatchObject({ mode: "readonly_answer", allowRun: true, requireOutput: true });
+      expect(input.tools.map(tool => tool.name)).toEqual(["cellSearch", "runNotebookCells"]);
+      await call(input, "cellSearch", {});
+      return readAndRun(input, "answer");
+    } });
+    expect(task).toMatchObject({ state: "completed", terminationCode: "completed", counters: { toolCallCount: 3 }, verification: { status: "passed" } });
+    expect(task.resultMessage).toContain("East收入150");
+    expect(task.notebookArtifact).toBeUndefined();
+    expect(task.trace?.some(event => event.toolCall?.name === "editNotebookCells" || event.toolCall?.name === "submitNotebookDraft")).toBe(false);
+    expect(request).toEqual(before);
+  }, 20_000);
+
+  it("a conclusion request with an explicit no-run constraint only explains definitions", async () => {
+    const { request, options } = await existingFixture("不要运行，帮我看一下，能不能给我一个分析的结论");
+    const runner = vi.fn(options.notebookRunner);
+    const task = await runDshEngine(request, { ...options, notebookRunner: runner, driver: async input => {
+      expect(input.context.completion).toMatchObject({ mode: "readonly_answer", allowRun: false, requireOutput: false });
+      expect(input.tools.map(tool => tool.name)).toEqual(["cellSearch"]);
+      await call(input, "cellSearch", {});
+      return { finalResponse: "现有步骤按地区汇总收入。按要求未运行，不能给出已验证的数值结论。" };
+    } });
+    expect(task).toMatchObject({ state: "completed", verification: { status: "passed" } });
+    expect(task.resultMessage).toContain("不代表数值结果已经验证");
+    expect(runner).not.toHaveBeenCalled();
+    expect(task.notebookArtifact).toBeUndefined();
+  });
 
   it("keeps the complete catalog and accepts corrected search plus fresh results without an empty edit", async () => {
     const { request, options } = await existingFixture(), before = structuredClone(request);
@@ -214,7 +246,7 @@ describe("DSH simple file-analysis terminal delivery", () => {
     });
     const task = await runDshEngine(request, { ...options, driver: async input => {
       await expect(call(input, "cellSearch", {})).rejects.toThrow();
-      return readAndRun(input, "submitNotebookDraft");
+      return readAndRun(input, null);
     } });
     expect(task.state).toBe("failed");
     expect(task.terminationCode).toBe("verificationFailed");

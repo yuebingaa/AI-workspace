@@ -11,6 +11,7 @@ import { createHarnessTask } from "@/core/harness/task-state";
 import { readHarnessStream } from "@/core/harness/stream";
 import { adoptNotebookDraft } from "@/core/notebook/client-state";
 import type { NotebookCell } from "@/core/notebook/definition";
+import { semanticFixture } from "@/core/semantic/test-fixture";
 import type { DshDriverInput } from "@/core/agent-engines/server/dsh-engine";
 import { agentEngineSelection } from "@/core/agent-engines/server/selection";
 import { POST } from "./route";
@@ -133,7 +134,324 @@ function expectNoLegacyOrNetwork() {
   expect(fetch).not.toHaveBeenCalled();
 }
 
+async function semanticPayload(sensitive = false) {
+  const test = await fixture(sensitive, "dsh-http-semantic-sales.csv");
+  test.payload.semanticModel = { ...semanticFixture().model, sourceDatasetId: test.datasetId };
+  test.payload.instruction = "使用当前选定的销售语义模型，创建按地区汇总的语义查询、表格和图表，试运行后供我确认。";
+  return test;
+}
+
+function semanticCells(payload: Payload): NotebookCell[] {
+  const model = payload.semanticModel!;
+  return [
+    { id: "semantic", kind: "semanticQuery", title: "选定地区销售口径", inputCellId: "data", outputName: "semantic_sales",
+      modelId: model.id, modelVersion: model.version, dimensions: ["area"], measures: ["revenue"], limit: 100 },
+    { id: "semantic_table", kind: "table", title: "销售口径结果表", inputCellId: "semantic", columns: ["area", "revenue"] },
+    { id: "semantic_chart", kind: "chart", title: "销售口径图", inputCellId: "semantic", chartType: "bar", categoryField: "area", valueFields: ["revenue"] },
+  ];
+}
+
+describe("DSH 公共 HTTP 单一已选语义模型接线", () => {
+  it.each(["json", "sse"])("%s validates stored CSV, passes the selected model and produces a truly executed semantic draft", async transport => {
+    selected("dsh");
+    const { payload, datasetId } = await semanticPayload(), before = structuredClone(payload), cells = semanticCells(payload);
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      expect(input.context.semanticModel).toMatchObject({ id: payload.semanticModel!.id, version: 1, sourceDatasetId: datasetId });
+      for (const [name, args] of [
+        ["cellSearch", {}], ["editNotebookCells", { editVersion: 0, cells }],
+        ["runNotebookCells", { editVersion: 1 }], ["submitNotebookDraft", { editVersion: 1 }],
+      ] as Array<[string, unknown]>) {
+        input.onModelCall(); const result = await input.tools.find(tool => tool.name === name)!.execute(args, input.signal);
+        if (name === "runNotebookCells") expect(result.data).toMatchObject({ status: "success", completedCellIds: ["data", "semantic", "semantic_table", "semantic_chart"],
+          results: expect.arrayContaining(["semantic", "semantic_table", "semantic_chart"].map(cellId => expect.objectContaining({ cellId,
+            rows: [{ area: "East", revenue: 150 }, { area: "South", revenue: 80 }],
+            resultRef: expect.objectContaining({ accessMode: "ai", revision: 7, complete: true }),
+          }))) });
+        expect(result).not.toHaveProperty("notebookArtifact");
+      }
+      return { finalResponse: "合成模型声称已经修改正式文档，不应替代确认回执。" };
+    });
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload)); expect(response.status).toBe(200);
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal)
+      : harnessResponseSchema.parse(await response.json());
+    expect(result.task).toMatchObject({ state: "awaitingConfirmation", verification: { status: "passed" },
+      notebookArtifact: { baseRevision: 7, sourceDataSourceIds: [datasetId], executionEvidence: { status: "success" } } });
+    expect(result.task.notebookArtifact!.cells).toEqual([before.notebookContext!.document.cells[0], ...cells]);
+    expect(mock.driver).toHaveBeenCalledTimes(1); expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+
+  it.each(["json", "sse"])("%s can answer an existing semantic result only after a fresh authorized run", async transport => {
+    selected("dsh");
+    const { payload } = await semanticPayload();
+    payload.instruction = "帮我看一下，能不能给我一个分析的结论";
+    payload.notebookContext!.document.cells.push(...semanticCells(payload)); const before = structuredClone(payload);
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      expect(input.tools.map(tool => tool.name)).toEqual(["cellSearch", "runNotebookCells"]);
+      expect(input.context.semanticModel).toMatchObject({ id: payload.semanticModel!.id, version: 1 });
+      input.onModelCall(); await input.tools.find(tool => tool.name === "cellSearch")!.execute({}, input.signal);
+      input.onModelCall(); const result = await input.tools.find(tool => tool.name === "runNotebookCells")!.execute({ editVersion: 0 }, input.signal);
+      expect(result.data).toMatchObject({ status: "success", results: expect.arrayContaining([
+        expect.objectContaining({ cellId: "semantic", rows: [{ area: "East", revenue: 150 }, { area: "South", revenue: 80 }] }),
+      ]) });
+      return { finalResponse: "按本次选定口径重新计算：East150、South80，合计230；没有修改正式分析或看板。" };
+    });
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload)); expect(response.status).toBe(200);
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal)
+      : harnessResponseSchema.parse(await response.json());
+    expect(result.task).toMatchObject({ state: "completed", verification: { status: "passed" }, counters: { toolCallCount: 2 } });
+    expect(result.task.resultMessage).toContain("合计230"); expect(result.task.notebookArtifact).toBeUndefined();
+    expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+
+  describe.each(["json", "sse"] as const)("%s entry authorization and semantic validation", transport => {
+    it.each(["wrong-source", "unknown-field", "unsupported-aggregation", "pending"] as const)("rejects %s before the DSH driver starts", async mode => {
+      selected("dsh");
+      const { payload } = await semanticPayload(mode === "pending");
+      if (mode === "wrong-source") payload.semanticModel!.sourceDatasetId = "unselected_semantic_source";
+      else if (mode === "unknown-field") payload.semanticModel!.measures[0].field = "missing_physical_field";
+      else if (mode === "unsupported-aggregation") {
+        payload.semanticModel!.measures[0].field = "region";
+        payload.semanticModel!.measures[0].aggregation = "sum";
+      }
+      const before = structuredClone(payload);
+      const response = await (transport === "sse" ? streamPOST : POST)(request(payload));
+      expect(response.status).toBe(mode === "pending" ? 403 : 400);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.json()).toHaveProperty("error");
+      expect(mock.driver).not.toHaveBeenCalled(); expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+    });
+  });
+});
+
+function textCells(): NotebookCell[] {
+  return [
+    { id: "text_total", kind: "sql", title: "完整单行总额", inputCellIds: ["data"], outputName: "text_sales_total",
+      sql: "SELECT SUM(amount)::DOUBLE AS total FROM sales_data" },
+    { id: "text_note", kind: "text", title: "绑定本次总额的说明", markdown: "销售合计 {{total}}。",
+      references: [{ key: "total", cellId: "text_total", field: "total" }] },
+  ];
+}
+
+describe("DSH 公共 HTTP 受控 text 接线", () => {
+  it.each(["json", "sse"])("%s runs stored CSV through SQL and bound text without adopting the draft", async transport => {
+    selected("dsh");
+    const { payload, datasetId } = await fixture(false, "dsh-http-text-sales.csv"), cells = textCells();
+    payload.instruction = "新增销售总额 SQL 汇总和绑定实际计算值的 text 说明，试运行后提交草稿让我确认。";
+    const before = structuredClone(payload), events: HarnessTraceEvent[] = [];
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      for (const [name, args] of [
+        ["cellSearch", {}], ["editNotebookCells", { editVersion: 0, cells }],
+        ["runNotebookCells", { editVersion: 1 }], ["submitNotebookDraft", { editVersion: 1 }],
+      ] as Array<[string, unknown]>) {
+        input.onModelCall(); const result = await input.tools.find(tool => tool.name === name)!.execute(args, input.signal);
+        if (name === "runNotebookCells") expect(result.data).toMatchObject({ status: "success", completedCellIds: ["data", "text_total", "text_note"],
+          results: [expect.objectContaining({ cellId: "text_total", rows: [{ total: 230 }], resultRef: expect.objectContaining({ accessMode: "ai", complete: true }) })],
+          textResults: [{ cellId: "text_note", text: "销售合计 230。", characterCount: 9, truncated: false }], textResultsOmitted: 0 });
+        expect(result).not.toHaveProperty("notebookArtifact");
+      }
+      return { finalResponse: "模型自称已改正式定义，不能替代待采用回执。" };
+    });
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload)); expect(response.status).toBe(200);
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal, event => events.push(event))
+      : harnessResponseSchema.parse(await response.json());
+    expect(result.task).toMatchObject({ state: "awaitingConfirmation", verification: { status: "passed" },
+      notebookArtifact: { baseRevision: 7, sourceDataSourceIds: [datasetId], executionEvidence: { status: "success", completedCellIds: ["data", "text_total", "text_note"] } } });
+    expect(result.task.notebookArtifact!.cells).toEqual([before.notebookContext!.document.cells[0], ...cells]);
+    if (transport === "sse") {
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(events.filter(event => event.type === "tool_completed").map(event => event.toolCall?.name)).toEqual(toolOrder);
+      expect(events.filter(event => event.type === "completed")).toHaveLength(1);
+      expect(events.every(event => event.taskId === result.task.id)).toBe(true);
+    }
+    expect(mock.driver).toHaveBeenCalledTimes(1); expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+
+  it("sse answers an existing bound text with new table evidence and no editing tools", async () => {
+    selected("dsh");
+    const { payload } = await fixture(false, "dsh-http-existing-text.csv");
+    payload.instruction = "帮我看一下，能不能给我一个分析的结论";
+    payload.notebookContext!.document.cells.push(...textCells()); const before = structuredClone(payload);
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      expect(input.tools.map(tool => tool.name)).toEqual(["cellSearch", "runNotebookCells"]);
+      input.onModelCall(); await input.tools.find(tool => tool.name === "cellSearch")!.execute({}, input.signal);
+      input.onModelCall(); const run = await input.tools.find(tool => tool.name === "runNotebookCells")!.execute({ editVersion: 0 }, input.signal);
+      expect(run.data).toMatchObject({ status: "success", results: [expect.objectContaining({ cellId: "text_total", rows: [{ total: 230 }] })],
+        textResults: [expect.objectContaining({ cellId: "text_note", text: "销售合计 230。" })] });
+      return { finalResponse: "本次重新计算合计230，说明引用该完整单行汇总，正式步骤保持不变。" };
+    });
+    const response = await streamPOST(request(payload)); expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const result = await readHarnessStream(response, new AbortController().signal);
+    expect(result.task).toMatchObject({ state: "completed", verification: { status: "passed" }, counters: { toolCallCount: 2 } });
+    expect(result.task.notebookArtifact).toBeUndefined(); expect(result.task.resultMessage).toContain("合计230");
+    expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+});
+
+function parameterCells(): NotebookCell[] {
+  return [
+    { id: "minimum", kind: "parameter", title: "最低金额", outputName: "minimum", parameter: { type: "number", value: 80 } },
+    { id: "region", kind: "parameter", title: "区域", outputName: "selected_region", parameter: { type: "select", value: "East", options: ["East", "South"] } },
+    { id: "label", kind: "parameter", title: "标签", outputName: "report_label", parameter: { type: "text", value: "O'Reilly {{literal}}" } },
+    { id: "day", kind: "parameter", title: "日期", outputName: "report_day", parameter: { type: "date", value: "2024-02-29" } },
+    { id: "parameter_total", kind: "sql", title: "实际参数筛选合计", inputCellIds: ["data", "minimum", "region", "label", "day"], outputName: "parameter_sales_total",
+      sql: "SELECT SUM(s.amount)::DOUBLE AS total, t.value AS label, CAST(d.value AS DATE) AS report_date FROM sales_data s CROSS JOIN minimum n CROSS JOIN selected_region r CROSS JOIN report_label t CROSS JOIN report_day d WHERE s.amount >= n.value AND s.region = r.value GROUP BY t.value, d.value" },
+    { id: "parameter_note", kind: "text", title: "本轮筛选结果", markdown: "筛选后总额 {{total}}。",
+      references: [{ key: "total", cellId: "parameter_total", field: "total" }] },
+  ];
+}
+
+function expectParameterResult(data: unknown) {
+  expect(data).toMatchObject({ status: "success", results: expect.arrayContaining([
+    expect.objectContaining({ cellId: "parameter_total", rows: [{ total: 100, label: "O'Reilly {{literal}}", report_date: "2024-02-29" }],
+      resultRef: expect.objectContaining({ accessMode: "ai", complete: true }) }),
+  ]), textResults: [expect.objectContaining({ cellId: "parameter_note", text: "筛选后总额 100。" })] });
+}
+
+describe("DSH 公共 HTTP 四类 parameter 接线", () => {
+  it.each(["json", "sse"])("%s answers current parameter values with complete source-only evidence and no execution", async transport => {
+    selected("dsh");
+    const { payload } = await fixture(false, "dsh-http-parameter-definition.csv");
+    payload.instruction = "当前参数的值是什么？";
+    payload.notebookContext!.document.cells.push(...parameterCells());
+    const before = structuredClone(payload), events: HarnessTraceEvent[] = [];
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      expect(input.tools.map(tool => tool.name)).toEqual(["cellSearch"]);
+      for (const cellId of ["minimum", "region", "label", "day"]) {
+        input.onModelCall();
+        const result = await input.tools[0].execute({ cellId, view: "source" }, input.signal);
+        expect(result.data).toMatchObject({ sourceCellId: cellId, sourceTruncated: false,
+          nextSourceOffset: null, editVersion: 0, baseRevision: 7, runStatus: "notRun" });
+        expect(result).not.toHaveProperty("notebookArtifact");
+      }
+      return { finalResponse: "当前最低金额80、地区East、标签O'Reilly {{literal}}、日期2024-02-29；它们是输入定义，不是销售分析结果，未执行 Notebook。" };
+    });
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload)); expect(response.status).toBe(200);
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal, event => events.push(event))
+      : harnessResponseSchema.parse(await response.json());
+    expect(result.task).toMatchObject({ state: "completed", verification: { status: "passed" }, counters: { toolCallCount: 4 } });
+    expect(result.task.resultMessage).toContain("最低金额80"); expect(result.task.notebookArtifact).toBeUndefined();
+    if (transport === "sse") {
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(events.filter(event => event.type === "tool_started").map(event => event.toolCall?.name)).toEqual(Array(4).fill("cellSearch"));
+      expect(events.filter(event => event.type === "completed")).toHaveLength(1);
+    }
+    expect(mock.driver).toHaveBeenCalledTimes(1); expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+
+  it.each(["json", "sse"])("%s executes stored CSV and canonical parameters, preserving formal definitions until confirmation", async transport => {
+    selected("dsh");
+    const { payload, datasetId } = await fixture(false, "dsh-http-parameter-sales.csv"), cells = parameterCells();
+    payload.instruction = "新增四类参数，用 SQL 按最低金额与地区筛选实际数据，并引用结果写说明，试运行后提交草稿。";
+    const before = structuredClone(payload), events: HarnessTraceEvent[] = [];
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      for (const [name, args] of [
+        ["cellSearch", {}], ["editNotebookCells", { editVersion: 0, cells }],
+        ["runNotebookCells", { editVersion: 1 }], ["submitNotebookDraft", { editVersion: 1 }],
+      ] as Array<[string, unknown]>) {
+        input.onModelCall(); const result = await input.tools.find(tool => tool.name === name)!.execute(args, input.signal);
+        if (name === "runNotebookCells") expectParameterResult(result.data);
+        expect(result).not.toHaveProperty("notebookArtifact");
+      }
+      return { finalResponse: "尚须用户采用参数草稿，模型文字不能直接改正式定义。" };
+    });
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload)); expect(response.status).toBe(200);
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal, event => events.push(event))
+      : harnessResponseSchema.parse(await response.json());
+    expect(result.task).toMatchObject({ state: "awaitingConfirmation", verification: { status: "passed" },
+      notebookArtifact: { baseRevision: 7, sourceDataSourceIds: [datasetId], executionEvidence: { status: "success" } } });
+    expect(result.task.notebookArtifact!.cells).toEqual([before.notebookContext!.document.cells[0], ...cells]);
+    if (transport === "sse") {
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(events.filter(event => event.type === "tool_completed").map(event => event.toolCall?.name)).toEqual(toolOrder);
+      expect(events.filter(event => event.type === "completed")).toHaveLength(1);
+      expect(events.every(event => event.taskId === result.task.id)).toBe(true);
+    }
+    expect(mock.driver).toHaveBeenCalledTimes(1); expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+
+  it("sse readonly follow-up recomputes current parameter-dependent data without editing or submitting", async () => {
+    selected("dsh");
+    const { payload } = await fixture(false, "dsh-http-existing-parameters.csv");
+    payload.instruction = "帮我看一下，能不能给我一个分析的结论";
+    payload.notebookContext!.document.cells.push(...parameterCells()); const before = structuredClone(payload);
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      expect(input.tools.map(tool => tool.name)).toEqual(["cellSearch", "runNotebookCells"]);
+      input.onModelCall(); await input.tools.find(tool => tool.name === "cellSearch")!.execute({}, input.signal);
+      input.onModelCall(); expectParameterResult((await input.tools.find(tool => tool.name === "runNotebookCells")!.execute({ editVersion: 0 }, input.signal)).data);
+      return { finalResponse: "按当前参数筛选 East 金额至少80，实际合计100；未编辑参数或分析步骤。" };
+    });
+    const response = await streamPOST(request(payload)); expect(response.status).toBe(200);
+    const result = await readHarnessStream(response, new AbortController().signal);
+    expect(result.task).toMatchObject({ state: "completed", verification: { status: "passed" }, counters: { toolCallCount: 2 } });
+    expect(result.task.notebookArtifact).toBeUndefined(); expect(result.task.resultMessage).toContain("实际合计100");
+    expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+});
+
 describe("真实 Harness HTTP 入口的 DSH 分派", () => {
+  it.each(["json", "sse"])("%s 原句请求分析结论只读运行并直接回答，不要求修改或提交", async transport => {
+    selected("dsh");
+    const { payload } = await fixture(false, "conclusion-existing-sales.csv");
+    payload.instruction = "帮我看一下，能不能给我一个分析的结论";
+    payload.notebookContext!.document.cells.push(...additions(1));
+    const before = structuredClone(payload);
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      expect(input.tools.map(tool => tool.name).sort()).toEqual(["cellSearch", "runNotebookCells"]);
+      input.onModelCall();
+      await input.tools.find(tool => tool.name === "cellSearch")!.execute({}, input.signal);
+      const run = await input.tools.find(tool => tool.name === "runNotebookCells")!.execute({ editVersion: 0 }, input.signal);
+      expect(run.data).toMatchObject({ status: "success", completedCellIds: ["data", "totals", "table", "chart"],
+        results: expect.arrayContaining([expect.objectContaining({ cellId: "table", rows: [
+          { region: "East", revenue: 150 }, { region: "South", revenue: 80 },
+        ] })]) });
+      // The generic tool omits next for unchanged sessions; the read-only
+      // engine explicitly directs its closed catalog to deliver an answer.
+      expect(run.data).toHaveProperty("next", "answer");
+      expect(run.summary).not.toContain("可提交修改对照");
+      return { finalResponse: "本次运行的结论：East销售额150，高于South的80；合计230。未修改分析步骤。" };
+    });
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload));
+    expect(response.status).toBe(200);
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal)
+      : harnessResponseSchema.parse(await response.json());
+    expect(result.task).toMatchObject({ state: "completed", terminationCode: "completed", verification: { status: "passed" } });
+    expect(result.task.notebookArtifact).toBeUndefined();
+    expect(result.task.resultMessage).toContain("150");
+    expect(result.task.trace?.some(event => ["editNotebookCells", "submitNotebookDraft"].includes(event.toolCall?.name ?? ""))).toBe(false);
+    expect(payload).toEqual(before); expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
+  });
+
+  it("原句没有本轮有效输出时不能只读完源码就交付数字结论", async () => {
+    selected("dsh");
+    const { payload } = await fixture();
+    payload.instruction = "帮我看一下，能不能给我一个分析的结论";
+    payload.notebookContext!.document.cells.push(...additions(1));
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      input.onModelCall();
+      await input.tools.find(tool => tool.name === "cellSearch")!.execute({}, input.signal);
+      return { finalResponse: "East收入150，South收入80。" };
+    });
+    const result = harnessResponseSchema.parse(await (await POST(request(payload))).json());
+    expect(result.task).toMatchObject({ state: "failed", terminationCode: "verificationFailed" });
+    expect(result.task.notebookArtifact).toBeUndefined(); expectNoLegacyOrNetwork();
+  });
+
+  it.each(["给我一个分析结论，并新增一张图表", "给我一个分析结论，并按月重新统计", "给我一个分析结论，并导出Excel"])("%s 不得用只读回答掩盖尚未完成的新目标", async instruction => {
+    selected("dsh");
+    const { payload } = await fixture(); payload.instruction = instruction;
+    payload.notebookContext!.document.cells.push(...additions(1));
+    mock.driver.mockImplementation(async (input: DshDriverInput) => {
+      expect(input.tools.some(tool => tool.name === "editNotebookCells")).toBe(true);
+      input.onModelCall();
+      await input.tools.find(tool => tool.name === "runNotebookCells")!.execute({ editVersion: 0 }, input.signal);
+      return { finalResponse: "已有结果East150、South80。" };
+    });
+    const result = harnessResponseSchema.parse(await (await POST(request(payload))).json());
+    expect(result.task).toMatchObject({ state: "failed", terminationCode: "verificationFailed" });
+    expect(result.task.notebookArtifact).toBeUndefined(); expectNoLegacyOrNetwork();
+  });
+
   it.each(["json", "sse"])("%s 保留已有transform并真实运行下游分析，不再零步骤受阻", async transport => {
     selected("dsh");
     const { payload } = await fixture(false, "input.csv");
@@ -224,11 +542,12 @@ describe("真实 Harness HTTP 入口的 DSH 分派", () => {
     expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
   });
 
-  it.each(["json", "sse"])("%s 未支持单元给出安全初始化原因，零模型且不泄露定义", async transport => {
+  it.each(["json", "sse"])("%s 部署关闭 Python 时给出安全初始化原因，零模型且不泄露定义", async transport => {
     selected("dsh");
+    vi.stubEnv("NOTEBOOK_PYTHON_ENABLED", "false");
     const { payload } = await fixture();
-    payload.notebookContext!.document.cells.push({ id: "private_cell", kind: "text", title: "PRIVATE_TITLE",
-      markdown: "PRIVATE_CELL_CONTENT" });
+    payload.notebookContext!.document.cells.push({ id: "private_cell", kind: "python", title: "PRIVATE_TITLE", outputName: "private_output",
+      inputCellIds: ["data"], fileNames: [], code: "PRIVATE_CELL_CONTENT" });
     const before = structuredClone(payload);
     const response = await (transport === "sse" ? streamPOST : POST)(request(payload));
     expect(response.status).toBe(200);
@@ -236,7 +555,7 @@ describe("真实 Harness HTTP 入口的 DSH 分派", () => {
       : harnessResponseSchema.parse(await response.json());
     expect(result.task).toMatchObject({ state: "blocked", terminationCode: "missingRequirements",
       counters: { toolCallCount: 0, modelCallCount: 0 } });
-    expect(result.task.resultMessage).toContain("notebook_cell_unsupported");
+    expect(result.task.resultMessage).toContain("python_unavailable");
     expect(result.task.resultMessage).toContain("本次未启动模型或工具");
     expect(JSON.stringify(result.task)).not.toMatch(/PRIVATE_TITLE|PRIVATE_CELL_CONTENT|private_cell/u);
     expect(result.task.notebookArtifact).toBeUndefined();

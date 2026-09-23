@@ -2,10 +2,10 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
 import type { DshDriverTool } from "./dsh-engine";
-import { HarnessToolArgumentsError } from "@/core/harness/tool-registry";
+import { HarnessToolArgumentsError } from "@/core/harness/tools/errors";
 import { sanitizeToolArgumentIssues } from "../../../runtime/dsh/tool-diagnostics.mjs";
 import { catalogToolNames } from "../../../runtime/dsh/policy.mjs";
-import { trustedNotebookSearchFailure } from "./tool-error-message";
+import { trustedNotebookToolFailure } from "./tool-error-message";
 
 const inputSchema = z.object({ name: z.string().min(1).max(100), args: z.unknown(), callId: z.string().min(1).max(200) }).strict();
 const maxBytes = 512 * 1024;
@@ -93,15 +93,15 @@ export async function createDshToolBroker(input: {
         let result: Awaited<ReturnType<DshDriverTool["execute"]>>;
         try { result = await tool.execute(parsed.data.args, signal); }
         catch (error) {
-          // Only trusted validation and finite search codes may be exposed, after
+          // Only trusted validation and finite Notebook codes may be exposed, after
           // a fresh permission check; arbitrary business exceptions stay generic.
-          const searchFailure = trustedNotebookSearchFailure(tool.name, error);
+          const toolFailure = trustedNotebookToolFailure(tool.name, error);
           const argumentError = error instanceof HarnessToolArgumentsError && error.toolName === tool.name ? error : undefined;
-          if (!searchFailure && !argumentError) throw error;
+          if (!toolFailure && !argumentError) throw error;
           signal.throwIfAborted();
           input.authorizeCurrentAccess();
           signal.throwIfAborted();
-          respond(response, 422, searchFailure ?? { error: { code: "invalid_tool_arguments",
+          respond(response, 422, toolFailure ?? { error: { code: "invalid_tool_arguments",
             issues: sanitizeToolArgumentIssues(argumentError?.issueSummary, tool.parameters) } });
           return;
         }

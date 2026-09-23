@@ -14,7 +14,9 @@ describe("WorkspaceSidebarRail", () => {
       onOpenOriginalWorkbook={() => undefined}
     />);
 
-    expect(html).toContain('aria-label="打开侧边栏"');
+    expect(html).toContain('aria-label="选择工作界面"');
+    expect(html).toContain('data-tooltip="工作界面"');
+    expect(html).not.toContain("工作界面与数据");
     expect(html).not.toContain('aria-label="EDS 分析"');
     expect(html).toContain('aria-label="导入表格"');
     expect(html).toContain('aria-label="原始文件"');

@@ -44,7 +44,7 @@ import {
 } from "@/core/eds";
 import type { AiChangeSetAuditMetadata, ChangeOperation, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
-import { activeAssistantSession, restoreAssistantSessions } from "@/core/harness/assistant-sessions";
+import { activeAssistantSession, MAX_PROJECT_ASSISTANT_SESSIONS, restoreAssistantSessions, selectAssistantPage } from "@/core/harness/assistant-sessions";
 import {
   createBrowserStudioRepository,
   createStudioSnapshot,
@@ -85,13 +85,14 @@ import { NotebookSnapshotReview } from "./notebook/NotebookSnapshotReview";
 import type { ComposerResultOption } from "./ComposerContextMenu";
 import { useStudioPageActions, selectablePageId, useStudioPagesState } from "./workspace/pages";
 import { harnessUiClock, useStudioAssistantActions, useStudioAssistantState } from "./workspace/assistant";
+import { assistantTurnState } from "./workspace/assistant-turn-state";
 import { useStudioDatasetActions, useStudioDatasetsState } from "./workspace/datasets";
 import { useStudioSemanticState, useStudioSemanticActions } from "./workspace/semantics";
 import { useStudioPersistence } from "./workspace/persistence";
 import { useNotebookContextSelection } from "./workspace/useNotebookContextSelection";
 import { composerNotebookContext } from "./workspace/notebook-context-selection";
 import { notebookContextOptions } from "./notebook/NotebookContextSelection";
-import { SemanticModelManager, SemanticModelSection } from "./SemanticModelManager";
+import { SemanticModelManager } from "./SemanticModelManager";
 import { selectedSemanticModel } from "@/core/semantic/model";
 import { WorkspaceSidebarRail } from "./WorkspaceSidebarRail";
 import { LocalProjectsProvider, useLocalProjects } from "./projects/LocalProjectsProvider";
@@ -184,7 +185,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     activeOriginalWorkbook,
     openOriginalWorkbook,
     edsReportOptions,
-    originalWorkbookButtonRef,
     originalWorkbookTriggerRef,
     handleOpenEdsAnalysis,
     handleCloseEdsAnalysis,
@@ -211,7 +211,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [auditRecords, setAuditRecords] = useState<ChangeSetAuditRecord[]>([]);
   const [pendingChangeSource, setPendingChangeSource] = useState<ChangeSetAuditSource | null>(null);
   const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
-  const assistant = useStudioAssistantState(repurchaseChangeSet);
+  const assistant = useStudioAssistantState(repurchaseChangeSet, activePageId);
   const {
     aiChangeSet,
     setAiChangeSet,
@@ -510,13 +510,15 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setAuditRecords(restored.auditRecords);
       if (restored.restored) setQueryRecords(restored.queryRecords);
       setHarnessTasks(restored.harnessTasks);
-      const restoredSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation);
+      const migratedSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation, INITIAL_WORKSPACE_PAGE_ID, restored.harnessTasks);
+      const restoredPageId = selectablePageId(restoredExecution.present, activeAssistantSession(migratedSessions).pageId);
+      const restoredSessions = selectAssistantPage(migratedSessions, restoredPageId);
       setAssistantSessions(restoredSessions);
       setEdsWorkspace(restored.edsWorkspace);
       setDataRuntime(mergeEdsWorkspaceRuntime(localProject.session ? { rowsByDataSourceId: {} } : fixtures.dataRuntime, restored.edsWorkspace));
-      setActivePageId(INITIAL_WORKSPACE_PAGE_ID);
-      setActiveDataSourceId(selectedSemanticModel(restoredDataProduct, INITIAL_WORKSPACE_PAGE_ID)?.sourceDatasetId
-        ?? datasetsForWorkspace(restoredDataProduct.datasets, INITIAL_WORKSPACE_PAGE_ID)[0]?.id ?? "");
+      setActivePageId(restoredPageId);
+      setActiveDataSourceId(selectedSemanticModel(restoredDataProduct, restoredPageId)?.sourceDatasetId
+        ?? datasetsForWorkspace(restoredDataProduct.datasets, restoredPageId)[0]?.id ?? "");
       const uploadedSourceIds = restoredExecution.present.dataSources
         .filter((source) => source.sourceType === "csv")
         .map((source) => source.id);
@@ -532,19 +534,15 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           if (!cancelled) setPersistenceNotice(localProject.session ? `项目数据表 ${datasetId} 恢复失败，请在 Data Browser 检查文件，不会自动删除数据。` : `临时数据集 ${datasetId} 已过期、未启用服务端持久化或恢复失败，请重新上传。`);
         });
       });
-      const latestConversationTurn = restored.assistantConversation.at(-1);
+      const latestConversationTurn = activeAssistantSession(restoredSessions).turns.at(-1);
+      const restoredTurn = assistantTurnState(latestConversationTurn);
+      setAiRequestError(restoredTurn.requestError);
       if (latestConversationTurn) {
         setLastSubmittedInstruction(latestConversationTurn.instruction);
         setAiInstruction("");
         setAiMessage(latestConversationTurn.response);
         setHasValidAiPlan(false);
-        setAiRequestStatus(latestConversationTurn.state === "success"
-          ? "success"
-          : latestConversationTurn.state === "blocked"
-            ? "blocked"
-            : latestConversationTurn.state === "cancelled"
-              ? "cancelled"
-              : "error");
+        setAiRequestStatus(restoredTurn.requestStatus);
         setIsLocalAssistantReply(!latestConversationTurn.taskId);
       }
       setLastHarnessTaskId(latestConversationTurn?.taskId ?? "");
@@ -552,6 +550,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       if (pendingHarnessTask?.pendingChangeSet) {
         setAiChangeSet(pendingHarnessTask.pendingChangeSet);
         setAiMessage(pendingHarnessTask.resultMessage ?? "Harness 已恢复待确认变更，请重新预览后人工确认。");
+        setAiRequestError(null);
         setAiMetadata(null);
         setHasValidAiPlan(true);
         setAiRequestStatus("success");
@@ -574,7 +573,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     });
     return () => { cancelled = true; };
   }, [fixtures.dataRuntime, initialProduct, setActivePageId, setAiChangeSet, setAiInstruction, setAiMessage,
-    setAiMetadata, setAiRequestStatus, setAssistantSessions, setLastHarnessTaskId, setHarnessTasks, setHasValidAiPlan,
+    setAiMetadata, setAiRequestStatus, setAiRequestError, setAssistantSessions, setLastHarnessTaskId, setHarnessTasks, setHasValidAiPlan,
     setIsLocalAssistantReply, setLastSubmittedInstruction, setActiveDataSourceId, setEdsWorkspace, localProject.repository, localProject.session]);
 
 
@@ -953,8 +952,11 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       const restoredDataProduct = ensureInitialBlankWorkspaceInProduct(restored.dataProduct);
       const restoredExecution = ensureInitialBlankWorkspaceInExecution(restored.execution);
 
-      const latestConversationTurn = restored.assistantConversation.at(-1);
-      const restoredSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation);
+      const migratedSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation, INITIAL_WORKSPACE_PAGE_ID, restored.harnessTasks);
+      const restoredPageId = selectablePageId(restoredExecution.present, activeAssistantSession(migratedSessions).pageId);
+      const restoredSessions = selectAssistantPage(migratedSessions, restoredPageId);
+      const latestConversationTurn = activeAssistantSession(restoredSessions).turns.at(-1);
+      const restoredTurn = assistantTurnState(latestConversationTurn);
       const pendingHarnessTask = restored.harnessTasks.find((task) => task.id === latestConversationTurn?.taskId && task.state === "awaitingConfirmation" && task.pendingChangeSet);
       setDataProduct({ ...restoredDataProduct, appSpec: restoredExecution.present });
       setExecution(restoredExecution);
@@ -967,13 +969,13 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setAuditRecords(restored.auditRecords);
       setHarnessTasks(restored.harnessTasks);
       setAssistantSessions(restoredSessions);
-      assistant.sessionImagesRef.current.clear();
+      assistant.clearSessionImages();
       assistant.setAiImageAttachments([]); assistant.setLastSubmittedImages([]);
       markQueriesRestored(restored.queryRecords);
       setQueryRecords(restored.queryRecords);
-      setActivePageId(INITIAL_WORKSPACE_PAGE_ID);
-      setActiveDataSourceId(selectedSemanticModel(restoredDataProduct, INITIAL_WORKSPACE_PAGE_ID)?.sourceDatasetId
-        ?? datasetsForWorkspace(restoredDataProduct.datasets, INITIAL_WORKSPACE_PAGE_ID)[0]?.id ?? "");
+      setActivePageId(restoredPageId);
+      setActiveDataSourceId(selectedSemanticModel(restoredDataProduct, restoredPageId)?.sourceDatasetId
+        ?? datasetsForWorkspace(restoredDataProduct.datasets, restoredPageId)[0]?.id ?? "");
       setPendingPuckChangeSet(null);
       setPendingChangeSource(null);
       clearPuckDraft();
@@ -983,7 +985,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setIsDataSourceOpen(false);
       setValidationError(null);
       setAiMetadata(null);
-      setAiRequestError(null);
+      setAiRequestError(pendingHarnessTask?.pendingChangeSet ? null : restoredTurn.requestError);
       setLastHarnessTaskId(latestConversationTurn?.taskId ?? "");
 
       if (pendingHarnessTask?.pendingChangeSet) {
@@ -999,13 +1001,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setAiMessage(latestConversationTurn.response);
         setLastSubmittedInstruction(latestConversationTurn.instruction);
         setAiInstruction("");
-        setAiRequestStatus(latestConversationTurn.state === "success"
-          ? "success"
-          : latestConversationTurn.state === "blocked"
-            ? "blocked"
-            : latestConversationTurn.state === "cancelled"
-              ? "cancelled"
-              : "error");
+        setAiRequestStatus(restoredTurn.requestStatus);
         setHasValidAiPlan(false);
         setIsLocalAssistantReply(!latestConversationTurn.taskId);
       } else {
@@ -1063,7 +1059,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     ...(selectedNotebookContext ? { notebookContext: selectedNotebookContext } : {}),
   });
 
-  const { handleCreateEdsWorkspace, handleSelectEdsWorkspaceReport, handleAnalyzeEdsReports, handleAnalyzeDataSource, handleCsvUploaded, handleConfirmDatasetAiAccess, handleDeleteDataset } = useStudioDatasetActions({
+  const { handleCreateEdsWorkspace, handleSelectEdsWorkspaceReport, handleAnalyzeEdsReports, handleCsvUploaded, handleConfirmDatasetAiAccess, handleDeleteDataset } = useStudioDatasetActions({
     datasets, assistant, role, renderedSpec, activePageId, pendingChangeSource, latestDatasetWorkspaceRef,
     setExecution, setDataProduct, setDataRuntime, setAuditRecords, setActivePageId,
     setPendingPuckChangeSet, setPendingChangeSource, setCanvasMode, clearPuckDraft,
@@ -1072,7 +1068,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     flushProject: localProject.session ? localProject.flush : undefined,
   });
 
-  const { handlePageChange, handleInterfaceChange, handleCreateInterface, handleRenamePage, handleDeletePage } = useStudioPageActions({
+  const pageActions = useStudioPageActions({
     role, dataProduct, renderedSpec, activePageId, interfaces, canvasMode,
     execution, latestDatasetWorkspaceRef, setExecution, setDataProduct,
     setActivePageId, setActiveDataSourceId, setIsDataSourceOpen,
@@ -1080,6 +1076,30 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     clearPuckDraft, setPuckSessionKey, setValidationError, setSaveLabel,
     ensurePuckDraft, auditCurrentPreviewCancellation, addAudit, persistExplicitly,
   });
+
+  function canSwitchInterface() {
+    if (conversationDisabledReason || assistant.harnessRequestActiveRef.current) {
+      setPersistenceNotice(conversationDisabledReason ?? "请等待当前任务结束，再切换界面。");
+      return false;
+    }
+    return true;
+  }
+  function handleInterfaceChange(pageId: string) {
+    if (pageId === activePageId || !renderedSpec.pages.some((page) => page.id === pageId) || !canSwitchInterface()) return;
+    try {
+      // Check capacity before changing the page; the state hook installs its thread.
+      selectAssistantPage(assistantSessions, pageId);
+      pageActions.handleInterfaceChange(pageId);
+    } catch (error) { setPersistenceNotice(readableValidationError(error)); }
+  }
+  function handleCreateInterface(label: string) {
+    if (!canSwitchInterface()) return;
+    if (assistantSessions.items.length >= MAX_PROJECT_ASSISTANT_SESSIONS) {
+      setPersistenceNotice("项目会话容量已满，请先备份并整理项目。");
+      return;
+    }
+    pageActions.handleCreateInterface(label);
+  }
 
   function handleUseProjectTable(result: ProjectDatasetResponse, destination: "preview" | "notebook" | "agent") {
     handleCsvUploaded(result, undefined, activePageId);
@@ -1180,29 +1200,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             onBrowseData={() => handleNavigationAction("data")} onConnections={() => { closeFilesPanel(); handleNavigationAction("connections"); }} /> : <>
           <button ref={sidebarPanelCloseRef} type="button" className="workspace-sidebar-collapse" aria-label="收起侧边栏" onClick={collapsePagesPanel}>‹</button>
           <PageStructurePanel
-            dataBrowserPanel={<button type="button" className="data-browser-launch" disabled={aiRequestStatus === "loading" || notebookInteractionBusy || isCsvUploadOpen} onClick={() => setDataBrowserOpen(true)}><span>▦</span><span>Data Browser<small>{localProject.session?.manifest.name ?? "打开本地项目与数据资源库"}</small></span></button>}
-            semanticModelsPanel={<SemanticModelSection models={semantic.models} selectedId={semantic.selected?.id}
-              canCreate={role !== "viewer" && workspaceDatasets.length > 0} busy={aiRequestStatus === "loading"}
-              onManage={(modelId) => semantic.setEditor({ modelId })} onSelect={handleSelectSemanticModel} />}
-            dataProduct={dataProduct}
             appSpec={renderedSpec}
             activePageId={activePageId}
-            onPageChange={handlePageChange}
-            onCreateInterface={() => {
-              const blankCount = interfaces.filter((item) => item.label.startsWith("空白工作界面")).length;
-              handleCreateInterface(`空白工作界面 ${blankCount + 1}`);
-            }}
-            role={role}
-            onRenamePage={handleRenamePage}
-            onDeletePage={handleDeletePage}
-            activeDataSourceId={activeDataSource?.id ?? ""}
-            onOpenDataSource={(dataSourceId) => { setActiveDataSourceId(dataSourceId); setIsDataSourceOpen(true); }}
-            onUploadCsv={() => setIsCsvUploadOpen(true)}
-            originalWorkbooks={activeOriginalWorkbooks}
-            originalWorkbookButtonRef={originalWorkbookButtonRef}
-            onOpenOriginalWorkbook={handleOpenOriginalWorkbook}
-            onAnalyzeDataSource={(dataSourceId) => { handleWorkspaceModeChange("agent"); handleAnalyzeDataSource(dataSourceId); }}
-            analysisRunning={aiRequestStatus === "loading"}
+            onPageChange={handleInterfaceChange}
           />
           </>}
         </div>
@@ -1309,6 +1309,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             harnessTasks={harnessTasks}
             conversationTurns={assistantConversation}
             conversationSwitcher={{ sessions: assistantSessions, projectName: localProject.session?.manifest.name ?? "当前临时项目",
+              pageId: activePageId, pageName: activePage?.title ?? "当前界面",
               disabledReason: conversationDisabledReason, onSelect: handleSelectAssistantSession, onNew: handleNewAssistantSession }}
             pendingInstruction={aiRequestStatus === "loading" ? lastSubmittedInstruction : ""}
             dataAnalysisMode={Boolean(edsWorkspace && activePageId === EDS_WORKSPACE_PAGE_ID)}
@@ -1360,7 +1361,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           sheetNames={openOriginalWorkbook.sheetNames}
           onClose={() => {
             setOpenOriginalWorkbookId(null);
-            requestAnimationFrame(() => restoreDialogTrigger(originalWorkbookTriggerRef.current ?? originalWorkbookButtonRef.current));
+            requestAnimationFrame(() => restoreDialogTrigger(originalWorkbookTriggerRef.current ?? filesButtonRef.current));
           }}
         />
       )}

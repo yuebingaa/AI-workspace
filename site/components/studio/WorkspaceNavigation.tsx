@@ -6,7 +6,7 @@ import { StudioIcon, type StudioIconName } from "./StudioIcon";
 export type WorkspaceNavigationAction = "pages" | "data" | "files" | "models" | "connections" | "history" | "api" | "agent" | "wecom" | "import" | "backup" | "restore" | "undo" | "clearConversation";
 const tools: Array<{ id: WorkspaceNavigationAction; label: string; icon: StudioIconName; keywords: string }> = [
   { id: "data", label: "数据浏览器", icon: "data", keywords: "Data Browser 项目 数据表 资源 回收站" },
-  { id: "pages", label: "工作界面与数据", icon: "pages", keywords: "页面 结构 组件 看板" },
+  { id: "pages", label: "工作界面", icon: "pages", keywords: "页面 界面 选择 切换 看板" },
   { id: "files", label: "原始文件", icon: "files", keywords: "Files XLSX 工作簿 表格" },
   { id: "models", label: "语义模型", icon: "models", keywords: "指标 维度 口径" },
   { id: "connections", label: "数据库连接", icon: "connections", keywords: "SQL 连接 环境 Environment" },

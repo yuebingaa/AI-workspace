@@ -61,7 +61,7 @@ export function AgentEngineSettingsContent({ status, selectedEngine, loading, bu
             {status.dsh.reason && <small>{status.dsh.reason}</small>}</span>
         </label>
       </fieldset>
-      <p id="agent-engine-scope" className="agent-engine-muted">DSH 支持已选数据源、本次附带的 Excel 原件、Notebook Python 和已授权只读数据库，结果可接表格与图表。Python 须部署能力可用，连接须允许 AI 使用。暂不支持语义模型、图片或外部工具；不支持的任务会明确报错，不自动切换引擎。</p>
+      <p id="agent-engine-scope" className="agent-engine-muted">DSH 支持已选数据源、本次附带的 Excel 原件、Notebook Python 和已授权只读数据库，结果可接表格、图表与说明。说明中的数值可绑定本轮完整单行结果，不执行表达式或脚本。支持文本、数字、日期和单选参数，以单行表传入本地 SQL 或 Python；不用于远端 SQL 参数绑定，也不是密码输入。选择单表语义模型后可用语义查询，沿用固定指标口径。Python 须部署能力可用，连接须允许 AI 使用。暂不支持多模型 Notebook、图片及外部工具；不支持的任务会明确报错，不自动切换引擎。</p>
       {taskActive && <p className="agent-engine-status" role="status">有任务正在执行，暂不能切换引擎。任务结束后请刷新状态。</p>}
       <section className="agent-engine-plugins" aria-labelledby="agent-engine-plugins-heading">
         <div><h3 id="agent-engine-plugins-heading">DSH 已接入的工具插件</h3><small>只读目录</small></div>

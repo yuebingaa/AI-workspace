@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { HarnessToolArgumentsError } from "@/core/harness/tool-registry";
 import { NotebookSearchError } from "@/core/notebook/search";
 import { NotebookSearchStateError } from "@/core/harness/notebook-cell-search";
-import { notebookSearchFailureMessage } from "../../../runtime/dsh/tool-diagnostics.mjs";
-import { dshToolErrorMessage } from "./tool-error-message";
+import { NotebookSubmissionError } from "@/core/harness/notebook-submission-error";
+import { notebookSearchFailureMessage, notebookToolFailureMessage } from "../../../runtime/dsh/tool-diagnostics.mjs";
+import { dshToolErrorMessage, trustedNotebookSearchFailure } from "./tool-error-message";
 
 const parameters = { type: "object", properties: {
   query: { type: "string" }, bindings: { type: "object", additionalProperties: { type: "string" } },
@@ -14,6 +15,33 @@ const input = (error: unknown) => ({ name: "cellSearch" as const, parameters, er
   signal: new AbortController().signal, authorizeCurrentAccess: vi.fn(() => {}) });
 
 describe("DSH public tool error message", () => {
+  it.each(["notebook_submit_version_stale", "notebook_submit_no_changes", "notebook_submit_run_required",
+    "notebook_submit_receipt_mismatch"] as const)("trusted submission %s explains the guard without treating it as recoverable search", code => {
+    const error = new NotebookSubmissionError(code);
+    error.message = secret;
+    const options = { ...input(error), name: "submitNotebookDraft" as const };
+    const message = dshToolErrorMessage(options);
+    expect(message).toContain(code);
+    expect(message).toBe(notebookToolFailureMessage({ error: { code } }, "submitNotebookDraft"));
+    expect(message).not.toContain(secret);
+    expect(options.authorizeCurrentAccess).toHaveBeenCalledOnce();
+    expect(trustedNotebookSearchFailure("submitNotebookDraft", error)).toBeUndefined();
+    expect(trustedNotebookSearchFailure("cellSearch", error)).toBeUndefined();
+  });
+
+  it.each(["spoofed", "unknown-code", "wrong-tool", "revoked", "cancelled", "cancelled-during"])("submission %s stays generic", kind => {
+    const error = kind === "spoofed" ? Object.assign(new Error(secret), { name: "NotebookSubmissionError", code: "notebook_submit_no_changes" })
+      : new NotebookSubmissionError("notebook_submit_no_changes");
+    if (kind === "unknown-code") Object.assign(error, { code: secret });
+    const controller = new AbortController();
+    const options = { ...input(error), name: kind === "wrong-tool" ? "runNotebookCells" as const : "submitNotebookDraft" as const,
+      signal: controller.signal };
+    if (kind === "revoked") options.authorizeCurrentAccess.mockImplementation(() => { throw new Error(secret); });
+    if (kind === "cancelled") controller.abort(new Error(secret));
+    if (kind === "cancelled-during") options.authorizeCurrentAccess.mockImplementation(() => controller.abort(new Error(secret)));
+    expect(dshToolErrorMessage(options)).toBe(`${options.name} 执行失败。`);
+  });
+
   it.each([
     new NotebookSearchError("notebook_search_anchor_not_found"),
     new NotebookSearchError("notebook_search_anchor_required"),

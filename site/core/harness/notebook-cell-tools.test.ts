@@ -7,6 +7,8 @@ import type { HarnessModel, HarnessObservation, HarnessRequest, HarnessToolName 
 import { executeHarnessTool, harnessToolCatalog, type HarnessToolContext } from "./tool-registry";
 import { buildHarnessContextSelection, estimateHarnessModelInputChars, plannedHarnessToolSequence } from "./context-selector";
 import { DeepSeekHarness } from "./deepseek-harness";
+import { StudioValidationError } from "@/core/schemas";
+import { HarnessToolArgumentsError } from "./tool-registry";
 
 function fixture() {
   const { product, source, rows } = semanticFixture();
@@ -28,6 +30,48 @@ function fixture() {
 }
 
 describe("Notebook 单元工具", () => {
+  it("真实运行已有单元不提示提交，仍拒绝无编辑草稿且保留既有定义", async () => {
+    const { context, request, sql } = fixture();
+    request.notebookContext!.document.cells.push(sql);
+    context.notebookCellSession!.document = structuredClone(request.notebookContext!.document);
+    const before = structuredClone(request);
+    const result = await executeHarnessTool("runNotebookCells", { editVersion: 0 }, context);
+    expect(result.data).toMatchObject({ editVersion: 0, status: "success", results: [
+      { cellId: "summary", rows: [{ region: "华东", revenue: 150 }, { region: "华南", revenue: 80 }] },
+    ] });
+    expect(result.summary).toContain("本轮未修改单元");
+    expect(result.summary).toContain("依据本次有效结果回答");
+    expect(result.data).not.toHaveProperty("next");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const error = await executeHarnessTool("submitNotebookDraft", { editVersion: 0 }, context).catch(error => error);
+      expect(error).toBeInstanceOf(StudioValidationError);
+      expect(error).toMatchObject({ code: "notebook_submit_no_changes" });
+      expect(error.message).toContain("尚未修改任何单元");
+    }
+    expect(context.notebookCellSession!.editVersion).toBe(0);
+    expect(context.notebookCellSession!.document).toEqual(before.notebookContext!.document);
+    expect(request).toEqual(before);
+  }, 15_000);
+
+  it("提交拒绝保留版本、未运行、无效回执的有限原因，非法参数仍为Schema失败", async () => {
+    const { context, sql } = fixture();
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: 7 }, context))
+      .rejects.toMatchObject({ code: "notebook_submit_version_stale" });
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: "0" }, context))
+      .rejects.toBeInstanceOf(HarnessToolArgumentsError);
+    await executeHarnessTool("editNotebookCells", { editVersion: 0, cells: [sql] }, context);
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: 1 }, context))
+      .rejects.toMatchObject({ code: "notebook_submit_run_required" });
+    await executeHarnessTool("runNotebookCells", { editVersion: 1 }, context);
+    context.notebookCellSession!.run!.revision += 1;
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: 1 }, context))
+      .rejects.toMatchObject({ code: "notebook_submit_receipt_mismatch" });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(executeHarnessTool("submitNotebookDraft", { editVersion: 1 }, { ...context, signal: controller.signal }))
+      .rejects.toMatchObject({ name: "AbortError" });
+  }, 15_000);
+
   it("Python 失败回执保留分段计时和任务内代码，失败草稿不能提交", async () => {
     const { context, request } = fixture();
     request.instruction = "创建 Python 单元并运行";
@@ -42,7 +86,7 @@ describe("Notebook 单元工具", () => {
       cell: { id: "py", kind: "python", title: "失败示例", code, outputName: "totals", inputCellIds: ["data"], fileNames: [] } }, context);
     const result = await executeHarnessTool("runNotebookCells", { editVersion: 1 }, context);
     const diagnostic = { cellId: "py", preparationMs: expect.any(Number), executionMs: expect.any(Number), failurePhase: "execution", termination: "timeout" };
-    expect(result.data).toMatchObject({ status: "failure", timings: [diagnostic], errors: [{ cellId: "py", timing: {
+    expect(result.data).toMatchObject({ status: "failure", next: "editNotebookCells", timings: [diagnostic], errors: [{ cellId: "py", timing: {
       preparationMs: expect.any(Number), executionMs: expect.any(Number), failurePhase: "execution", termination: "timeout",
     } }] });
     const selection = buildHarnessContextSelection(request, [{ toolName: "runNotebookCells", toolCallId: "timed_run",
@@ -72,7 +116,7 @@ describe("Notebook 单元工具", () => {
     const before = structuredClone(request);
     await executeHarnessTool("editNotebookCells", { editVersion: 0, cells: [sql, chart] }, context);
     const result = await executeHarnessTool("runNotebookCells", { editVersion: 1 }, context);
-    expect(result.data).toMatchObject({ status: "success", results: [
+    expect(result.data).toMatchObject({ status: "success", next: "submitNotebookDraft", results: [
       { cellId: "summary", rows: [{ region: "华东", revenue: 150 }, { region: "华南", revenue: 80 }] },
       { cellId: "chart", rows: [{ region: "华东", revenue: 150 }, { region: "华南", revenue: 80 }] },
     ] });

@@ -5,6 +5,7 @@ import { createDshToolBroker } from "./tool-broker";
 import { HarnessToolArgumentsError } from "@/core/harness/tool-registry";
 import { NotebookSearchError } from "@/core/notebook/search";
 import { NotebookSearchStateError } from "@/core/harness/notebook-cell-search";
+import { NotebookSubmissionError } from "@/core/harness/notebook-submission-error";
 
 const toolNames = ["cellSearch", "editNotebookCells", "runNotebookCells", "submitNotebookDraft"];
 const optionalToolNames = ["getKernelPackagesInfo", "inspectEdsRawWorkbook", "readEdsRawRows", "inspectConnectionSchema"];
@@ -40,6 +41,33 @@ async function fixture(overrides: Partial<Parameters<typeof createDshToolBroker>
 }
 
 describe("DSH 任务级 loopback 工具 capability", () => {
+  it.each(["notebook_submit_version_stale", "notebook_submit_no_changes", "notebook_submit_run_required",
+    "notebook_submit_receipt_mismatch"] as const)("提交拒绝 %s 只发送严格有限code", async code => {
+    const error = new NotebookSubmissionError(code);
+    error.message = "SYNTHETIC_PRIVATE_SUBMIT_MESSAGE";
+    const execute = vi.fn(async () => { throw error; });
+    const { broker } = await fixture({ tools: toolNames.map(name => ({ name, description: name,
+      parameters: { type: "object" }, execute })) });
+    const response = await send(broker, "/execute", { method: "POST", body: JSON.stringify({
+      name: "submitNotebookDraft", args: { editVersion: 0 }, callId: "submit-failed" }) }).response;
+    expect(response.status).toBe(422);
+    expect(JSON.parse(response.body)).toEqual({ error: { code } });
+  });
+
+  it.each(["spoofed", "unknown-code", "wrong-tool", "revoked"])("提交拒绝 %s 不披露诊断", async kind => {
+    const error = kind === "spoofed" ? Object.assign(new Error("SYNTHETIC_PRIVATE"),
+      { name: "NotebookSubmissionError", code: "notebook_submit_no_changes" }) : new NotebookSubmissionError("notebook_submit_no_changes");
+    if (kind === "unknown-code") Object.assign(error, { code: "SYNTHETIC_PRIVATE" });
+    let allowed = true;
+    const execute = vi.fn(async () => { if (kind === "revoked") allowed = false; throw error; });
+    const { broker } = await fixture({ authorizeCurrentAccess: () => { if (!allowed) throw new Error("SYNTHETIC_PRIVATE"); },
+      tools: toolNames.map(name => ({ name, description: name, parameters: { type: "object" }, execute })) });
+    const response = await send(broker, "/execute", { method: "POST", body: JSON.stringify({
+      name: kind === "wrong-tool" ? "cellSearch" : "submitNotebookDraft", args: {}, callId: "submit-denied" }) }).response;
+    expect(response.status).toBe(422);
+    expect(JSON.parse(response.body)).toEqual({ error: { message: "工具执行或授权验证失败，请检查输入或结束任务。" } });
+  });
+
   it.each([
     new NotebookSearchError("notebook_search_anchor_not_found"),
     new NotebookSearchError("notebook_search_anchor_required"),

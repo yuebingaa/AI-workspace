@@ -78,7 +78,8 @@ describe("DSH read-only delivery regression", () => {
     const bridge = createNotebookToolBridge({ ...options, request, profile: "notebook" });
     try {
       const result = await bridge.execute("runNotebookCells", { editVersion: 0 });
-      expect(result.data).toMatchObject({ status: "success", completedCellIds: ["data", "totals", "chart"], next: "submitNotebookDraft" });
+      expect(result.data).toMatchObject({ status: "success", completedCellIds: ["data", "totals", "chart"] });
+      expect(result.data).not.toHaveProperty("next");
       // Deliberate negative contract probe: no model may turn a read-only request
       // into an edit merely to make this explicit rejected submit succeed.
       await expect(bridge.execute("submitNotebookDraft", { editVersion: 0 })).rejects.toThrow("尚未修改任何单元");

@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { runDshSession, inspectDshRuntime } from './driver.mjs';
 import { TOOL_NAMES, OPTIONAL_TOOL_NAMES, catalogToolNames } from './policy.mjs';
 import { createWireFetch } from './wire-policy.mjs';
-import { notebookSearchFailureMessage } from './tool-diagnostics.mjs';
+import { notebookSearchFailureMessage, notebookToolFailureMessage } from './tool-diagnostics.mjs';
 
 async function broker(execute = async () => ({ summary: 'ok', data: { ok: true } }), authorize = () => true,
   names = TOOL_NAMES, options = {}) {
@@ -244,6 +244,27 @@ test('official SDK receives safe argument feedback and a local model fixture cor
     provider.closeAllConnections();
     await new Promise((resolve) => provider.close(resolve));
   }
+});
+
+test('official SDK keeps submission rejection as an error with the same finite UI message and enforces tool identity', { timeout: 30_000 }, async () => {
+  const body = { error: { code: 'notebook_submit_no_changes' } };
+  const fixture = await broker(async () => { throw new Error('SYNTHETIC_PRIVATE_SUBMIT'); },
+    undefined, TOOL_NAMES, { failureBody: body });
+  try {
+    const result = await runDshSession({ brokerUrl: fixture.url, brokerToken: fixture.token,
+      modelConfig: { mode: 'fixture', actions: [
+        { name: 'submitNotebookDraft', args: { editVersion: 0 } }, { name: 'cellSearch', args: {} },
+      ] },
+      instruction: 'Controlled submission diagnostic fixture.', sessionId: 'sdk-submit-business-diagnostic',
+    });
+    const failures = result.events.filter(event => event.type === 'tool/result'
+      && event.data.message.content.some(block => block.isError));
+    assert.equal(failures.length, 2);
+    assert.ok(JSON.stringify(failures[0]).includes(notebookToolFailureMessage(body, 'submitNotebookDraft')));
+    assert.doesNotMatch(JSON.stringify(failures[1]), /notebook_submit_no_changes/);
+    assert.doesNotMatch(JSON.stringify(failures), /SYNTHETIC_PRIVATE/);
+    assert.equal(result.reaped, true);
+  } finally { await fixture.close(); }
 });
 
 test('authorization is checked again before the second model dispatch', { timeout: 30_000 }, async () => {

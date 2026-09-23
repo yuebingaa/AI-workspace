@@ -4,7 +4,7 @@ import { NotebookBridgePreflightError, notebookBridgePreflightMessage, type Note
 
 const codes: NotebookBridgePreflightCode[] = ["missing_notebook_context", "unsupported_task_context", "unsupported_csv_profile",
   "source_unavailable", "workbook_context_mismatch", "missing_data_context", "workspace_unavailable",
-  "notebook_cell_unsupported", "notebook_reference_unavailable", "python_unavailable"];
+  "notebook_cell_unsupported", "notebook_reference_unavailable", "python_unavailable", "semantic_model_unavailable"];
 
 describe("finite bridge preflight diagnostics", () => {
   it.each(codes)("%s preserves validation classification and exposes only the fixed code/message", code => {

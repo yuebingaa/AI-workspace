@@ -1,16 +1,20 @@
 # AgentCanvas Agent 架构
 
-最后更新：2026-09-22。此文档为 Agent 架构的唯一维护入口，随代码变化同步更新。
+最后更新：2026-09-23。此文档为 Agent 架构的唯一维护入口，随代码变化同步更新。
 
-<!-- agent-architecture-source-sha256: 951f3c0a511174266c6af09d307c03c894c4f1f3eeebcb3ad931def3f69011dd -->
+<!-- agent-architecture-source-sha256: fe859d113d98a662b0235c7d8157fc5ae296d23b348930644aa3eb24d73162ef -->
 
 ## 当前实现与启用状态
 
 | 项目 | 状态 |
 | --- | --- |
 | 单 Agent Harness | 已有实现；默认执行路径 |
+| DSH 参数定义问答 | 有限整句识别、目标定位和完整源码证据已落地；3001两轮真实模型4模型/2工具读到East→手工改值/重开→South，无运行/编辑/提交。78项执行链与155项纯规则通过，完整检查见[本批报告](../verification/dsh-parameter-inspection-2026-09-22.md)，未发布3000 |
+| DSH 参数单元 | 网站profile接入原文本/数字/日期/单选参数，以单行value表输入本地SQL/Python；原CSV、来源权限、草稿采用不变。参数输出不单独算业务结果证据。3001两轮真实模型9模型/8工具完成参数变更、采用150/重开/只读结论，全量3074应用/26工具通过，旧EDS3项跳过；见[本批记录](../verification/dsh-parameters-2026-09-22.md)，未发布3000 |
+| DSH 说明单元 | 网站profile接入已有text及受控单行引用，原CSV试点不扩；复用模板/执行/回执与用户采用。3001两轮真实模型完成引用230、采用重开及只读追问；全量3039应用/26工具通过，原EDS3项跳过，见[本批记录](../verification/dsh-text-cells-2026-09-22.md)，未发布3000 |
 | 可切换 DSH 执行器 | 多来源 / 本次 Excel 原件 / Python / 授权只读数据库 Notebook 已接线。第五批真实模型 + AdventureWorks只读实库已提交38月表图；3001真实模型CSV任务已生成、采用、运行及确认看板并修改保存，最终重开与回归证据见[交付报告](../verification/dsh-delivery-2026-09-22.md)。DSH独立24工具 / 180秒保护，网站原生SDK加载已修复。活动SDK ZIP依赖补丁audit0为第三批结果，旧安装风险保留；保持用户DSH选择、源码默认原版、未发布3000 |
 | 官方 DSH 离线内核试点 | 上一步历史实验及四工具桥仍保留；其自身不接公开 API。固定模型 / 真实工具验收结果见[试点记录](../verification/dsh-runtime-pilot-2026-09-22.md)，本次网站 SDK 接入另见上一行 |
+| DSH 已选单表语义查询 | 网站profile已接线：只消费本次选定模型，复用semanticQuery及原数据授权/草稿机制。3001两次真实收费任务10模型/9工具通过生成、试跑、显式采用230与重开同会话只读结论，原150/80保持；无模型预检拒绝另验。不创建模型、不扩跨表或其他Cell，实际检查与截图见[接入记录](../verification/dsh-semantic-query-2026-09-22.md)，未发布3000 |
 | DSH 已有 Transform 与分析回答 | 第七批已补齐原配方单元、有限初始化诊断和普通分析的真实结果回答分支；修改任务仍需草稿确认。3001合成CSV真实模型第二轮completed，3模型/2工具、输出150/80，首轮失败保留；2912应用/26工具通过，详见[本批报告](../verification/dsh-transform-preflight-2026-09-22.md)。用户原文件未付费分析，3000未发布 |
 | M1 工具契约与 Notebook 执行保护 | 输入 Schema / 安全纠错、分工具预算、可选 Python 分段回执已落地；专项与最终全量 1,178 项测试通过；未发布稳定站，不代表完整 M1 已完成 |
 | M1 失败诊断可见化 | 第二批新增最终任务只读失败草稿与分段耗时展示；仅当前窗口，不持久化、不采用失败草稿；本批验证记录见[第二批报告](../verification/hex-notebook-diagnostics-2026-09-16.md)，未发布稳定站 |
@@ -38,7 +42,7 @@
 | M6 可选 Python 资源 | 第九包明确省略资源的构建与统一缺件能力组装；2,447 应用 + 26 Node、类型 / 默认构建及无资源隔离构建 / SQL 通过，3001 分层验收 6 组 / 8 图实际查看。缺件 UI 为状态替身，SQL / 恢复 Python 真实运行；未移除当前站资源或全部适配代码，见[报告](../verification/hex-python-optional-runtime-2026-09-21.md)，3000 未发布 |
 | M6 独立只读项目检查 | 第十包隔离显示 DTO 与可执行 / 可保存项目，未知 Cell 只读占位并保留原文件；2,495 应用 + 26 Node、类型 / 构建通过，3001 截图与边界见[报告](../verification/hex-project-inspection-2026-09-21.md)。不是未知项目可编辑打开，3000 未发布 |
 | M7 本地分析集成验收 | 第一包聚焦手工 CSV 闭环与离线 Agent 两轮真实工具，两类证据分别记录于[报告](../verification/hex-local-analysis-flow-2026-09-21.md)；不是完整浏览器 Agent 连续链或真实模型质量评测，不新增生产接口，3000 未发布 |
-| M7 浏览器 Agent 连续分析 | 第二包离线工厂两轮工具 / SSE 测试通过；浏览器首请求因全部 40 项配方违反 20 项契约被拒绝，后半链未验证。已按共用来源范围修复前端请求，实际检查见[报告](../verification/hex-agent-analysis-flow-2026-09-21.md)。无新运行开关或 API 格式变化，3000 未发布 |
+| M7 浏览器 Agent 连续分析 | 第二包初验配方请求超限后已修复，CSV首稿采用/重开追问/暂不采用的离线真实工具闭环已续验。第三包合成Excel真实DSH两轮2任务/11模型/11工具通过：新表图草稿采用后300/160，重开同会话原句结论直接回答。语义手工链与只读实库分开复验，最终检查/失败边界见[交付报告](../verification/hex-m7-local-delivery-2026-09-22.md)；不新增生产契约，3000未发布 |
 | M6 原件删除影响审阅 | 第五包全部当前 Notebook 显式 Python 文件名引用 / 下游计数、两处风险确认；2,306 应用 + 14 Node、类型 / 构建与 3001 真实归档 / 缺件 / 独立表执行 / 恢复重跑 5 组 / 9 图通过。可恢复归档接口、输入解析和持久化不变；见[专项报告](../verification/hex-file-deletion-impact-2026-09-21.md)，3000 未发布 |
 | Input Inspector | 已改为 Agent 判断后按需检查：对话跳过，数据 / Notebook 任务才进入；复用既有语义路由或合法工具 / 委派决策，不增加模型调用；未发布稳定站 |
 | 可视化测试页 | `/visualization-lab` 已实现，开发站通过交互与单次真实折线图生成验证；固定合成数据、独立预览、数值检查与人工评定，使用现有主 Agent；未发布稳定站 |
@@ -80,6 +84,10 @@ DSH 拥有 Agent 决策 / 执行循环，工具桥与 Notebook 模块仍拥有 S
 第七批修复已有Transform导致整Notebook零步骤受阻：网站notebook profile增加`transform`单元，复用原DataRecipe Schema、DAG、执行与草稿回执，不另建计算实现；旧csv试点保持四类。`core/harness/server/bridge-preflight.ts`拥有初始化有限错误类型/静态提示，bridge只在确定guard处抛出，DSH只在初始化阶段消费。已知拒绝保持blocked，未知初始化异常明确failed而不猜测缺能力；取消/撤权/超时优先，原始错误及输入不外发。当前不扩展text/parameter/semanticQuery或其他权限。实际定位、检查与3001状态见[本批报告](../verification/dsh-transform-preflight-2026-09-22.md)。
 
 同批真实模型暴露“已有链路已计算、最终回答但未建草稿”的第二个终结问题。`readonly-answer.ts`增加整句普通文件/数据分析识别和完整工具尝试账本校验；这是备选交付方式，不裁剪普通分析的完整工具目录。命名来源须匹配当前选中的名称或本次附件名，未知简写及附加新计算/图表/修改目标保持草稿契约。仅本轮检索、成功运行及规范AI输出可支持无草稿回答；所有编辑/提交/其他工具尝试（即使失败）排除该分支，可恢复检索错误需后续成功恢复。已验证草稿优先待用户采用，终结前后继续检查权限、取消及桥生命周期；不靠空编辑绕过提交，也不代表逐句证明模型结论。明确只读问题的裁剪目录及原Harness不变。
+
+第八批修复“帮我看一下，能不能给我一个分析的结论”误入修改路径：`readonly-answer.ts`按完整子句识别查看前言和给出/总结/概括已有分析结论，而非对“分析”关键词一律认定修改。命名对象复用精确已选来源匹配；额外新计算、图表、导出或未识别子句仍保留原草稿契约。结论默认需要本轮有效运行输出；明确禁止运行仅能解释定义，不能把历史聊天当计算证据。复核发现并修正“总结当前Notebook的结构”等旧定义问题被新规则误挡：整句解析区分definition/result，固定当前对象的结构/字段来源不要求数值输出，混合结论仍须输出；未知来源和额外目标不能借定义措辞通过。没有增加模型分类请求、模糊文件匹配、工具权限或改变旧Harness路由。
+
+通用`notebook-cell-tools.ts`的无编辑成功运行不再提示提交或返回`next:submitNotebookDraft`，改为依据有效结果回答；实际修改成功仍提示提交，失败仍提示编辑重跑。DSH只读适配继续明确`next:answer`。`core/harness/notebook-submission-error.ts`集中四个有限提交原因（版本过期、没有修改、未完成运行、回执不一致），保留原`StudioValidationError`类别及guard顺序；无编辑仍不能提交，禁止制造空修改。`trustedNotebookToolFailure`只识别真实类型与对应工具，经授权/取消复查和严格`{error:{code}}` DTO传给受控SDK；固定纠正提示与UI共用`runtime/dsh/tool-diagnostics.mjs`，不输出原始错误、参数或标识。原`trustedNotebookSearchFailure`仍是窄接口，提交失败绝不会变成可恢复检索证据。实现、真实模型和M7续验状态见[本批报告](../verification/m7-conclusion-continuity-2026-09-22.md)，未发布3000。
 
 Notebook检索的五类已知业务失败使用真实错误子类携带有限code（定位不存在、缺少定位、草稿版本/运行回执过期、预算不足），保留原Error/StudioValidationError及内部消息语义。DSH只接受真实类型并再次检查授权，经broker严格DTO交给插件；模型纠正提示与UI复用`runtime/dsh/tool-diagnostics.mjs`固定映射，不输出错误原文、参数或动态标识。Schema失败继续只公开受控字段路径/code，未知失败仍通用。历史未记录的参数不会被重建或追认为新错误码。
 
@@ -190,7 +198,7 @@ flowchart TB
 | 任务执行 | `core/harness/runtime.ts` | 供应商无关的 HarnessRuntime；复用原有循环、工具、预算与验证；子任务注入仅含 next 的模型接口 |
 | 模型适配与组装 | `core/ai/server/deepseek-harness-model.ts`、`harness-composition.ts` | 服务端 DeepSeek HTTP、响应/用量/动作解析及凭据组装；通过 HarnessModel 接入执行器 |
 | Context Runtime 相关能力 | `core/harness/context-selector.ts` | 上下文选择、压缩、工作记忆；角色隔离由 coordinator 组装受限请求 |
-| 工具 | `core/harness/tool-registry.ts`、`tool-schema.ts` | 同源输入 Schema、静态约束 / 默认值、按任务裁剪目录与无损共享、限长安全纠错；完整业务校验和执行复用原有领域模块 |
+| 工具 | `core/harness/tool-registry.ts`（兼容入口）、`tools/`、`tool-schema.ts` | 工具契约、六类业务实现、静态登记、目录 / 参数投影、执行校验与观察压缩分层；同源 Schema、授权能力检查和领域执行保持共用 |
 | Dataset 统计 | `core/datasets/quality-profile.ts`、`components/studio/datasets/DatasetQualityProfile.tsx` | 纯函数统计当前传入行集及所有声明字段；详情与 inspectDataset 共用，不读取原件、不导入服务端或 Harness、不改变持久化质量摘要 |
 | 公共表格契约 | `core/datasets/table-contracts.ts` | 字段 / 标量 / 表形状及 truncated，不导入 Notebook；Notebook / Connection 分别施加原有行数和字节政策，不表示结果访问仓库 |
 | Dataset 仓库端口 | `core/datasets/repository.ts` | 所有权范围内 CRUD、敏感策略与同步撤权复查；同一错误构造器供内存与项目适配器使用，无全局实例初始化 |
@@ -252,6 +260,16 @@ flowchart TB
 
 最终工作区全量离线测试 136 个文件通过 / 1 文件跳过，1,137 项通过 / 3 项原有跳过，另 14 项 Node 工具测试通过；全局类型检查、11 个变更代码 / 测试文件严格 ESLint（最终修改的 2 文件补充复查）、生产构建、架构检查器测试和源码指纹检查通过。构建保留已有部分客户端 chunk 超过 500 kB 的提示。证据：[全量复测](../../.runtime/input-inspector-gate-2026-09-16/tests-final.log)、[类型检查](../../.runtime/input-inspector-gate-2026-09-16/typecheck-final.log)、[构建](../../.runtime/input-inspector-gate-2026-09-16/build.log)。模型均为测试替身，未调用真实付费模型、读取用户原件或执行浏览器业务验收；这证明条件接线及事件 / 权限回归，不代表真实模型判断准确率。源码已更新到开发站工作目录，稳定站 3000 未发布，三个受管服务保持健康且未启停。详见根目录 [任务记录](../../../TASK-LOG.md)。
 
+### Harness 工具模块分层（2026-09-22）
+
+`core/harness/tool-registry.ts` 保留原有全部公开值与类型导出，作为兼容入口；原 2,022 行中的 77 个顶层声明按职责迁移至 `tools/`，没有增加工具或另建执行链。`contracts.ts` 定义工具上下文、类型化定义工厂与目录选项，仅有类型导入；`errors.ts` 拥有同一个 `HarnessToolArgumentsError` 构造器，旧入口继续重导出。Notebook 单元 / 检索模块从契约模块取得上下文类型；DSH broker 与错误投影只依赖窄错误入口，不因检查错误类型加载所有业务工具。
+
+`dataset.ts`、`workbook.ts`、`semantic.ts`、`notebook.ts`、`dashboard.ts`、`external.ts` 分别拥有数据与配方、原件 / EDS、语义、Notebook、看板预览及 MCP 工具。`data-context.ts` 共用来源与配方定位，`dashboard-context.ts` 共用树遍历及 EDS 字段目录。业务实现不反向依赖完整注册表、模型目录或执行协调器；Notebook 执行继续调用原领域 / 会话 / 回执模块，不引入数据库、模型或持久化适配器。
+
+`registry.ts` 按原顺序静态登记 27 个工具；`catalog.ts` 负责本次目录过滤与说明，`parameter-projection.ts` 负责现有输入 Schema 的任务范围投影及紧凑看板参数。投影只依赖 `name/schema` 元数据契约，所需的草稿工具由目录入口显式传入，不导入注册表的值或类型；来源选择直接依赖已有 `source-scope.ts`。`executor.ts` 保留唯一执行入口、原工具分派、角色 / Python 能力 / 已关闭单元保护和错误顺序；`observation.ts` 负责有界输出、统计口径与文本引用元数据保留。目录可见性不替代执行校验，注册新工具仍须符合公开工具名契约与对应权限。
+
+本批是内部结构调整：工具名称、顺序、描述、输入与返回 Schema、预算、统计口径、Notebook 试运行 / 提交、DSH 目录与正式采用规则均沿用原实现。无新运行开关，无依赖或持久化格式变更；源码已拆分，自动验证进行中，未发布 3000。新增模块加载隔离与兼容对象身份检查，架构检查继续约束运行时无环、客户端隔离和共用回执边界，并增加工具实现不得反向依赖协调层的检查。
+
 ### Notebook 工具字段契约修复（2026-09-16）
 
 2026-09-16 M1 扩展后，模型目录通过 `tool-schema.ts` 的 `toolInputSchema` 从现有 Zod **输入**契约生成：保留 `pattern`、数组 / 字符串 / 数值上下限和默认值，带默认值的字段不再被输出视图误列为必填。移除原 `compactNotebookToolSchema` 有损精简；`createNotebookDraft` 的 transform 使用领域原有的严格分支，而不是第二套宽松手写摘要。`editNotebookCells` 仅裁剪单元候选，不再借用草稿创建的数组规则；保持一次编辑 0–10 个新 / 替换单元，允许保留其他合法单元的只删除批次。
@@ -274,7 +292,7 @@ flowchart TB
 
 用户已确认导入后默认可按需读取完整 XLSX。普通 `CsvUploadDialog` 与 `EdsAnalysisDialog` 移除原始数据勾选项及布尔状态；`ImportedWorkbookAttachment` 只保存 File 和工作表名称，EDS 创建回调变为 results / activeResultIndex / source 三参数。`workspace/datasets.ts` 按所选数据源查找会话原件，分析时直接传递；`workspace/assistant.ts` 按原件是否存在与当前 / 追问是否需要原始工作簿决定 multipart 附件，不再检查 aiRawAccess。没有新增环境开关或浏览器授权偏好；会话内旧对象的多余布尔字段也不再限制读取。
 
-`OriginalWorkbookDialog`、`PageStructurePanel` 和助手按原件是否可用显示说明。`context-selector.ts`、`tool-registry.ts` 与 `skills/workbook-analysis` 的运行指令及 SKILL 文档移除重新勾选要求：缺少原件时提示重新导入；有原件时继续 scan → query / 行列读取。默认可读不等于每条聊天都附带原件，也不把整份工作簿直接注入模型：现有服务端文件解析、摘要 / 哈希 / 工作表清单校验、完整扫描、聚合及最多 30 条可溯源查询结果保持原实现。原始文件内容仍是数据，不能作为额外工具指令。
+`OriginalWorkbookDialog`、原始文件侧栏和助手按原件是否可用显示说明。`context-selector.ts`、`tool-registry.ts` 与 `skills/workbook-analysis` 的运行指令及 SKILL 文档移除重新勾选要求：缺少原件时提示重新导入；有原件时继续 scan → query / 行列读取。默认可读不等于每条聊天都附带原件，也不把整份工作簿直接注入模型：现有服务端文件解析、摘要 / 哈希 / 工作表清单校验、完整扫描、聚合及最多 30 条可溯源查询结果保持原实现。原始文件内容仍是数据，不能作为额外工具指令。
 
 文件引用仍仅在浏览器会话内保存，不进入 localStorage、聊天正文或工作区备份；本地项目原件仍由既有项目文件接口保存到用户选择的目录。刷新或切换项目后未重新挂载原件时，已有数据源可继续查询，完整 XLSX 分析需要重新导入原件。没有新增项目原件自动挂载或访问外部目录能力，也不改变 Dataset 敏感字段策略、数据库 allowAi、工具预算、SSE、看板确认和服务端校验。
 
@@ -308,6 +326,20 @@ Notebook 单元、草稿与产物定义现在由 `core/notebook/definition.ts` �
 
 本轮没有调整 Agent 规划、工具参数、预算、SSE、看板确认、存储格式或运行开关；也没有合并人工与 Agent 的不同校验规则。全量离线测试 957 项通过、3 跳过，另 14 项工具测试通过；类型、构建、架构检查及 3001 Notebook 浏览器 6 项验收通过。54 个变更代码文件 lint 有 1 项原有持久化 Effect 错误，在修改前快照复现，未新增；没有为通过检查改变持久化行为。源码变动不代表发布稳定站。详见 [Notebook 解耦记录](./notebook-refactor-2026-09-14.md)。
 
+### Python 原始文件表单草稿（2026-09-23）
+
+`NotebookCellEditor` 将 Python 原始文件文本留在局部 `fileNamesSource` 中，键入时不拆分 / 过滤，避免首个文件名后的 Enter 被受控输入立即吞掉。只有提交才沿用 `split(/\r?\n/u).filter(Boolean)` 转成 `fileNames`，再交唯一 `notebookCellSchema` 校验。名称不 trim，纯空行仍忽略，重复 / 路径 / 非支持后缀以及超过三项仍被原规则拒绝；无效草稿可修正或取消，不进入正式 Notebook、项目保存或 Agent Context。
+
+原件仍由运行端按请求 / 当前项目范围解析；表单声明不构成文件授权。API、Notebook JSON、Python 资源与运行开关、模型 / Harness 工具、执行限额和确认行为均未改动，无新依赖 / 适配层。源码与 3001 实际验收见[本批记录](../verification/python-files-editor-2026-09-23.md)，不代表稳定站发布或模型 / 实库重新验收，不新增里程碑。
+
+### 配方表单数字草稿与保存保护（2026-09-23）
+
+`components/studio/notebook/RecipeNumberInput.tsx` 只维护表单中数字的原始字符串，完整十进制 / 指数且有限、满足控件范围后才向 `RecipeStepsEditor` 返回数值。数字筛选、左右计算常量和行数共用；空或未完成输入不再变为 0，也不将 NaN / Infinity 放入配方。行数仍为 1–10,000 整数，其他配方常量沿用有限浮点，不增加参数单元的安全整数上限。文本 / 布尔筛选与字段操作数不套用数字必填要求。
+
+未完成数字只留在编辑器组件内，父草稿暂时保留最后合法值，因此 `NotebookCellEditor` 在保存与表单转规则代码两处检查实际无效数字控件并拒绝提交，不能借用旧值静默保存。原生必填 / 范围校验与内联说明辅助展示，直接 submit 仍有入口检查；这属于 UI 数据完整性保护，不替代领域 Schema 或服务端授权。取消编辑、显式改步骤 / 值类型、移除步骤和重排沿用原行为；仅完成保存后的定义进入 Notebook / 持久化和 Agent Context，不上传键入草稿，不增加真相来源。
+
+不改变 DataRecipe Schema、执行器、Agent 工具 / 确认 / 预算、API、存储格式或运行开关；只是现有编辑器修复。真实 3001 合成 CSV / 本地执行及修前、修后截图和各层验证见[本批记录](../verification/recipe-numeric-input-2026-09-23.md)，不代表收费模型或外部数据库重验，未发布 3000，不规划新里程碑。
+
 ### Cell 静态目录、默认创建与表图计算边界（2026-09-16，M2 第四批）
 
 `definition.ts` 仍是严格九类 Zod 定义的唯一来源，JSON / 持久化格式不变。`cell-catalog.ts` 通过映射类型逐 kind 校验闭合目录，保留既有 CellSearch 类型顺序；`NOTEBOOK_CELL_KINDS` 供检索参数枚举复用，`requiresSuccessfulNotebookTrial` 供 Harness 整稿生成与客户端采用复用原 sql / python / warehouseSql / transform 四类要求。目录不导入 React、服务器或模型，不重新分配授权；其余类型不要求该条证据是原规则，不意味着可以绕过各自执行 / 工具 / 数据权限校验。
@@ -337,6 +369,8 @@ Notebook 单元、草稿与产物定义现在由 `core/notebook/definition.ts` �
 `components/studio/notebook/NotebookResult.tsx` 只组合可用性、`NotebookChart` 和 `NotebookResultTable`。Recharts 仅在图表适配组件中导入，保持五种图、前100行原序、原配色 / NULL / 负数规则；表格操作不修改图表数组或图表显示顺序。不是整个 Dashboard 渲染实现已解耦，其他数据组件维持原状。
 
 `core/notebook/table-preview.ts` 为纯预览计算：仅处理已经返回的行，先排序完整的可见预览再按20行分页；不查询 / 读取隐藏完整结果、不改输入表。数值 / 布尔按类型，字符串（含大整数 / 小数精确文本）和日期按原始文本排序，不转换精度 / 时区。混合类型时同类型数值或布尔先成组，其他值按文本；降序反转非空组，NULL / 缺失值始终末尾，相等值保留输入序。缺失字段的显示统一为 NULL，不再渲染 undefined。
+
+2026-09-23 缺值修正：`notebookPreviewValue(row, fieldName)` 只读取行的自有属性，排序和表格文本 / title 共用。合法字段 `toString` / `constructor` / `__proto__` / `hasOwnProperty` 缺失时不再误读继承函数或对象；显式自有字段保留，空文本 / 0 / false 不当作 NULL。既有 CSV 已按自有属性读取，本次不修改序列化 / 公式保护、Schema、返回结构、结果新鲜度、查询 / 模型、权限或运行开关，也不借此改变 Schema 对特殊键的克隆行为。修前 / 修后测试与 3001 明确合成回执截图见[本批记录](../verification/notebook-preview-own-values-2026-09-23.md)，不是 SQL / Python 实算验收，未发布 3000。
 
 `NotebookResultTable` 拥有仅内存的排序 / 页码，列头原始→升序→降序→原始；切列与排序回第一页，明确标注仅当前预览，`aria-sort` / 按钮 / 焦点及状态文字可用于键盘和辅助技术。原完整 / 不完整 / 未知范围与保存 / 快照权限保留；`NotebookPanel` 用实际 runId + cellId 作为结果视图身份，新运行不沿用旧排序。表格状态不进入 Notebook、任务 / 模型 Context、项目存储或 Dataset；没有增加 Agent 工具 / 权限 / SSE / 运行开关。源码和验证记录见[专项报告](../verification/hex-result-presentation-2026-09-16.md)，不代表参数单元、服务端排序 / 分页或完整 M5 已完成。
 
@@ -511,9 +545,17 @@ CSV 导入既有的空白归 null、数值 / 日期转换和质量评分算法�
 
 运行条件：无新增服务端配置开关；首访默认 AI 工作台，已有 `datacanvas-ai:workspace-mode:v1` 的 agent/notebook/canvas 三种偏好均恢复。侧栏收放是当前窗口的桌面展示状态，助手收起时不可聚焦；不再订阅手机宽度媒体查询。`onSuggestion` 仍只更新共享指令输入框。角色、委派、模型调用、工具、预算、数据授权、Notebook 运行和数据持久化接口未调整。主题默认随当前源码载入，不把选中态当作权限、发布或任务成功的证明。
 
+2026-09-22 展示层优化：`AgentWorkspaceWelcome` 复用 `StudioIcon` 为现有三个建议显示图标与说明，原 instruction 与 `onSuggestion` 接口保持；`app/studio-layout.css` 仅调整空白 AI 工作台的集中排版、导航 / 输入框层次、Notebook 标题 / 数据入口 / 工具排列，并在主 AI 工作台隐藏无用途的调宽标记。空白态仍由原 `AiBuilderAssistant` 条件决定，聊天、草稿、上下文、执行事件、Notebook Schema / 执行器与保存格式没有变化，也没有新增开关。源码和 3001 完成 6 组 / 12 张实际截图验收，全部图已查看；合成 CSV / SQL 两成功一预期失败、取消编辑及保存刷新通过，0 模型调用。29 项相关组件和 26 项工具检查、类型、严格 ESLint、构建通过；稳定 3000 未发布。详见[当前视觉规范](../visual-design.md)及[逐图验收](../../.runtime/ui-refinement-2026-09-22/browser-1790086787584/visual-review.md)。
+
 2026-09-14 验证：17 个组件/工作区测试文件、85 项通过；导航 23 个截图状态与六种尺寸、带数据页面 30 个状态、本地项目 10 项、原始文件新入口 3 项、模拟 SSE 11 项通过，浏览器异常 0。类型检查、构建和架构指纹检查通过。严格 lint 保留修改前已存在的持久化 Effect 同步 setState 错误，无新增诊断；构建后生成路由类型不匹配通过官方 typecheck 的类型生成步骤恢复。细节、首次失败和最终证据见视觉规范。
 
 启用状态：开发站 3001 已载入，稳定站 3000 和便携包未发布。历史桌面与移动端验收见下方记录，当前仅维护桌面；未调用真实模型或远程数据库，仅使用本地合成数据和模拟事件。稳定、开发、截图服务均保持健康且未重启。视觉规范见 [网站视觉设计规范](../visual-design.md)，每次实际修改见根目录 `TASK-LOG.md`。
+
+2026-09-22 界面选择侧栏：`PageStructurePanel` 仅接收 `appSpec.navigation`、`activePageId` 与 `onPageChange`，显示非旧演示界面的名称和当前选中状态；不再注入数据浏览器、语义模型、数据卡片、原始工作簿或新建 / 重命名 / 删除操作。`StudioWorkspace` 沿用原切换回调及收放焦点规则，原始文件弹窗的后备焦点改为独立文件入口。菜单和窄栏统一标为“工作界面”；数据、文件、模型与导入仍使用已有独立入口，新建保留在工作区菜单。此为前端职责收窄，不改变 Agent、数据、Notebook 执行或持久格式，无新增开关；本轮验收结果见视觉规范与任务记录，3000 不发布。
+
+2026-09-23 成功回答展示边界：`AiBuilderAssistant` 仅在 `turn.state === "success"` 使用 `AssistantAnswer({ text })`；AI 工作台与 Notebook 侧栏共用入口。`assistant-answer-format.ts` 是无 React / 服务端依赖的有限文本解析，组件只输出固定 React 文本标签；不使用 HTML 注入、网络、链接 / 图片元素或代码执行。支持段落、粗体、行内代码、局部标题、连续平铺列表和完整三反引号代码块；粗体中的代码标记保持原文，未知 / 未闭合围栏从该处起保守降级，超长遗留回答完整按文字显示。该模块不是完整 Markdown 服务，不负责模型输出、状态判定或证据验证。
+
+原 response / 会话保存字符串、失败 / 受阻 / 取消消息、用户输入、后备消息、执行过程与 Notebook 文本结果均未改写。没有新开关，不影响 Agent / Harness 调度、工具 / 模型协议、预算、权限、草稿确认或数据库能力。源码与 3001 展示验收的实际结果见[本批报告](../verification/assistant-answer-format-2026-09-23.md)；浏览器为明确合成 SSE 回放，不冒充真实模型端到端验收，3000 未发布。
 
 ## 路由与权限
 
@@ -636,6 +678,22 @@ DeepSeek 适配器的语义路由、规划、执行和失败解释默认不发�
 `SemanticModelManager` 接收当前 Notebook 层，在现有弹窗中由 `SemanticModelDeletionImpact` 展示名称和页面 / 单元 ID，最多展开十行但保护全量引用；有引用时禁用删除并关联说明。`LocalProjectStore.saveState` 在保存版本校验后比较原模型与候选模型 ID，只拒绝“本次移除模型且候选 Notebook 仍引用它”的保存，返回 409 且清单不写；明确同时移除引用单元和模型允许，旧项目已有的孤儿引用不会因无关保存被迁移或清除。没有新增 API、持久化字段或权限。
 
 历史 / 待采用 Notebook 草稿不永久锁住模型。`core/notebook/client-state.ts` 的 `notebookSemanticModelIssue(cells, models)` 供 `NotebookPanel` 展示采用阻断原因并在采用回调再次检查：旧成功试运行回执不代表模型现在仍存在。缺失模型时拒绝采用，原 Notebook 不动；模型版本、字段、来源与授权继续由原执行链验证，本包不宣称任意旧草稿可直接重新运行。没有新增 Harness 工具或真实模型调用。2,285 项应用 + 14 项 Node、类型 / 构建与 3001 主流程 4 组 / 7 图通过：真实语义查询、引用阻断、独立 API 409 清单不变、取消 / 删除及标签页重开后原表看板保留；旧草稿分支只有纯函数 / SSR 测试，没有单独浏览器截图。未来新采用入口须显式调用前置检查；服务端删除差量守卫不充当全局孤儿引用校验。详见[第四包报告](../verification/hex-semantic-model-deletion-2026-09-21.md)，3000 未发布。
+
+### 按工作界面隔离会话（2026-09-23）
+
+`assistant-sessions.ts` 为会话增加稳定 `pageId` 归属及 `activeByPage` 选择映射，按 ID 而非界面标题隔离。`StudioPersistedState` 升为 v7，v6 继续迁移；旧消息先恢复中断任务，再按 turn.pageId / task.pageId 拆分，旧草稿与无归属消息只放到最后已知界面，无线索时归初始空白界面。保留旧线程主 ID，拆分分支生成独立 ID / contextId，保留全部消息；已删除界面的历史仍随备份保存，不显示到其他界面。每界面新建上限 50；项目有界上限 1050 可容纳旧 50 会话各 20 轮加待返回页面的最坏拆分，不静默淘汰历史。备份维持 5 MiB 限额，旧版不能读取 v7，未发布 3000。
+
+`useStudioAssistantState` 随页面身份在子组件渲染前切换到本页最近选中会话，同步恢复回复、错误 / 重试和待确认状态；图片改为按 session ID 派生的窗口内状态，仍不持久化 File。`StudioWorkspace` 恢复匹配的当前页面 / 会话，并使侧栏、顶栏、菜单与上下文界面切换共用在途任务 / 预览 / 编辑 / 导入 / 恢复保护；任务完成或取消后才可切换，防止完成回调写入另一页。`ConversationSwitcher` 只列当前界面的线程，显示“仅当前界面”。切换不发起模型请求、自动重试或采用草稿；数据集 / Notebook / 看板仍走原模块。服务端仍按原身份 + 项目句柄 + contextId + pageId 隔离，无新 API、工具、权限或运行开关。
+
+实际验证：全量 3304 项应用 / 26 项 Node 通过、3 项既有跳过，类型、严格 ESLint 和生产构建通过，保留既有大分块提示。3001 自有合成项目真实创建 / 保存 / 读取，4 组浏览器检查及 9 张逐张查看的截图覆盖成功、失败、取消、刷新、跨模式、重试 / 清除隔离和 v6 混合记录迁移；5 次合成 SSE 请求、1 次合成清除，无真实模型 / Notebook 执行。图片窗口内恢复由真实 hook 重渲染单测验证，未补图片浏览器截图。详见[本批验收](../verification/interface-conversations-2026-09-23.md)。仅源码 / 开发站 3001 生效，3000 未发布。
+
+### 对话终态恢复（2026-09-23）
+
+`components/studio/workspace/assistant-turn-state.ts` 的 `assistantTurnState(turn)` 从当前会话最后一轮派生瞬时 `requestStatus / requestError`：failed 映射 error，blocked / cancelled 保持对应状态并复用原回复；success / 空会话清空错误。`workspace/assistant.ts` 会话切换与 `StudioWorkspace` 首次加载、备份恢复共用投影，修复先前只恢复终态却遗漏错误而导致重试按钮消失的问题。既有待确认 ChangeSet 仍优先为 success / 无错误，不被转换成失败重试。
+
+聊天是恢复状态的依据，任务历史仅提供可选详情；任务摘要淘汰后保留聊天中的 taskId，不把它当成本地回答或伪造详情。`AiBuilderAssistant` 在无详情时对当前最后一轮的同文错误去重；有其他当前任务时仍需 taskId 匹配，新的不同错误继续单独展示。没有新增持久字段、请求协议、角色、工具或开关；不自动请求、运行、恢复附件或采用草稿。点击重试仍由原入口生成新幂等键并执行当前上下文 / 授权检查；图片仅当前窗口内会话 map 可恢复，刷新和备份不恢复 File，未改变原附件与页面范围策略。
+
+仅现有功能维护，不定义 M8 或后续阶段。源码 / 3001 的实际测试与截图见[重试恢复报告](../verification/assistant-retry-restore-2026-09-23.md)，浏览器使用明确合成 SSE，不代表模型 / 实库重新验收；3000 未发布。
 
 ## Notebook 单元工具第一批（2026-09-15）
 
@@ -794,6 +852,46 @@ flowchart LR
 
 本轮浏览器实际停在第一个请求：项目有 40 个配方，原前端全量发送违反公开请求的 20 项上限。已保存的失败任务 / 消息保留；未通过修改 fixture Schema、剪裁拦截 payload 或伪造成功来绕过。浏览器首稿采用 / 追问 / 取消未验证，不能用工厂测试替代。
 
+上述为第二包首次验收的历史状态。2026-09-22续验复用同一工厂，新增`scripts/verify-agent-continuity-browser.mjs`拥有独立项目与单次两任务预算，避免清除旧失败或改变旧项目；真实UI导入CSV/原件，首稿显式采用、150/80运行、保存重开同会话、追问300/160新runId、第二稿暂不采用均已通过。正式Notebook保持首稿四单元，第二任务仍awaitingConfirmation，隐藏不等于永久拒绝。准备与正式是同一项目的两个浏览器进程，正式阶段包含刷新及新标签页重开；未验证进程重启长期记忆。固定模型/可信合成身份/真实工具/缓冲SSE的分层边界不变，不作为DSH付费两轮或公开handler授权证明；无生产模块、API、权限或持久化变化。九张新截图已查看，旧58资源及失败任务保持；[续验报告](../verification/m7-conclusion-continuity-2026-09-22.md)记录实际检查，M7其余范围未因此完成。
+
+### M7 本地交付与真实模型连续链（2026-09-22）
+
+`scripts/verify-m7-excel-live-browser.mjs`是验收入口，不是生产执行器：准备默认阻止AI，真实UI上传单表XLSX/派生Dataset并保存完整原件；两个显式收费阶段分别使用一次性持久开始标记。公开handler/SSE/SDK模型和Notebook工具均真实运行，不回放固定响应；任务数量与模型调用数分开记，不在缺账时伪造Token/金额。用户已统一授权后续真实收费端到端，离线单测仍保留确定性替身。项目验收须串行，避免其他合成项目的登记更新触发严格保全检查。
+
+首轮通过现有edit/run/submit新增SQL/Table/Chart，正式四单元在采用前不变；用户采用后七单元实际运行原150/80与新300/160，保存重开相同会话不自动运行。第二轮原句结论经过只读目录，重新run并检索本轮输出，直接completed；没有edit/submit/草稿，正式文档不变。两任务共11模型/11工具均成功；不等于跨服务重启长期记忆、任意自然语言数学证明或用户原始敏感文档验收。
+
+`scripts/verify-m7-semantic-browser.mjs`另用全手工UI验证单表语义模型、semanticQuery和表图、保存重开真实150/80；不是DSH语义能力。既有AdventureWorks只读实例10组回归与官方SDK固定模型XLSX/Python/SQL夹具分开执行：前者真实数据库但非浏览器/收费模型，后者真实SDK与计算但DBI/O固定。DSH重开后不会自动附带项目原件，跨重开付费链使用持久Dataset；原始Excel Python能力仍只接受本请求附件。API、权限、Cell白名单、SDK依赖、持久化和运行开关均未改；当前DSH revision7不变，3000未发布。
+
+浏览器准备选择器/并行登记失败保留，逐次实际执行和复用步骤明确区分；截图和最终验证以[收尾记录](../verification/hex-m7-local-delivery-2026-09-22.md)为准。不用后续只读复核追认先前未完成的保全检查，不删除失败证据。
+
+### M7 后续：DSH 消费单一已选语义模型（2026-09-22）
+
+`server/notebook-tool-bridge.ts`的网站notebook profile不再一律拒绝semanticModel；仅当其来源等于当前dataSourceId、在已授权sourceIds中、`validateSemanticModel`通过时，把canonical `semanticQuery`变体加入本次编辑目录。旧csv profile仍不接语义模型，未选模型时不提供该变体；原Python/连接/原件及unsupported上下文限制保持。初始化的现有语义单元使用原`createHarnessNotebookArtifact`做直接Data血缘、模型ID/版本与成员校验，仅投影语义单元及其声明的直接上游，避免其他错误SQL/图表阻止进入编辑修复；正式编辑、运行和提交仍校验整稿。失败映射到静态`semantic_model_unavailable`，不展示输入值/底层异常。不另建语义编译器。
+
+`dsh-engine.ts`把原上下文选择器生成的semanticModel加入受控字段白名单，保留`untrustedBusinessDefinitions`及“说明不是指令/权限”规则。工具说明要求modelId/modelVersion对应模型id/version，维度/指标使用成员key，measures按既定口径，模型不允许由编辑工具修改。`handler.ts`原有来源/字段验证与semanticModels→`runNotebook(forAi:true)`接线不变；实际计算仍由Notebook模块复用`compileSemanticQuery→executeDataRecipe`完成。敏感字段在聚合前处理，与独立旧querySemanticModel工具的聚合后隐藏不是同一统计语义；不为接线统一或悄悄改变该行为。
+
+模型是经服务端校验的本次浏览器业务快照，不宣称已从项目核对权威完整模型或建立跨任务修订锁。已有采用预检仍检查模型存在，改版/字段变化留给运行校验；模型修改后需重新选择或生成，不能将旧回执当新版本结果。没有多模型Notebook接线、跨表Join、参数/文本Cell开放、自动原件重附或新插件；保持原权限、预算、SDK和正式确认。`AgentEngineSettings.tsx`的静态能力段与selection插件目录同步，不再声称所有语义模型均不支持；不改布局和设置行为。范围、实际检查/失败和3001截图见[本批记录](../verification/dsh-semantic-query-2026-09-22.md)，3000未发布。
+
+### DSH 当前参数定义问答（2026-09-22）
+
+`core/agent-engines/server/parameter-inspection.ts` 负责有限的中英文完整问句识别、正式参数目标定位与源码覆盖校验。当前/全部指向所有参数，所选只使用selectedCellIds中的参数；命名只认精确ID、outputName或唯一标题。不存在、重名、未识别附加目标不进入参数例外，回到原路由；不是通用语义分类器或新增授权。`readonly-answer.ts` 对匹配问句返回 `allowRun:false / requireOutput:false / parameterInspection.cellIds`；工具目录只保留cellSearch，参数输入不再因“多少/value”而被误要求业务运行。计算结果与编辑任务保留原证据/草稿机制，参数-only结果仍不能证明业务数值。
+
+`dsh-engine.ts` 在原预检通过后私有固定正式revision和既有Notebook搜索索引源码，成功检索后从实际validated arguments记sourceOffset；这些源码不进入初始模型context/公开事件或持久化。新增参数问答元数据只含目标IDs和检索规则，原Notebook摘要/选择/会话上下文保留；须读取每个目标同版本完整source，按nextSourceOffset续页。校验对每页1..2000字符精确比对原源、editVersion=0/baseRevision/游标，兼容工具预算缩页；最终要求每个目标无缺口全覆盖。摘要、其他单元、历史output、只读头页/尾页、重复头页均不能替代。重复合法页或乱序完整页可以验证；重复toolCallId仍拒绝。
+
+回答标明参数是当前分析输入、不是业务计算；不承诺逐句事实正确。不改HTTP/SSE、工具名称/Schema、Notebook运行、持久格式、权限/取消或SDK。原整Notebook preflight仍生效，无数据来源、关闭Python、缺模型等不会被参数问答绕过。没有增大24工具/180秒保护；全部参数过多或分页过长时可能无法在本轮完整回答。参数不是保密输入，禁止存放凭据。验证与截图见[本批报告](../verification/dsh-parameter-inspection-2026-09-22.md)；3001源码热更新不等于已发布3000。
+
+### DSH 接入现有参数单元（2026-09-22）
+
+网站 `server/notebook-tool-bridge.ts` 的 notebook profile 开放 canonical parameter，Schema/图/执行/回执仍归原 Notebook 模块，无第二套参数业务。四种字面值经 `notebookParameterTable` 变成完整单行 `value` 表，本地 SQL/Python 只通过声明输入读取，不拼接 SQL 或代码；warehouseSql 不提供该绑定，semanticQuery 仍直接依赖模型 Data。旧CSV、missing_data_context、Data来源保护、授权/取消/提交确认均保持。参数不是秘密输入，不走Dataset字段脱敏，不得写密码或API Key；安全数值与日期边界沿原Schema，不宣称精确小数或隐式时区转换。
+
+`dsh-engine.ts` 在开始时从正式定义固定 parameterCellIds，交给 `readonly-answer.ts` 排除参数-only run/output作为业务数值证明。所有样本仍须同版本/同运行结构与引用校验；混合样本至少一个非参数结果，定义类只读可解释当前输入。不是逐句事实验证，也不阻止任意SQL常量伪装；用户修改要求仍先草稿真实试跑/采用。设置正文与插件卡同步四参数范围，不改已有手工自动重算。测试与新截图见[本批记录](../verification/dsh-parameters-2026-09-22.md)，未发布3000。
+
+### DSH 接入现有说明单元（2026-09-22）
+
+`server/notebook-tool-bridge.ts`仅为网站notebook profile开放canonical text；目录说明提供markdown及references的精确`{{key}}`、稳定Cell ID/字段、完整单行结果要求，并强调无引用旧静态文本不求值、文本本身不是指令/权限或计算证明。未新增工具、端口、来源权限或参数Cell；已有文本不再触发不支持单元预检，无来源任务仍拒绝。编辑、执行、提交仍走原整稿Schema/DAG和验证，复用`renderNotebookText`与文本回执，不复制业务逻辑。
+
+`dsh-engine.ts`两种executionPolicy均标明读取的定义/说明/数据属于内容，静态说明不能当本次结果证据；工具目录与授权仍是实际执行边界。文本引用来自forAi处理后的当前表，但用户自由说明文字不自动Dataset脱敏。`runNotebookCells`现有textResults最多3项/各800字预览及截断元数据不变；`cellSearch output`仍无文本分页，readonly verifier仍要求上游表证据。试运行只保证引用/执行，不证明自由结论正确。设置静态段与插件卡同步支持说明、仍拒参数等；持久化/取消/确认/SDK/预算保持，具体测试和3001截图见[本批记录](../verification/dsh-text-cells-2026-09-22.md)。
+
 ### 请求配方与来源共用选择（2026-09-22）
 
 `core/harness/source-scope.ts` 提取原 `context-selector.ts` 中的纯 `resolveHarnessPageDataSourceIds` 与绑定来源读取，只有类型依赖，不触达模型 / 数据库 / 执行器。Notebook 请求按其显式 `sourceIds`；普通请求按当前来源、指令点名来源和当前页绑定来源，过滤不在 AppSpec 目录的 ID。原 `context-selector.ts` 导出保留给既有消费者，不保留第二套选择规则；新浏览器消费者直接使用纯入口。旧导出待现有引用统一迁移后方可清理，不为本批搬动无关调用者。
@@ -905,6 +1003,22 @@ npm run build
 
 ## 变更记录
 
+### 工作界面会话隔离（2026-09-23）
+
+按用户截图要求将会话列表、当前选择、草稿、回复与重试按稳定界面 ID 分开；v7 保留兼容迁移与备份，在途界面切换增加保护。旧项目聊天不清空，未知归属按上述保守规则保留，服务端授权 / 执行不变。全量 3304 应用 / 26 Node、类型、严格 ESLint、构建和 3001 的 4 组 / 9 图验收通过，边界见[专项记录](../verification/interface-conversations-2026-09-23.md)；3000 未发布，无新运行开关。
+
+### Harness 工具模块分层（2026-09-22）
+
+将原工具中心拆为契约、六类业务实现、静态登记、目录 / 参数投影、统一执行和输出压缩，旧入口保持同一对象与类型兼容。Notebook 类型消费者及 DSH 错误消费者改用窄入口，补充模块隔离和反向依赖约束。原工具逻辑、Schema、预算、授权与确认语义保持；源码已实现，验证进行中，稳定站未发布。
+
+### 工作界面选择侧栏精简（2026-09-22）
+
+按用户截图要求将 `PageStructurePanel` 收窄为纯选择器，删除资源与管理操作的组件接线，统一入口文案；原界面切换、其他独立资源入口与存储结构保持。仅当前源码 / 3001 生效，不发布 3000。3001 合成项目 3 组 / 5 张新图全部实际查看，鼠标 / 键盘切换、收起取消与焦点、独立资源入口和数据保持通过；0 AI 请求。11 项组件 / 页面动作和 26 项工具检查、类型、修改源码严格 ESLint 及构建通过；构建保留原大分块提示。证据见[侧栏验收](../../.runtime/interface-selection-2026-09-22/browser-1790088178982/visual-review.md)，没有重验 Agent 运行或全部业务链。
+
+### 首页与桌面工作区展示优化（2026-09-22）
+
+调整建议卡片、空白态输入区、顶栏 / 侧栏和 Notebook 工具布局；复用原共享状态与全部操作接口，不扩展 Agent 能力、权限或执行范围。源码与 3001 已验收，3000 未发布；本轮截图和检查见上方展示层条目与视觉规范。
+
 ### DSH 应用交付执行保护与浏览器上下文（2026-09-22）
 
 按用户明确的最终交付与付费授权建立独立24工具 / 180秒DSH策略、服务端有界剩余预算、SSE客户端固定起点deadline、24工具有界验证引用、AI工作台当前Notebook上下文与最近项目容量修复。网站SDK导入改固定Node24原生加载，新增无收费就绪诊断和有限阶段/错误码。原Harness / 数据权限 / 严格提交 / 人工采用不变；没有因验收而改全局Schema限制。真实实库已生成并提交数值一致的表图，真实浏览器完成草稿采用、运行、快照取消/确认、可视化看板修改与保存重开；故障及脚本恢复、费用缺口和启用状态以[交付报告](../verification/dsh-delivery-2026-09-22.md)为准。
@@ -941,6 +1055,17 @@ Harness 保留失败状态、error 和 terminationCode，聊天正文优先显�
 
 | 日期 | 变更 | 影响与状态 |
 | --- | --- | --- |
+| 2026-09-23 | 修复表格预览误读继承属性 | 排序与文本 / title 共用自有字段读取，缺值统一 NULL；保留 CSV、Schema 与执行边界，测试及截图见[记录](../verification/notebook-preview-own-values-2026-09-23.md)，仅源码 / 3001，未发布 3000 |
+| 2026-09-23 | 修复 Python 原件输入框吞换行 | 原始字符串草稿提交时才拆分，保留既有文件校验 / 解析 / 授权及保存格式；实际验证见[记录](../verification/python-files-editor-2026-09-23.md)，仅源码 / 3001，未发布 3000 |
+| 2026-09-23 | 修复配方数字清空误转 0 | UI 数字草稿与保存 / 规则代码切换双保护，保持原配方契约、执行及确认边界；实际验证与截图见[记录](../verification/recipe-numeric-input-2026-09-23.md)，仅 3001、未发布 3000 |
+| 2026-09-23 | 修复会话切换 / 刷新 / 备份恢复后重试入口丢失 | 共用终态UI投影，成功 / 空会话清错，保留原确认和任务关联、缺失摘要去重；实际检查见[报告](../verification/assistant-retry-restore-2026-09-23.md)，无新增阶段，未发布3000 |
+| 2026-09-23 | 成功回答展示模块化与有限安全格式化 | 共用纯解析 / React 展示，保留原字符串、错误 / 取消 / trace 和业务契约；实际检查与截图见[本批报告](../verification/assistant-answer-format-2026-09-23.md)。仅源码 / 3001，3000未发布 |
+| 2026-09-22 | DSH接入原四类参数与输入证据边界 | 复用参数表/本地SQL和原采用；参数-only run/output不能作为业务数值结果，合法值与能力关闭预检保留。实际验证见[本批记录](../verification/dsh-parameters-2026-09-22.md)，未发布3000 |
+| 2026-09-22 | DSH参数定义只读问答 | 精确目标与整句识别，私有源码/版本/真实分页证据；不运行、不修改，保留业务结果保护。实际验收及局限见[本批报告](../verification/dsh-parameter-inspection-2026-09-22.md)，3000未发布 |
+| 2026-09-22 | DSH支持原静态说明与受控单行引用 | 仅扩网站text目录、提示与设置文案；沿用原Schema/权限/执行/采用，不升格文字为计算证据。实际验证见[本批记录](../verification/dsh-text-cells-2026-09-22.md)，未发布3000 |
+| 2026-09-22 | M7之后接线DSH单一已选语义模型 | 复用模型/血缘/成员校验与forAi语义执行，目录按选择开放，初始化有限诊断；API/权限/确认不变。实际验证见[本批记录](../verification/dsh-semantic-query-2026-09-22.md)，未发布3000 |
+| 2026-09-22 | M7本地交付验收：Excel真实两轮DSH、手工语义与只读数据库回归 | 新增两个受限浏览器脚本与使用说明，不改生产接口；真实2任务/11模型/11工具、语义表图重开、实库10组分别通过，失败与最终检查见[收尾报告](../verification/hex-m7-local-delivery-2026-09-22.md)。DSH语义/自动原件重附仍未开放，3000未发布 |
+| 2026-09-22 | DSH 结论意图与无编辑提交修复，恢复M7第二包后半验收 | 整句保守识别结论、运行回执分流、四类安全提交诊断，保留原权限/确认/账本；本批实际检查与截图见[报告](../verification/m7-conclusion-continuity-2026-09-22.md)，未发布3000 |
 | 2026-09-22 | DSH 第七批：Transform、安全初始化诊断与普通分析双交付 | 复用原计算，完整工具目录下只凭本轮有效结果可回答，所有编辑尝试仍需草稿确认；补终结竞态保护。2912应用/26工具/19专项、类型/构建/13文件lint通过，3001第二次真实任务3模型/2工具完成150/80，首轮失败保留。范围及截图见[报告](../verification/dsh-transform-preflight-2026-09-22.md)，未发布3000 |
 | 2026-09-22 | DSH 第六批调试：只读解释独立完成契约、安全工具诊断与终结授权/取消复查 | 检索/运行成功不再强制改动并提交草稿，未知或修改请求仍保持原采用规则；2819应用/26工具/19专项、类型/构建通过，3001真实模型纠正版本错误后完成，首次失败保留。见[调试报告](../verification/dsh-readonly-debug-2026-09-22.md)，未发布3000 |
 | 2026-09-22 | M7 浏览器发现配方全量发送超限，提取共用纯来源范围并在客户端请求前筛选 / 明确拒绝相关超限 | 共享原 20 项契约，不删除配方或静默截断；七项请求回归，旧选择器导出兼容。浏览器失败任务保留、采用 / 追问后半未验证，实际检查见[报告](../verification/hex-agent-analysis-flow-2026-09-21.md)，未发布 3000 |

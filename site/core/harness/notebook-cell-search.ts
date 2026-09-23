@@ -3,7 +3,7 @@ import { NOTEBOOK_CELL_KINDS } from "@/core/notebook/cell-catalog";
 import { buildNotebookSearchIndex, searchNotebookIndex, type NotebookIndexEntry } from "@/core/notebook/search";
 import { StudioValidationError } from "@/core/schemas";
 import type { HarnessToolExecutionResult } from "./contracts";
-import type { HarnessToolContext } from "./tool-registry";
+import type { HarnessToolContext } from "./tools/contracts";
 import type { NotebookCellSession } from "./notebook-cell-tools";
 
 export const cellSearchSchema = z.object({

@@ -10,6 +10,7 @@ import { ExcelDownloadButton } from "./ExcelDownloadButton";
 import { AiApiSettings } from "./AiApiSettings";
 import { WecomSettings } from "./WecomSettings";
 import { HarnessTrace } from "./HarnessTrace";
+import { AssistantAnswer } from "./AssistantAnswer";
 import { AgentWorkspaceWelcome } from "./AgentWorkspace";
 import { ComposerContextMenu, type ComposerDataOption, type ComposerResultOption } from "./ComposerContextMenu";
 import { ConversationSwitcher, type ConversationSwitcherProps } from "./ConversationSwitcher";
@@ -173,7 +174,7 @@ export function AiBuilderAssistant({
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const isWorkspace = presentation === "workspace";
   const latestTurn = conversationTurns.at(-1);
-  const errorShownInConversation = Boolean(requestError && !isLoading && latestTurn?.taskId === harnessTask?.id
+  const errorShownInConversation = Boolean(requestError && !isLoading && (!harnessTask || latestTurn?.taskId === harnessTask.id)
     && latestTurn?.state !== "success" && latestTurn?.response === requestError);
   const isConversationEmpty = !conversationTurns.length && !pendingInstruction
     && !isLoading && !requestError && !validationError && !showChangePlan && !harnessTask;
@@ -243,7 +244,7 @@ export function AiBuilderAssistant({
             <div className="assistant-message">
               <span className="ai-mark small">✦</span>
               <div>
-                <p>{turn.response}</p>
+                {turn.state === "success" ? <AssistantAnswer text={turn.response} /> : <p>{turn.response}</p>}
                 <small className="conversation-meta">
                   {turn.state === "success" ? "已回复" : turn.state === "blocked" ? "任务受限" : turn.state === "cancelled" ? "已取消" : "执行失败"}
                   {turn.taskId ? " · Harness" : " · 本地回复"}

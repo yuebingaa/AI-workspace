@@ -26,7 +26,7 @@ import { appSpecSchema, dataProductSchema, formatSchemaIssues, StudioValidationE
 import { toProjectIsoDateTime } from "@/core/time/project-iso";
 import { activeAssistantSession, assistantSessionsSchema, recoverAssistantSessions, rotateAssistantSessionContexts, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
 
-export const STUDIO_STORAGE_VERSION = 6 as const;
+export const STUDIO_STORAGE_VERSION = 7 as const;
 export const STUDIO_STORAGE_KEY = "datacanvas-ai:studio:v1";
 export const STUDIO_BACKUP_FORMAT = "datacanvas-ai-studio-backup-v1" as const;
 export const STUDIO_BACKUP_MAX_BYTES = 5 * 1024 * 1024;
@@ -174,6 +174,8 @@ const migrations: Record<number, (value: Record<string, unknown>) => Record<stri
     assistantConversationInitialized: value.assistantConversationInitialized ?? true,
   }),
   5: (value) => ({ ...value, version: 6, assistantSessions: value.assistantSessions ?? null }),
+  // Page ownership is resolved after task recovery; old snapshots are not discarded.
+  6: (value) => ({ ...value, version: 7 }),
 };
 
 export function migrateStudioState(value: unknown): unknown {

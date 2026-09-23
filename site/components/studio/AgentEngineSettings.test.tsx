@@ -26,6 +26,12 @@ describe("Agent 执行与插件设置", () => {
     for (const tool of status.plugins[0].tools) expect(html).toContain(`<code>${tool}</code>`);
     expect(html).toContain("本次附带的 Excel 原件");
     expect(html).toContain("连接须允许 AI 使用");
+    expect(html).toContain("选择单表语义模型后可用语义查询，沿用固定指标口径");
+    expect(html).toContain("说明中的数值可绑定本轮完整单行结果，不执行表达式或脚本");
+    expect(html).toContain("支持文本、数字、日期和单选参数，以单行表传入本地 SQL 或 Python");
+    expect(html).toContain("不用于远端 SQL 参数绑定，也不是密码输入");
+    expect(html).toContain("暂不支持多模型 Notebook、图片及外部工具");
+    expect(html).not.toContain("暂不支持语义模型");
     expect(html).toContain("不代表全部已启用");
     expect(html).toContain("不提供安装、卸载或独立启停");
     expect(html).toContain("不自动切换引擎");

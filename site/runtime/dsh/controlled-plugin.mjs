@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { DISABLED_ROWS, assertBrokerAddress, catalogToolNames } from './policy.mjs';
 import { createWireFetch } from './wire-policy.mjs';
-import { notebookSearchFailureMessage, toolArgumentFailureMessage } from './tool-diagnostics.mjs';
+import { notebookToolFailureMessage, toolArgumentFailureMessage } from './tool-diagnostics.mjs';
 
 export const name = 'agentcanvas-controlled';
 export const inject = ['llm', 'tools', 'loader'];
@@ -28,7 +28,7 @@ export async function apply(ctx) {
     if (!response.ok) {
       if (path === '/execute' && response.status === 422 && parameters) {
         const failure = await response.json().catch(() => undefined);
-        const message = toolArgumentFailureMessage(failure, parameters) ?? notebookSearchFailureMessage(failure, body?.name);
+        const message = toolArgumentFailureMessage(failure, parameters) ?? notebookToolFailureMessage(failure, body?.name);
         if (message) throw new Error(message);
       }
       throw new Error(`Task broker rejected ${path} (${response.status}).`);

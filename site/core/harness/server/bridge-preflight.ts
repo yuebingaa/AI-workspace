@@ -5,6 +5,7 @@ const messages = Object.freeze({
   unsupported_task_context: "本次上下文包含当前工具桥尚未支持的能力，请移除不相关上下文或使用支持该能力的执行器。",
   unsupported_csv_profile: "当前 CSV 试点仅支持单个本地 CSV 数据源及受支持的 Notebook 单元。",
   source_unavailable: "选中数据源未通过范围、授权或可用性检查，请重新选择可访问的数据源。",
+  semantic_model_unavailable: "语义模型未选择、版本或来源不匹配，或模型及单元定义无效。请在当前数据表选择对应模型，并检查语义单元引用；本次尚未调用模型分析。",
   workbook_context_mismatch: "本次工作簿附件与服务端清单不一致或不完整，请重新添加原件。",
   missing_data_context: "本次请求没有可用的数据源、工作簿附件或已授权连接，请先添加分析来源。",
   workspace_unavailable: "当前工作界面不可用，请重新选择工作界面。",

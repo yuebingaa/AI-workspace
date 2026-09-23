@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { createElement, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionState } from "@/core/changesets";
@@ -221,6 +221,179 @@ describe("聊天控制器保持请求、会话与确认边界", () => {
     expect(activeAssistantSession(values.assistantSessions as AssistantSessions)).toEqual(session);
     expect(values.lastHarnessTaskId).toBe("saved-task"); expect(values.aiMessage).toBe("独立回答");
     expect(requestHarnessTask).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["failed", "error"], ["blocked", "blocked"], ["cancelled", "cancelled"],
+  ] as const)("restores the saved %s reply as the retry error when selecting its session", (turnState, requestStatus) => {
+    const { state, values } = context();
+    const response = `Synthetic saved ${turnState} response`;
+    const task = { ...createHarnessTask(`saved_${turnState}`, "检查测试数据", state.activePageId, "editor", harnessUiClock),
+      state: turnState, resultMessage: response };
+    const session = newAssistantSession([{ id: `turn_${turnState}`, taskId: task.id, pageId: state.activePageId,
+      instruction: task.instruction, response, createdAt: task.createdAt, state: turnState }]);
+    session.draft = "保留未发送的问题";
+    state.assistant.assistantSessions.items.push(session);
+    state.assistant.harnessTasks = [task];
+    const original = structuredClone({ execution: state.execution, product: state.dataProduct, task, session });
+
+    createStudioAssistantActions(state).handleSelectAssistantSession(session.id);
+
+    expect(values.aiRequestStatus).toBe(requestStatus);
+    expect(values.aiRequestError).toBe(response);
+    expect(values.aiMessage).toBe(response);
+    expect(values.lastSubmittedInstruction).toBe(task.instruction);
+    expect(values.lastHarnessTaskId).toBe(task.id);
+    expect(values.hasValidAiPlan).toBe(false);
+    expect(activeAssistantSession(values.assistantSessions as AssistantSessions)).toEqual(original.session);
+    expect(state.persistExplicitly).toHaveBeenCalledExactlyOnceWith(state.execution, state.auditRecords,
+      state.queryRecords, state.dataProduct, [task], state.edsWorkspace, session.turns,
+      { ...state.assistant.assistantSessions, activeId: session.id });
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(clearHarnessConversations).not.toHaveBeenCalled();
+    expect(state.setExecution).not.toHaveBeenCalled();
+    expect(state.auditCurrentPreviewCancellation).not.toHaveBeenCalled();
+    expect(state.assistant.setHarnessTasks).not.toHaveBeenCalled();
+    expect({ execution: state.execution, product: state.dataProduct, task, session }).toEqual(original);
+  });
+  it.each([true, false])("clears stale retry errors when selecting a success or empty session (has reply %s)", (hasReply) => {
+    const { state, values } = context();
+    const session = newAssistantSession(hasReply ? [{ id: "completed_turn", instruction: "已完成的问题",
+      response: "已完成的回答", createdAt: "2026-09-23T00:00:00.000Z", state: "success" }] : []);
+    state.assistant.assistantSessions.items.push(session);
+    state.assistant.aiRequestError = "Another session failed";
+    state.assistant.aiRequestStatus = "error";
+    createStudioAssistantActions(state).handleSelectAssistantSession(session.id);
+    expect(values.aiRequestStatus).toBe(hasReply ? "success" : "idle");
+    expect(values.aiRequestError).toBeNull();
+    expect(values.lastHarnessTaskId).toBe("");
+    expect(values.hasValidAiPlan).toBe(false);
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(clearHarnessConversations).not.toHaveBeenCalled();
+    expect(state.setExecution).not.toHaveBeenCalled();
+  });
+  it("preserves a failed turn's retry identity when its task summary has been evicted", () => {
+    const { state, values } = context();
+    const session = newAssistantSession([{ id: "evicted_turn", instruction: "分析测试表",
+      response: "本次测试任务没有完成。", createdAt: "2026-09-23T00:00:00.000Z", state: "failed", taskId: "evicted_task" }]);
+    state.assistant.assistantSessions.items.push(session);
+    state.assistant.harnessTasks = [];
+    createStudioAssistantActions(state).handleSelectAssistantSession(session.id);
+    expect(values.lastHarnessTaskId).toBe("evicted_task");
+    expect(values.lastSubmittedInstruction).toBe(session.turns[0].instruction);
+    expect(values.aiRequestStatus).toBe("error");
+    expect(values.aiRequestError).toBe(session.turns[0].response);
+    expect(values.isLocalAssistantReply).toBe(false);
+    expect(values.hasValidAiPlan).toBe(false);
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(state.assistant.setHarnessTasks).not.toHaveBeenCalled();
+    expect(state.setExecution).not.toHaveBeenCalled();
+  });
+  it("restores a pending ChangeSet as confirmation, not as a failed task retry", () => {
+    const { state, values } = context();
+    const pending = structuredClone(state.assistant.aiChangeSet);
+    const task = { ...createHarnessTask("pending_confirmation", "修改测试图表", state.activePageId, "editor", harnessUiClock),
+      state: "awaitingConfirmation" as const, pendingChangeSet: pending, resultMessage: "预览已生成，等待确认。" };
+    const session = newAssistantSession([{ id: "pending_turn", taskId: task.id, instruction: task.instruction,
+      response: task.resultMessage, createdAt: task.createdAt, state: "success" }]);
+    state.assistant.assistantSessions.items.push(session);
+    state.assistant.harnessTasks = [task];
+    state.assistant.aiRequestError = "Another task failed";
+    createStudioAssistantActions(state).handleSelectAssistantSession(session.id);
+    expect(values.aiRequestStatus).toBe("success");
+    expect(values.aiRequestError).toBeNull();
+    expect(values.hasValidAiPlan).toBe(true);
+    expect(values.aiChangeSet).toEqual(pending);
+    expect(values.lastHarnessTaskId).toBe(task.id);
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(state.setExecution).not.toHaveBeenCalled();
+    expect(state.auditCurrentPreviewCancellation).not.toHaveBeenCalled();
+  });
+  it.each([true, false])("restores only the selected session's in-memory images, without inventing persisted attachments (%s)", (hasSessionImages) => {
+    const { state } = context();
+    const draft = new File(["target draft"], "selected.png", { type: "image/png" });
+    const submitted = new File(["target submitted"], "selected-submitted.png", { type: "image/png" });
+    let finished = false;
+    function Probe() {
+      const [step, setStep] = useState(0), [page, setPage] = useState("page_a");
+      const assistant = useStudioAssistantState(state.assistant.aiChangeSet, page);
+      // The owner hook schedules its own rerender before exposing children.
+      if (activeAssistantSession(assistant.assistantSessions).pageId !== page) return null;
+      if (step === 0) {
+        if (hasSessionImages) { assistant.setAiImageAttachments([draft]); assistant.setLastSubmittedImages([submitted]); }
+        setStep(1);
+      } else if (step === 1) {
+        setPage("page_b"); setStep(2);
+      } else if (step === 2) {
+        expect(assistant.aiImageAttachments).toEqual([]);
+        expect(assistant.lastSubmittedImages).toEqual([]);
+        setPage("page_a"); setStep(3);
+      } else if (step === 3) {
+        expect(assistant.aiImageAttachments).toEqual(hasSessionImages ? [draft] : []);
+        expect(assistant.lastSubmittedImages).toEqual(hasSessionImages ? [submitted] : []);
+        expect(JSON.stringify(assistant.assistantSessions)).not.toContain("selected.png");
+        assistant.clearSessionImages(); setStep(4);
+      } else {
+        expect(assistant.aiImageAttachments).toEqual([]);
+        expect(assistant.lastSubmittedImages).toEqual([]);
+        finished = true;
+      }
+      return null;
+    }
+    renderToStaticMarkup(createElement(Probe));
+    expect(finished).toBe(true);
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+  });
+  it("rejects a session owned by another interface even if its ID is supplied directly", () => {
+    const { state } = context();
+    const other = newAssistantSession([], "another_page");
+    state.assistant.assistantSessions.items.push(other);
+    createStudioAssistantActions(state).handleSelectAssistantSession(other.id);
+    expect(state.assistant.setAssistantSessions).not.toHaveBeenCalled();
+    expect(state.persistExplicitly).not.toHaveBeenCalled();
+  });
+  it("scopes legacy in-memory state before exposing it and restores errors only on their owning page", () => {
+    const { state } = context();
+    const now = new Date().toISOString();
+    const old = createAssistantSessions([
+      { id: "page_a_turn", pageId: "page_a", instruction: "A 问题", response: "A 回复", state: "success", createdAt: now },
+      { id: "page_b_turn", pageId: "page_b", instruction: "B 问题", response: "B 失败", state: "failed", createdAt: now },
+    ]);
+    old.items[0].draft = "B 的旧草稿";
+    let finished = false;
+    function Probe() {
+      const [page, setPage] = useState("page_a"), [step, setStep] = useState(0);
+      const assistant = useStudioAssistantState(state.assistant.aiChangeSet, page);
+      if (activeAssistantSession(assistant.assistantSessions).pageId !== page) return null;
+      if (step === 0) { assistant.setAssistantSessions(old); setStep(1); }
+      else if (step === 1) {
+        expect(assistant.assistantConversation.map((turn) => turn.instruction)).toEqual(["A 问题"]);
+        expect(assistant.aiRequestError).toBeNull();
+        expect(assistant.aiInstruction).toBe("");
+        setPage("page_b"); setStep(2);
+      } else if (step === 2) {
+        expect(assistant.aiRequestError).toBe("B 失败");
+        expect(assistant.lastSubmittedInstruction).toBe("B 问题");
+        expect(assistant.aiInstruction).toBe("B 的旧草稿");
+        setPage("page_c"); setStep(3);
+      } else {
+        expect(assistant.assistantConversation).toEqual([]);
+        expect(assistant.aiRequestError).toBeNull();
+        expect(assistant.lastSubmittedInstruction).toBe("");
+        expect(assistant.hasValidAiPlan).toBe(false);
+        finished = true;
+      }
+      return null;
+    }
+    renderToStaticMarkup(createElement(Probe));
+    expect(finished).toBe(true);
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+  });
+  it("does not send a request with another interface's current session", async () => {
+    const { state } = context();
+    state.assistant.assistantSessions = createAssistantSessions([], "another_page");
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(state.persistExplicitly).not.toHaveBeenCalled();
   });
   it("preserves old threads and blocks switching during a request or preview", () => {
     const { state, values } = context();

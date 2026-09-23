@@ -6,23 +6,23 @@ import { resolve, join, relative, sep } from 'node:path';
 import { chromium } from 'playwright-core';
 
 const base = 'http://127.0.0.1:3001', header = 'x-agentcanvas-project';
-const rawArgs = process.argv.slice(2), transform = rawArgs[0] === '--transform';
-const args = transform ? rawArgs.slice(1) : rawArgs, paid = args[0] === '--allow-paid-model';
+const rawArgs = process.argv.slice(2), transform = rawArgs[0] === '--transform', conclusion = rawArgs[0] === '--conclusion';
+const args = transform || conclusion ? rawArgs.slice(1) : rawArgs, paid = args[0] === '--allow-paid-model';
 assert.ok(args.length === 0 || (paid && args.length === 2), 'Use no arguments to prepare; --allow-paid-model <owned-directory> permits one paid request.');
-const root = resolve(`.runtime/dsh-${transform ? 'transform' : 'readonly'}-browser-2026-09-22`);
+const root = resolve(`.runtime/dsh-${transform ? 'transform' : conclusion ? 'conclusion' : 'readonly'}-browser-2026-09-22`);
 const directory = paid ? resolve(args[1]) : join(root, `browser-${Date.now()}`);
 assert.match(relative(root, directory), /^browser-\d+$/u);
 await mkdir(directory, { recursive: true }); assert.equal((await lstat(directory)).isSymbolicLink(), false); assert.equal(await realpath(directory), directory);
 const projectPath = join(directory, 'project'), ownerPath = join(directory, 'ownership.json');
 const csv = 'region,amount\nEast,100\nEast,50\nSouth,80\n', fileName = transform ? 'input.csv' : 'readonly-synthetic-sales.csv';
-const instruction = transform ? '分析input文件' : '现在是分析了什么东西出来';
+const instruction = transform ? '分析input文件' : conclusion ? '帮我看一下，能不能给我一个分析的结论' : '现在是分析了什么东西出来';
 const sql = transform ? 'SELECT region, revenue::DOUBLE AS revenue FROM recipe_totals ORDER BY region'
   : 'SELECT region, SUM(amount)::DOUBLE AS revenue FROM sales_data GROUP BY region ORDER BY region';
-const ownerKind = transform ? 'dsh-transform-synthetic-v1' : 'dsh-readonly-synthetic-v1';
+const ownerKind = transform ? 'dsh-transform-synthetic-v1' : conclusion ? 'dsh-conclusion-synthetic-v1' : 'dsh-readonly-synthetic-v1';
 const recipeSteps = [{ id: 'aggregate', type: 'groupAggregate', groupBy: ['region'], aggregations: [{ field: 'amount', aggregation: 'sum', as: 'revenue', label: '销售额' }] }];
 const expected = [{ region: 'East', revenue: 150 }, { region: 'South', revenue: 80 }];
 const hash = value => createHash('sha256').update(value).digest('hex');
-const report = { passed: false, paid, transform, directory: relative(process.cwd(), directory).split(sep).join('/'),
+const report = { passed: false, paid, transform, conclusion, directory: relative(process.cwd(), directory).split(sep).join('/'),
   scope: 'Fresh Edge, new synthetic local project. Real model/API/SSE/data computation; only unscoped recent-project/connection lists are privacy-filtered and remote font CSS is empty.',
   screenshots: [], pageErrors: [], routeErrors: [], requests: [], runs: [], checks: [], visualReview: 'pending actual image review' };
 let browser, context, page, owner, handle, projectId, pageId, datasetId, stage = 'preflight', calls = 0;
@@ -133,7 +133,7 @@ try {
   await page.goto(base, { waitUntil: 'networkidle', timeout: 60000 }); await openDataBrowser();
   await dialog().getByLabel('项目文件夹绝对路径', { exact: true }).fill(projectPath);
   if (!paid) {
-    stage = 'Create isolated project'; await dialog().getByLabel('项目名称', { exact: true }).fill(transform ? 'DSH DataRecipe 兼容验收' : 'DSH 已有分析只读解释验收');
+    stage = 'Create isolated project'; await dialog().getByLabel('项目名称', { exact: true }).fill(transform ? 'DSH DataRecipe 兼容验收' : conclusion ? 'DSH 分析结论请求验收' : 'DSH 已有分析只读解释验收');
     const creation = page.waitForResponse(response => response.url() === `${base}/api/projects` && response.request().postDataJSON()?.action === 'create');
     await dialog().getByRole('button', { name: '新建本地项目', exact: true }).click();
     const response = await creation; assert.equal(response.status(), 200); const value = await response.json(); handle = value.handle; projectId = value.manifest.id;
@@ -240,6 +240,13 @@ try {
     } else {
       assert.equal(task.state, 'completed', task.resultMessage); assert.equal(task.notebookArtifact, undefined);
       assert.equal(await page.getByRole('button', { name: '采用草稿', exact: true }).count(), 0);
+      if (conclusion) {
+        assert.equal(task.verification?.status, 'passed');
+        assert.equal(task.trace.some(event => ['editNotebookCells', 'submitNotebookDraft'].includes(event.toolCall?.name)), false);
+        assert.ok(task.trace.some(event => event.type === 'tool_completed' && event.toolCall?.name === 'runNotebookCells'));
+        assert.match(task.resultMessage ?? '', /(?<!\d)150(?!\d)/u); assert.match(task.resultMessage ?? '', /(?<!\d)80(?!\d)/u);
+        report.checks.push('Exact conclusion request verified against a current-task run: East=150, South=80. No edit/submit attempt or draft.');
+      }
     }
     assert.ok(typeof task.resultMessage === 'string' && task.resultMessage.trim().length > 10);
     report.checks.push(transform ? `Original analysis phrase delivered ${report.deliveryMode} without modifying formal definitions.` : 'Original user phrase completed without requiring an edited/submitted draft.',

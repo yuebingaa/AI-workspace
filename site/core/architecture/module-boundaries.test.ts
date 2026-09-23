@@ -82,6 +82,39 @@ function cycles(): string[][] {
 }
 
 describe("runtime module boundaries", () => {
+  it("tool implementations do not depend on their registry, catalog or execution coordinator", () => {
+    const coordinators = new Set([
+      "core/harness/tool-registry.ts", "core/harness/tools/registry.ts",
+      "core/harness/tools/catalog.ts", "core/harness/tools/executor.ts",
+      "core/harness/tools/parameter-projection.ts", "core/harness/runtime.ts",
+    ]);
+    for (const toolModule of ["dataset", "workbook", "semantic", "notebook", "dashboard", "external"]) {
+      const entry = `core/harness/tools/${toolModule}.ts`;
+      expect(sources.has(entry), entry).toBe(true);
+      expect([...reachable(entry, declaredGraph)].filter((name) => coordinators.has(name)), entry).toEqual([]);
+      expect([...reachable(entry)].filter((name) => name.includes("/server/")
+        || name.startsWith("app/") || name.startsWith("components/")), entry).toEqual([]);
+    }
+  });
+
+  it("tool contracts, errors, observations and schema projection can load without the tool registry", () => {
+    const registry = "core/harness/tools/registry.ts";
+    for (const toolModule of ["contracts", "errors", "observation", "parameter-projection"]) {
+      const entry = `core/harness/tools/${toolModule}.ts`;
+      expect(sources.has(entry), entry).toBe(true);
+      const dependencies = [...reachable(entry)];
+      expect(dependencies, entry).not.toContain(registry);
+      expect(dependencies, entry).not.toContain("core/harness/tool-registry.ts");
+      expect(dependencies, entry).not.toContain("core/harness/tools/executor.ts");
+    }
+    expect(direct.get("core/harness/tools/contracts.ts")).toEqual([]);
+    expect([...reachable("core/harness/tools/parameter-projection.ts", declaredGraph)]).not.toContain(registry);
+    for (const entry of ["core/agent-engines/server/tool-broker.ts", "core/agent-engines/server/tool-error-message.ts"]) {
+      expect(declaredGraph.get(entry), entry).toContain("core/harness/tools/errors.ts");
+      expect(declaredGraph.get(entry), entry).not.toContain("core/harness/tool-registry.ts");
+    }
+  });
+
   it("execution engine settings share only portable contracts; legacy runtime does not depend on DSH", () => {
     const contract = "core/agent-engines/contracts.ts";
     expect([...reachable(contract, declaredGraph)]).toEqual([contract]);
@@ -276,9 +309,10 @@ describe("runtime module boundaries", () => {
       || name.startsWith("app/") || name.startsWith("components/"))).toEqual([]);
     expect(dependencies.flatMap((name) => direct.get(name) ?? []).filter((ref) => ref.startsWith("node:")
       || ref === "react" || ref.startsWith("react/") || ref.startsWith("next/") || ref === "pg")).toEqual([]);
-    for (const consumer of ["core/harness/tool-registry.ts", "core/harness/notebook-cell-tools.ts", "core/harness/notebook-diagnostics.ts"]) {
+    for (const consumer of ["core/harness/tools/notebook.ts", "core/harness/notebook-cell-tools.ts", "core/harness/notebook-diagnostics.ts"]) {
       expect(declaredGraph.get(consumer), consumer).toContain(entry);
     }
+    expect([...reachable("core/harness/tool-registry.ts", declaredGraph)]).toContain(entry);
   });
 
   it("Notebook preview sorting is pure while table interaction and chart rendering are separate", () => {

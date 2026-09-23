@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { NotebookTable } from "@/core/notebook/contracts";
 import type { NotebookResultAvailability } from "@/core/notebook/result-availability";
-import { nextNotebookPreviewSort, notebookOrderedPreview, notebookTablePreview, type NotebookPreviewSort } from "@/core/notebook/table-preview";
+import { nextNotebookPreviewSort, notebookOrderedPreview, notebookPreviewValue, notebookTablePreview, type NotebookPreviewSort } from "@/core/notebook/table-preview";
 import { createTableCsv, csvPreviewFilename, MAX_CSV_EXPORT_BYTES } from "@/core/exports/table-csv";
 import { triggerBrowserDownload } from "@/core/exports/browser-download";
 
@@ -50,7 +50,10 @@ export function NotebookResultTable({ title, table, availability: scope }: {
           </button>
         </th>;
       })}</tr></thead>
-        <tbody>{preview.rows.map((row, index) => <tr key={index}>{table.fields.map((field) => <td key={field.name} title={String(row[field.name] ?? "NULL")}>{row[field.name] == null ? <span className="notebook-null">NULL</span> : String(row[field.name])}</td>)}</tr>)}</tbody>
+        <tbody>{preview.rows.map((row, index) => <tr key={index}>{table.fields.map((field) => {
+          const value = notebookPreviewValue(row, field.name);
+          return <td key={field.name} title={String(value ?? "NULL")}>{value == null ? <span className="notebook-null">NULL</span> : String(value)}</td>;
+        })}</tr>)}</tbody>
       </table>
     </div>
     <footer><span aria-label="结果范围">{scopeLabel} · {table.fields.length} 列{scope.completeness === "complete" && scope.knownRowCount === 0 ? " · 查询成功，结果为空" : ""}</span>

@@ -34,14 +34,14 @@ function task(state: "blocked" | "failed" | "completed"): HarnessTaskSummary {
 
 function render(
   status: AiRequestUiStatus,
-  harnessTask: HarnessTaskSummary,
+  harnessTask: HarnessTaskSummary | null,
   requestError: string | null,
   dataAnalysisMode = false,
   conversationTurns: AssistantConversationTurn[] = [],
   pendingInstruction = "",
   imageAttachments: File[] = [],
   presentation: "sidebar" | "workspace" = "sidebar",
-  notebook: Pick<ComponentProps<typeof AiBuilderAssistant>, "notebookOptions" | "selectedNotebookCellIds" | "notebookContextDisabled" | "onRemoveNotebookCell"> = {},
+  notebook: Partial<Pick<ComponentProps<typeof AiBuilderAssistant>, "notebookOptions" | "selectedNotebookCellIds" | "notebookContextDisabled" | "onRemoveNotebookCell" | "aiMessage" | "instruction">> = {},
 ) {
   if (!demoFixtureResult.success) throw new Error(demoFixtureResult.error);
   return renderToStaticMarkup(<AiBuilderAssistant
@@ -96,6 +96,112 @@ describe("Notebook focus in both assistant layouts", () => {
       notebookOptions: options, selectedNotebookCellIds: ["parameter"], notebookContextDisabled: state === "editing",
     });
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="移除 Notebook 上下文 Saved threshold"/u);
+  });
+});
+
+describe("AI final answers use shared safe formatting", () => {
+  const response = "## 本轮结论\n\n当前参数是 **East**，字段为 `region`。\n\n- 已读取定义\n- 没有运行数据";
+
+  it.each(["sidebar", "workspace"] as const)("formats history responses in %s while leaving user instructions literal", (presentation) => {
+    const instruction = '**用户原文** `user_field` <img src="https://invalid.example/user">';
+    const turns: AssistantConversationTurn[] = [{
+      id: "formatted_response", instruction, response, createdAt: clock.now().toISOString(), state: "success",
+    }];
+    const html = render("success", task("completed"), null, false, turns, "", [], presentation, { instruction, aiMessage: "未使用的后备消息" });
+    expect(html).toContain('class="assistant-answer"');
+    expect(html).toContain("<strong>East</strong>");
+    expect(html).toContain("<code>region</code>");
+    expect(html).toMatch(/<h[34](?:\s[^>]*)?>本轮结论<\/h[34]>/u);
+    expect(html).toContain("<li>已读取定义</li>");
+    expect(html).toContain("**用户原文** `user_field` &lt;img src=&quot;https://invalid.example/user&quot;&gt;");
+    expect(html).not.toContain("<strong>用户原文</strong>");
+    expect(html).not.toContain("<code>user_field</code>");
+    expect(html).not.toContain("未使用的后备消息");
+    expect(html).not.toMatch(/<img(?:\s|>)/u);
+  });
+
+  it.each(["sidebar", "workspace"] as const)("preserves the fallback message as plain text in %s", (presentation) => {
+    const html = render("idle", task("completed"), null, false, [], "", [], presentation, { aiMessage: response, instruction: "测试指令" });
+    expect(html).toContain(`<p>${response}</p>`);
+    expect(html).not.toContain('class="assistant-answer"');
+    expect(html).not.toContain("<strong>East</strong>");
+    expect(html).not.toContain("<code>region</code>");
+  });
+
+  it.each(["sidebar", "workspace"] as const)("retains failed, blocked, and cancelled labels and error deduplication in %s", (presentation) => {
+    const cases = [
+      { state: "failed", requestStatus: "error", label: "执行失败", retry: true, harness: task("failed") },
+      { state: "blocked", requestStatus: "blocked", label: "任务受限", retry: false, harness: task("blocked") },
+      { state: "cancelled", requestStatus: "cancelled", label: "已取消", retry: false, harness: task("failed") },
+    ] as const;
+    for (const entry of cases) {
+      const failureResponse = `**${entry.state}独立解释**：本次操作未完成。`;
+      const turns: AssistantConversationTurn[] = [{
+        id: `${entry.state}_format`, instruction: "测试状态保留", response: failureResponse,
+        taskId: entry.harness.id, createdAt: clock.now().toISOString(), state: entry.state,
+      }];
+      const html = render(entry.requestStatus, entry.harness, failureResponse, false, turns, "", [], presentation);
+      expect(html).toContain(`<p>${failureResponse}</p>`);
+      expect(html).not.toContain('class="assistant-answer"');
+      expect(html).not.toContain(`<strong>${entry.state}独立解释</strong>`);
+      expect(html.split(`${entry.state}独立解释`)).toHaveLength(2);
+      expect(html).toContain(`${entry.label} · Harness`);
+      expect(html).not.toContain("AI 生成失败");
+      expect(html.includes("重试这次任务")).toBe(entry.retry);
+      expect(html).not.toContain('class="validation-error');
+    }
+  });
+
+  it("keeps unrelated error messages and pending user instructions literal", () => {
+    const plainError = "**原始错误** `error_code`";
+    const html = render("error", task("failed"), plainError);
+    expect(html).toContain(`<p>${plainError}</p>`);
+    expect(html).not.toContain("<strong>原始错误</strong>");
+    const pending = render("loading", task("failed"), null, false, [], "**待处理原文** `raw`");
+    expect(pending).toContain("<span>**待处理原文** `raw`</span>");
+    expect(pending).not.toContain("<strong>待处理原文</strong>");
+  });
+
+  it("formats the answer without formatting trace messages or rewriting the saved response", () => {
+    const traceMessage = "**读取说明** `cellSearch` <script>不可执行</script>";
+    const completed: HarnessTaskSummary = {
+      ...task("completed"),
+      trace: [{
+        id: "trace_format_boundary", sequence: 1, taskId: task("completed").id,
+        timestamp: clock.now().toISOString(), type: "context_loaded", message: traceMessage,
+      }],
+    };
+    const turn: AssistantConversationTurn = Object.freeze({
+      id: "saved_raw_answer", instruction: "读取定义", response,
+      taskId: completed.id, createdAt: clock.now().toISOString(), state: "success",
+    });
+    const html = render("success", completed, null, false, [turn]);
+    expect(html).toContain("<strong>East</strong>");
+    expect(html).toContain("<p>**读取说明** `cellSearch` &lt;script&gt;不可执行&lt;/script&gt;</p>");
+    expect(html).not.toContain("<strong>读取说明</strong>");
+    expect(html).not.toContain("<code>cellSearch</code>");
+    expect(turn.response).toBe(response);
+    expect(completed.trace?.[0].message).toBe(traceMessage);
+  });
+});
+
+describe("restored failure without retained task summary", () => {
+  const response = "这次任务没有完成，请重新尝试。";
+  const turn: AssistantConversationTurn = {
+    id: "restored_failure", instruction: "合成问题", response,
+    taskId: "evicted_task", createdAt: clock.now().toISOString(), state: "failed",
+  };
+  it.each(["sidebar", "workspace"] as const)("keeps one explanation and the original retry button in %s", (presentation) => {
+    const html = render("error", null, response, false, [turn], "", [], presentation);
+    expect(html.split(response)).toHaveLength(2);
+    expect(html).toContain("重试这次任务");
+    expect(html).not.toContain("AI 生成失败");
+    expect(html).toContain("执行失败 · Harness");
+  });
+  it("does not hide a same-worded error belonging to a different current task", () => {
+    const html = render("error", task("failed"), response, false, [turn]);
+    expect(html).toContain("AI 生成失败");
+    expect(html).toContain(">重试</button>");
   });
 });
 
