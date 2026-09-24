@@ -69,7 +69,7 @@
 
 `portable/windows/launcher-config.mjs` 在启动前检查平台、必需资源与 DSH 可加载性，并将包内浏览器绝对路径传给 `NOTEBOOK_PYTHON_BROWSER`。网站和 SDK 子进程使用包内 Node，数据写入包内 `data/state`，网站只监听回环地址 3210–3229；不操作受管 3000 / 3001。仅便携启动器设置 `AGENTCANVAS_DEFAULT_ENGINE=dsh`；普通源码部署未配置仍为 harness。`server/selection.ts` 只在进程首次初始化读取这个服务端默认值，设置切换仍为进程内存，HMR 不重置选择与在途租约。默认 DSH 不表示自动调用模型，用户仍需配置自己的密钥；缺能力仍受阻而非静默回退。
 
-既有受控工具、Notebook 能力、授权、取消和人工采用机制不变；不开放 DSH shell 或任意插件。本批构建、真实便携验收、发布状态与限制统一记录在 [完整包交付记录](../verification/windows-portable-dsh-2026-09-24.md)，不能以源码支持或 ready 状态代替实际发布验证。
+既有受控工具、Notebook 能力、授权、取消和人工采用机制不变；不开放 DSH shell 或任意插件。最终受控 ZIP 已在隔离 PATH 和新中文/空格目录实际解压验收：真实 Python / SQL / 图表及一任务收费 DSH（7模型 / 8工具）通过草稿、人工采用、保存重开，6图已查看；不是另一台电脑、Windows 10或具体360验证。已上传 GitHub 预览 Release `v0.1.0-windows-preview.20260924`，远端附件摘要匹配且匿名下载可达。构建、发布状态与限制统一记录在 [完整包交付记录](../verification/windows-portable-dsh-2026-09-24.md)，不以源码支持或 ready 状态代替验收，未发布 3000。
 
 ## 官方 DeepSeek Harness 网站嵌入（2026-09-22）
 
