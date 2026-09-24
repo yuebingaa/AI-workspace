@@ -1,8 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentEngineSelection, agentEngineSelection } from "./selection";
+import { AgentEngineSelection, agentEngineSelection, configuredInitialEngine } from "./selection";
 
 const available = { available: true, version: "fixture" };
 describe("Agent engine selection", () => {
+  it("permits an explicit deployment default without changing ordinary startup or lease rules", () => {
+    expect(configuredInitialEngine(undefined)).toBe("harness");
+    expect(configuredInitialEngine("harness")).toBe("harness");
+    expect(configuredInitialEngine("dsh")).toBe("dsh");
+    expect(() => configuredInitialEngine("unknown")).toThrow("AGENTCANVAS_DEFAULT_ENGINE");
+    const selection = new AgentEngineSelection(configuredInitialEngine("dsh"));
+    expect(selection.status({ available: false })).toMatchObject({ engine: "dsh", revision: 0 });
+    const lease = selection.acquire();
+    expect(lease.engine).toBe("dsh");
+    expect(() => selection.select({ engine: "harness", revision: 0 }, available)).toThrow("正在执行");
+    lease.release();
+    selection.select({ engine: "harness", revision: 0 }, available);
+    expect(selection.status(available).engine).toBe("harness");
+  });
   it("hot reload refreshes catalog methods while preserving selection, revision and active leases", async () => {
     const initial = agentEngineSelection.status(available);
     const target = initial.engine === "harness" ? "dsh" : "harness";

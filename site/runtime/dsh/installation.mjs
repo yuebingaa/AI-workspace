@@ -9,6 +9,15 @@ export const DEFAULT_RUNTIME_ROOT = fileURLToPath(new URL('../../.runtime/', imp
 export const ACTIVE_FILE = 'dsh-runtime-active.json';
 export const INSTALLS_DIRECTORY = 'dsh-runtime-installs';
 export const LEGACY_DIRECTORY = 'dsh-runtime-deps';
+// Portable archives use one fixed, short directory while retaining the same
+// content-addressed manifest/lock identity as managed installation slots.
+export const BUNDLED_DIRECTORY = 'dsh-bundled';
+export const BUNDLED_PROFILE_FILE = 'bundle-profile.json';
+export const BUNDLED_PROFILE = 'controlled-notebook-v1';
+export const BUNDLED_OMITTED_PACKAGES = Object.freeze([
+  '@deepseek-ai/libreoffice-kit', '@deepseek-ai/libreoffice-kit-win32-x64',
+  'sharp', '@img/sharp-win32-x64',
+]);
 
 export function installationId(manifest, lock) {
   return `${VERSION}-${createHash('sha256').update(manifest).update('\0').update(lock).digest('hex')}`;
@@ -21,10 +30,10 @@ function strictKeys(value, keys) {
 
 export function validateSelection(value) {
   if (strictKeys(value, ['kind']) && value.kind === 'legacy') return Object.freeze({ kind: 'legacy' });
-  if (strictKeys(value, ['kind', 'id']) && value.kind === 'slot'
+  if (strictKeys(value, ['kind', 'id']) && (value.kind === 'slot' || value.kind === 'bundled')
     && typeof value.id === 'string' && value.id.startsWith(`${VERSION}-`)
     && /^[a-f0-9]{64}$/.test(value.id.slice(VERSION.length + 1))) {
-    return Object.freeze({ kind: 'slot', id: value.id });
+    return Object.freeze({ kind: value.kind, id: value.id });
   }
   throw new Error('Invalid isolated DSH installation selection.');
 }
@@ -97,16 +106,47 @@ export async function verifyInstalledTree(root, { patched = true } = {}) {
   }
 }
 
+/**
+ * The portable website exposes only its controlled Notebook profile, not the
+ * general DSH CLI/plugin catalog. Its explicit distribution omits the four
+ * unused Office/native-image packages; managed slot and legacy checks remain separate.
+ */
+export async function verifyBundledTree(root) {
+  const profilePath = await assertPlainPath(root, join(root, BUNDLED_PROFILE_FILE));
+  const profile = JSON.parse(await readFile(profilePath, 'utf8'));
+  if (!strictKeys(profile, ['schemaVersion', 'profile', 'omittedPackages']) || profile.schemaVersion !== 1
+    || profile.profile !== BUNDLED_PROFILE || !Array.isArray(profile.omittedPackages)
+    || profile.omittedPackages.length !== BUNDLED_OMITTED_PACKAGES.length
+    || !BUNDLED_OMITTED_PACKAGES.every((name, index) => profile.omittedPackages[index] === name)) {
+    throw new Error('Invalid DSH controlled bundled profile.');
+  }
+  for (const name of BUNDLED_OMITTED_PACKAGES) {
+    try { await lstat(join(root, 'node_modules', name)); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    throw new Error('Controlled DSH bundle contains an omitted package.');
+  }
+  // Reuse only the fixed SDK/CLI checks. Unlike the ordinary installation, the
+  // portable profile has no Office resolver and checks its root ZIP dependency.
+  await verifyInstalledTree(root, { patched: false });
+  const zipManifest = await assertPlainPath(root, join(root, 'node_modules', 'fflate', 'package.json'));
+  if (JSON.parse(await readFile(zipManifest, 'utf8')).version !== '0.8.3') {
+    throw new Error('DSH bundled ZIP patch is missing.');
+  }
+}
+
 export async function resolveDshSelection(selection, runtimeRoot = DEFAULT_RUNTIME_ROOT) {
   const selected = validateSelection(selection);
   const root = selected.kind === 'legacy'
-    ? join(runtimeRoot, LEGACY_DIRECTORY) : join(runtimeRoot, INSTALLS_DIRECTORY, selected.id);
+    ? join(runtimeRoot, LEGACY_DIRECTORY)
+    : selected.kind === 'bundled'
+      ? join(runtimeRoot, BUNDLED_DIRECTORY)
+      : join(runtimeRoot, INSTALLS_DIRECTORY, selected.id);
   await assertPlainPath(runtimeRoot, root);
   const manifestPath = join(root, 'package.json');
   for (const name of ['package.json', 'package-lock.json', 'node_modules']) {
     await assertPlainPath(runtimeRoot, join(root, name));
   }
-  if (selected.kind === 'slot') {
+  if (selected.kind !== 'legacy') {
     const manifest = await readFile(manifestPath);
     const lock = await readFile(join(root, 'package-lock.json'));
     if (installationId(manifest, lock) !== selected.id) throw new Error('DSH installation identity differs.');
@@ -115,7 +155,8 @@ export async function resolveDshSelection(selection, runtimeRoot = DEFAULT_RUNTI
       throw new Error('DSH patched installation specification differs.');
     }
   }
-  await verifyInstalledTree(root, { patched: selected.kind === 'slot' });
+  if (selected.kind === 'bundled') await verifyBundledTree(root);
+  else await verifyInstalledTree(root, { patched: selected.kind === 'slot' });
   return Object.freeze({ selection: selected, root, manifestPath });
 }
 

@@ -17,7 +17,7 @@
     "build": "vinext build && node scripts/copy-wecom-cli.mjs && node scripts/copy-notebook-runtime.mjs",
     "build:portable:windows": "npm run build && node scripts/build-portable-windows.mjs",
     "package:portable:windows": "node scripts/package-portable-windows.mjs",
-    "test:portable": "node --test scripts/package-portable-windows.test.mjs",
+    "test:portable": "node --test scripts/package-portable-windows.test.mjs scripts/portable-launcher.test.mjs scripts/verify-portable-windows.test.mjs runtime/dsh/installation-selection.test.mjs",
     "build:edgeone": "next build",
     "start": "vinext start",
     "site:install": "node scripts/runtime/site-runtime.mjs install",

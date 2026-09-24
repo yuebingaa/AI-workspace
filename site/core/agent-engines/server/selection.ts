@@ -6,9 +6,13 @@ export class AgentEngineSelectionError extends Error {
 
 /** Process-owned selection, separate from model credentials and project documents. */
 export class AgentEngineSelection {
-  private engine: AgentEngineId = "harness";
+  private engine: AgentEngineId;
   private revision = 0;
   private activeTasks = 0;
+
+  constructor(initialEngine: AgentEngineId = "harness") {
+    this.engine = initialEngine;
+  }
 
   status(dsh: AgentEngineSettings["dsh"]): AgentEngineSettings {
     return { engine: this.engine, revision: this.revision, activeTasks: this.activeTasks,
@@ -46,7 +50,15 @@ export class AgentEngineSelection {
 
 const selectionKey = Symbol.for("agentcanvas.execution-engine-selection.v1");
 const shared = globalThis as typeof globalThis & { [key: symbol]: unknown };
-export const agentEngineSelection = (shared[selectionKey] ??= new AgentEngineSelection()) as AgentEngineSelection;
+/** Deployment startup default, never a browser request or a persisted user choice. */
+export function configuredInitialEngine(value: string | undefined): AgentEngineId {
+  if (value === undefined || value === "harness") return "harness";
+  if (value === "dsh") return "dsh";
+  throw new Error("AGENTCANVAS_DEFAULT_ENGINE must be harness or dsh.");
+}
+export const agentEngineSelection = (shared[selectionKey] ??= new AgentEngineSelection(
+  configuredInitialEngine(process.env.AGENTCANVAS_DEFAULT_ENGINE),
+)) as AgentEngineSelection;
 // Development hot reload must refresh behavior/catalog without replacing the
 // process-owned selection or invalidating active leases and their release hooks.
 Object.setPrototypeOf(agentEngineSelection, AgentEngineSelection.prototype);

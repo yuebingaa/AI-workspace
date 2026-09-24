@@ -1,8 +1,8 @@
 # AgentCanvas Agent 架构
 
-最后更新：2026-09-23。此文档为 Agent 架构的唯一维护入口，随代码变化同步更新。
+最后更新：2026-09-24。此文档为 Agent 架构的唯一维护入口，随代码变化同步更新。
 
-<!-- agent-architecture-source-sha256: fe859d113d98a662b0235c7d8157fc5ae296d23b348930644aa3eb24d73162ef -->
+<!-- agent-architecture-source-sha256: 4b42deef4ec2a6f99c0829de4e0050d217757c8b06f73fdbdd66ce5e29266d26 -->
 
 ## 当前实现与启用状态
 
@@ -61,6 +61,16 @@
 
 第一版验证角色隔离、真实工具执行、证据验收、共享预算、取消和统一交付。尚未通过真实模型的成本 / 时延对比评测，不能宣称多 Agent 比单 Agent 更快或更准确。
 
+## Windows 完整便携部署（2026-09-24）
+
+`scripts/build-portable-windows.mjs` 的完整发行目标是 Windows x64 / Node 24：网站独立构建、固定 DSH SDK 安装树及生产载体、Notebook 的 Pyodide / DuckDB 资源和固定 Playwright Headless Shell 一起分发；构建不复制本机整个 `.runtime`、用户项目、会话、凭据或历史安装。完整包以 GitHub Release 附件分发，仓库自动生成的源码 ZIP 仍不是运行包。
+
+`runtime/dsh/installation.mjs` 新增严格的 `{kind:"bundled",id}` 选择，仅解析固定 `.runtime/dsh-bundled` 短目录。保留原 manifest / lock 身份与 override 声明，校验 SDK 版本、根 ZIP 依赖及受管路径；无任意路径或缺件 fallback。`bundle-profile.json` 必须严格匹配 `controlled-notebook-v1` 与四个精确省略包：`@deepseek-ai/libreoffice-kit`、`@deepseek-ai/libreoffice-kit-win32-x64`、`sharp`、`@img/sharp-win32-x64`，且这些目录必须不存在。实际受控 SDK 加载图不使用这些 Office 转换 / 原生附件图像能力，网站也未开放；因对应源码分发未落实而不随包提供，不表示任意插件可用。slot / legacy 的原 Office ZIP 补丁验证和安装树完全保留。这里验证的是安装契约与关键依赖，并不是逐文件签名或操作系统隔离。
+
+`portable/windows/launcher-config.mjs` 在启动前检查平台、必需资源与 DSH 可加载性，并将包内浏览器绝对路径传给 `NOTEBOOK_PYTHON_BROWSER`。网站和 SDK 子进程使用包内 Node，数据写入包内 `data/state`，网站只监听回环地址 3210–3229；不操作受管 3000 / 3001。仅便携启动器设置 `AGENTCANVAS_DEFAULT_ENGINE=dsh`；普通源码部署未配置仍为 harness。`server/selection.ts` 只在进程首次初始化读取这个服务端默认值，设置切换仍为进程内存，HMR 不重置选择与在途租约。默认 DSH 不表示自动调用模型，用户仍需配置自己的密钥；缺能力仍受阻而非静默回退。
+
+既有受控工具、Notebook 能力、授权、取消和人工采用机制不变；不开放 DSH shell 或任意插件。本批构建、真实便携验收、发布状态与限制统一记录在 [完整包交付记录](../verification/windows-portable-dsh-2026-09-24.md)，不能以源码支持或 ready 状态代替实际发布验证。
+
 ## 官方 DeepSeek Harness 网站嵌入（2026-09-22）
 
 网站的 `/api/ai/harness` 与 `/api/ai/harness/stream` 继续承担服务端身份、数据授权、会话锁与幂等；执行时从 `core/agent-engines/server/selection.ts` 获取不可变任务租约，`executor.ts` 在完整 `CoordinatedHarness` 与 `runDshEngine` 中二选一，不将新循环塞入旧 `HarnessModel.next`。选择只保存在本机进程，默认为 `harness`；既有评测与可视化实验仍固定原执行器。重复幂等请求跨引擎切换仍返回原回执，不重新执行。
@@ -69,7 +79,7 @@
 
 开发热更新会刷新进程选择对象的实现原型，但不替换对象、engine、revision 或 activeTasks；旧租约的 release 仍作用于同一对象，避免目录停留旧版本或任务丢锁。本批验收发现用户已选择 DSH，截图结束恢复该初始选择，不将源码默认误写为当前已启用状态。
 
-`core/agent-engines/server/dsh-driver.ts` 为可替换驱动端口组装官方 SDK；`runtime/dsh/driver.mjs` 以独占 SDK 子进程执行任务，结束 / 取消关闭该进程。固定 `0.1.6-alpha.2` 安装在独立 `.runtime` 依赖目录，需显式运行 `node scripts/setup-dsh-runtime.mjs`，主依赖不变。当前仅支持本地 Node 24+，未验证云部署 / 便携或稳定站发布。不可用时设置说明原因，不回退执行旧引擎。
+`core/agent-engines/server/dsh-driver.ts` 为可替换驱动端口组装官方 SDK；`runtime/dsh/driver.mjs` 以独占 SDK 子进程执行任务，结束 / 取消关闭该进程。固定 `0.1.6-alpha.2` 安装在独立 `.runtime` 依赖目录，源码部署需显式运行 `node scripts/setup-dsh-runtime.mjs`，主依赖不变。当前支持本地 Node 24+；完整便携部署见上节，云部署 / 稳定站发布未验证。不可用时设置说明原因，不回退执行旧引擎。
 
 第三批增加 `runtime/dsh/installation.mjs`：安装身份由独立 manifest / lock 摘要确定，活动指针只允许受管版本槽位或旧安装，不接受任意路径。每个任务在启动前固定依赖树，SDK 导入与子插件解析使用同一 manifest；切换指针不重定向在途任务。当前开发端固定载体修订 `?carrier=4` 加载新 driver，不替换进程选择 / 租约。安装修补与回退均是显式操作，不在用户请求中安装依赖；历史安装验收见[真实链报告](../verification/dsh-live-2026-09-22.md)。
 
@@ -1002,6 +1012,10 @@ npm run build
 - 稳定站发布：尚未执行。
 
 ## 变更记录
+
+### 2026-09-24 · Windows 完整 DSH 便携发行
+
+新增受管短路径 bundled 安装契约、显式部署默认执行器和包内浏览器启动配置，保留原 SDK / 工具 / 授权 / 草稿采用边界。普通源码部署继续默认 Harness，便携启动器显式选择 DSH；进程设置不写入项目或替换在途租约。构建只选取固定运行资源，不复制本机项目、密钥或会话；验证与实际发布状态见[交付记录](../verification/windows-portable-dsh-2026-09-24.md)，3000 不发布。
 
 ### 工作界面会话隔离（2026-09-23）
 

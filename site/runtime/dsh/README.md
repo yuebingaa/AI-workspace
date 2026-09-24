@@ -15,9 +15,10 @@ node --test runtime/dsh/installation.test.mjs scripts/setup-dsh-runtime.test.mjs
 node --test runtime/dsh/driver.test.mjs
 ```
 
-This carrier supports the local Node deployment only. Cloud/edge execution,
-portable distribution and new-machine packaging are not implemented by this
-change; do not advertise a successful local setup as support for those targets.
+This carrier supports local Node deployment. The Windows x64 complete portable
+builder also bundles the locked SDK tree and carrier (see `../../portable/README.md`).
+Cloud/edge deployment remains unsupported. Import readiness is not an end-to-end
+test; release verification is recorded separately.
 
 Setup uses a fresh staging directory under `.runtime/dsh-runtime-installs/` and
 `npm ci --ignore-scripts --no-audit --no-fund`. It verifies the manifests, fixed
@@ -34,6 +35,19 @@ keep their captured tree when the pointer changes. The legacy
 but an invalid pointer fails closed. Paths must stay within managed directories,
 and symlinks/junctions in selection paths are rejected. This is not an OS-level
 defense against a local operator changing package contents.
+
+Portable builds use the strict selection `{kind:"bundled",id}` with the original
+manifest/lock identity and a fixed short directory `.runtime/dsh-bundled`.
+The strict `controlled-notebook-v1` profile omits exactly the two LibreOffice
+packages plus `sharp` and `@img/sharp-win32-x64`. These Office/native-image
+plugins are absent from the website's controlled loading graph and exposed
+tools; their corresponding-source distribution was not established for this
+release. All other dependencies remain, and the root ZIP dependency is checked
+at 0.8.3. This is not a general-purpose all-plugin DSH CLI distribution. Existing
+slot/legacy trees and their Office ZIP checks are unchanged. Only manifests and runtime dependencies are shipped;
+local session data, previous slots and credentials are excluded. The launcher
+sets `AGENTCANVAS_DEFAULT_ENGINE=dsh` at process startup. Normal source deployment
+still defaults to Harness; UI switching remains process-local, not persisted.
 
 `node scripts/setup-dsh-runtime.mjs --rollback` explicitly selects the previous
 tree. Restoring legacy also restores its known ZIP risk. Installation is serialized

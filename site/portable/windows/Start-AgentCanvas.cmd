@@ -1,6 +1,8 @@
 @echo off
 chcp 65001 >nul
 setlocal
+set "NODE_PATH="
+set "NODE_OPTIONS="
 title AgentCanvas Portable
 pushd "%~dp0" || goto directory_error
 
