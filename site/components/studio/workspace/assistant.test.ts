@@ -56,6 +56,92 @@ beforeEach(() => {
   } }));
 });
 
+describe("DSH conversation entry", () => {
+  it.each(["你好", "你是ds吗", "你能帮我修改页面吗"])("sends %s to DSH instead of a local canned reply", async (instruction) => {
+    const { state } = context(); state.experience = "dsh-conversation";
+    state.assistant.aiInstruction = instruction;
+    state.assistant.assistantSessions = createAssistantSessions([], state.activePageId, "dsh-conversation");
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(requestHarnessTask).toHaveBeenCalledOnce();
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][0].instruction).toBe(instruction);
+    expect(vi.mocked(requestHarnessTask).mock.calls[0][1]?.experience).toBe("dsh-conversation");
+    expect(state.assistant.setIsLocalAssistantReply).not.toHaveBeenCalledWith(true);
+  });
+  it("does not let the DSH picker activate a classic conversation", () => {
+    const { state } = context(); state.experience = "dsh-conversation";
+    const classic = newAssistantSession([], state.activePageId);
+    state.assistant.assistantSessions = createAssistantSessions([], state.activePageId, "dsh-conversation");
+    state.assistant.assistantSessions.items.push(classic);
+    createStudioAssistantActions(state).handleSelectAssistantSession(classic.id);
+    expect(state.assistant.setAssistantSessions).not.toHaveBeenCalled();
+  });
+});
+
+describe("request admission notification", () => {
+  it("notifies exactly once after task/loading establishment, before the network request completes", async () => {
+    const { state, values } = context(); state.experience = "dsh-conversation";
+    let finish!: (response: HarnessResponse) => void;
+    vi.mocked(requestHarnessTask).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    let observed: unknown;
+    const onAccepted = vi.fn(() => { observed = {
+      status: values.aiRequestStatus, tasks: (values.harnessTasks as HarnessTaskSummary[]).length,
+      active: state.assistant.harnessRequestActiveRef.current,
+      persisted: vi.mocked(state.persistExplicitly).mock.calls.length,
+      networkCalls: vi.mocked(requestHarnessTask).mock.calls.length,
+    }; });
+    let settled = false;
+    const run = createStudioAssistantActions(state).handleGenerateAiPlan(undefined, undefined, undefined, onAccepted)
+      .then(() => { settled = true; });
+    expect(onAccepted).toHaveBeenCalledOnce();
+    expect(observed).toEqual({ status: "loading", tasks: 1, active: true, persisted: 1, networkCalls: 0 });
+    expect(requestHarnessTask).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish({ task: { ...(values.harnessTasks as HarnessTaskSummary[])[0], state: "completed", resultMessage: "已核实数据。" } });
+    await run;
+    expect(onAccepted).toHaveBeenCalledOnce();
+    expect(values.aiRequestStatus).toBe("success");
+  });
+
+  it("notifies for a committed local reply without making a network request", async () => {
+    const { state, values } = context();
+    let observed: unknown;
+    const onAccepted = vi.fn(() => { observed = {
+      status: values.aiRequestStatus,
+      turns: (values.assistantConversation as unknown[]).length,
+      persisted: vi.mocked(state.persistExplicitly).mock.calls.length,
+    }; });
+    await createStudioAssistantActions(state).handleGenerateAiPlan("你好", undefined, undefined, onAccepted);
+    expect(onAccepted).toHaveBeenCalledOnce();
+    expect(observed).toEqual({ status: "success", turns: 1, persisted: 1 });
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+  });
+
+  it.each(["notebook busy", "request active", "session changing", "empty", "wrong page"] as const)("does not acknowledge %s preflight refusal", async (reason) => {
+    const { state } = context();
+    if (reason === "notebook busy") state.notebookInteractionBusy = true;
+    if (reason === "request active") state.assistant.harnessRequestActiveRef.current = true;
+    if (reason === "session changing") state.assistant.isSessionChanging = true;
+    if (reason === "empty") state.assistant.aiInstruction = " ";
+    if (reason === "wrong page") state.assistant.assistantSessions = createAssistantSessions([], "different_page");
+    const onAccepted = vi.fn();
+    await createStudioAssistantActions(state).handleGenerateAiPlan(undefined, undefined, undefined, onAccepted);
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(state.persistExplicitly).not.toHaveBeenCalled();
+  });
+
+  it("does not let an admission observer failure interrupt the existing task lifecycle", async () => {
+    const { state, values } = context();
+    const onAccepted = vi.fn(() => { throw new Error("Synthetic observer failure"); });
+    await createStudioAssistantActions(state).handleGenerateAiPlan(undefined, undefined, undefined, onAccepted);
+    expect(onAccepted).toHaveBeenCalledOnce();
+    expect(requestHarnessTask).toHaveBeenCalledOnce();
+    expect(values.aiRequestStatus).toBe("success");
+    expect(state.assistant.harnessRequestActiveRef.current).toBe(false);
+  });
+});
+
 describe("explicit Notebook focus request composition", () => {
   const document: NotebookDocument = { name: "Synthetic notebook", revision: 2, cells: [
     { id: "parameter", kind: "parameter", title: "Current threshold", outputName: "threshold", parameter: { type: "number", value: 3 } },
@@ -105,6 +191,124 @@ describe("explicit Notebook focus request composition", () => {
     await createStudioAssistantActions(state).handleGenerateAiPlan();
     expect(requestHarnessTask).not.toHaveBeenCalled();
     expect(state.notebookContext?.selectedCellIds).toEqual(["summary"]);
+  });
+});
+
+describe("live Notebook draft completion", () => {
+  function notebookContext() {
+    const result = context();
+    const document: NotebookDocument = { name: "Synthetic notebook", revision: 2, cells: [
+      { id: "summary", kind: "text", title: "Original summary", markdown: "Original definition" },
+    ] };
+    result.state.notebookContext = { document, sourceIds: [] };
+    result.state.onNotebookDraftReady = vi.fn();
+    return { ...result, document };
+  }
+  function completedDraft(state: StudioAssistantActionsContext, taskState: HarnessTaskSummary["state"] = "awaitingConfirmation"): HarnessTaskSummary {
+    return {
+      ...createHarnessTask("synthetic_notebook_task", "更新分析步骤", state.activePageId, "editor", harnessUiClock),
+      state: taskState, resultMessage: "分析步骤已生成。",
+      notebookArtifact: { id: "synthetic_notebook_draft", version: 1, status: "draft", name: "Updated notebook", baseRevision: 2,
+        cells: [{ id: "summary", kind: "text", title: "Updated summary", markdown: "Updated definition" }],
+        executionOrder: ["summary"], lineage: [{ cellId: "summary", dependsOn: [] }], sourceDataSourceIds: [],
+        createdAt: "2026-09-24T00:00:00.000Z" },
+    };
+  }
+
+  it.each(["awaitingConfirmation", "completed"] as const)("signals a %s draft exactly once after persistence and request cleanup", async (taskState) => {
+    const { state, values, document } = notebookContext();
+    const task = completedDraft(state, taskState);
+    vi.mocked(requestHarnessTask).mockResolvedValue({ task });
+    let observed: unknown;
+    const callback = vi.fn<NonNullable<StudioAssistantActionsContext["onNotebookDraftReady"]>>(() => {
+      observed = { persistenceCount: vi.mocked(state.persistExplicitly).mock.calls.length,
+        persistedTask: vi.mocked(state.persistExplicitly).mock.calls.at(-1)?.[4]?.[0],
+        active: state.assistant.harnessRequestActiveRef.current,
+        controller: state.assistant.aiRequestAbortRef.current, status: values.aiRequestStatus };
+    });
+    state.onNotebookDraftReady = callback;
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(callback).toHaveBeenCalledExactlyOnceWith(task, document);
+    expect(observed).toEqual({ persistenceCount: 2, persistedTask: task, active: false, controller: null, status: "success" });
+    expect(callback.mock.calls[0][1]).not.toBe(document);
+    expect(document.revision).toBe(2);
+  });
+
+  it.each(["no draft", "failed", "blocked", "cancelled", "viewer", "no context", "ChangeSet"] as const)("does not signal for %s", async (scenario) => {
+    const { state } = notebookContext();
+    const task = completedDraft(state);
+    // Restored history must not supply an artifact for a new read-only reply.
+    state.assistant.harnessTasks = [completedDraft(state, "completed")];
+    if (scenario === "no draft") { delete task.notebookArtifact; task.state = "completed"; }
+    if (scenario === "failed" || scenario === "blocked" || scenario === "cancelled") task.state = scenario;
+    if (scenario === "viewer") state.role = "viewer";
+    if (scenario === "no context") state.notebookContext = undefined;
+    if (scenario === "ChangeSet") task.pendingChangeSet = state.assistant.aiChangeSet;
+    vi.mocked(requestHarnessTask).mockResolvedValue({ task });
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(requestHarnessTask).toHaveBeenCalledOnce();
+    expect(state.onNotebookDraftReady).not.toHaveBeenCalled();
+  });
+
+  it("does not signal when cancellation races with a successful transport response", async () => {
+    const { state } = notebookContext();
+    const task = completedDraft(state);
+    let resolve!: (response: HarnessResponse) => void;
+    vi.mocked(requestHarnessTask).mockImplementation(() => new Promise((complete) => { resolve = complete; }));
+    const actions = createStudioAssistantActions(state);
+    const request = actions.handleGenerateAiPlan();
+    actions.handleCancelAiRequest();
+    resolve({ task });
+    await request;
+    expect(state.onNotebookDraftReady).not.toHaveBeenCalled();
+    expect(state.assistant.harnessRequestActiveRef.current).toBe(false);
+  });
+
+  it("captures an independent document baseline before the request starts", async () => {
+    const { state, document } = notebookContext();
+    const expected = structuredClone(document);
+    const task = completedDraft(state);
+    vi.mocked(requestHarnessTask).mockImplementation(async () => {
+      document.name = "Changed while waiting";
+      document.revision += 1;
+      document.cells[0].title = "Changed nested definition";
+      return { task };
+    });
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(state.onNotebookDraftReady).toHaveBeenCalledExactlyOnceWith(task, expected);
+    const baseline = vi.mocked(state.onNotebookDraftReady!).mock.calls[0][1];
+    expect(baseline).not.toBe(document);
+    expect(baseline.cells[0]).not.toBe(document.cells[0]);
+  });
+
+  it("keeps a successful AI task and its saved reply when local Notebook scheduling throws", async () => {
+    const { state, values } = notebookContext();
+    const task = completedDraft(state);
+    vi.mocked(requestHarnessTask).mockResolvedValue({ task });
+    state.onNotebookDraftReady = vi.fn(() => { throw new Error("Synthetic local failure"); });
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(state.onNotebookDraftReady).toHaveBeenCalledOnce();
+    expect(values.aiRequestStatus).toBe("success");
+    expect(values.aiRequestError).toBeNull();
+    expect(values.aiMessage).toBe(task.resultMessage);
+    expect((values.harnessTasks as HarnessTaskSummary[])[0]).toBe(task);
+    expect(state.persistExplicitly).toHaveBeenCalledTimes(2);
+    expect(state.setSaveLabel).toHaveBeenLastCalledWith("Notebook 自动运行未启动 · 请在 Notebook 查看并手动处理");
+  });
+
+  it("does not signal for a failed request", async () => {
+    const { state, values } = notebookContext();
+    vi.mocked(requestHarnessTask).mockRejectedValue(new HarnessClientError("invalid_response", "Synthetic response failure", true));
+    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    expect(state.onNotebookDraftReady).not.toHaveBeenCalled();
+    expect(values.aiRequestStatus).toBe("error");
+  });
+
+  it("does not signal for a local conversational reply", async () => {
+    const { state } = notebookContext();
+    await createStudioAssistantActions(state).handleGenerateAiPlan("你好");
+    expect(requestHarnessTask).not.toHaveBeenCalled();
+    expect(state.onNotebookDraftReady).not.toHaveBeenCalled();
   });
 });
 
@@ -175,7 +379,9 @@ describe("request recipe scope", () => {
     const before = structuredClone(state.dataProduct);
     expect(harnessPublicRequestSchema.shape.recipes.safeParse(state.dataProduct.recipes
       .filter((recipe) => recipe.sourceDatasetId === state.activeDataSource!.id)).success).toBe(false);
-    await createStudioAssistantActions(state).handleGenerateAiPlan();
+    const onAccepted = vi.fn();
+    await createStudioAssistantActions(state).handleGenerateAiPlan(undefined, undefined, undefined, onAccepted);
+    expect(onAccepted).not.toHaveBeenCalled();
     expect(requestHarnessTask).not.toHaveBeenCalled();
     expect(values.aiRequestStatus).toBe("error");
     expect(values.aiRequestError).toContain("21 个相关数据配方");

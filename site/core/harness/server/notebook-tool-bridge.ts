@@ -1,6 +1,9 @@
 import type { LocalDataRuntime } from "@/core/models";
 import type { NotebookCell } from "@/core/notebook/definition";
-import { DEFAULT_NOTEBOOK_CAPABILITIES } from "@/core/notebook/capabilities";
+import { DEFAULT_NOTEBOOK_CAPABILITIES, type NotebookCapabilities } from "@/core/notebook/capabilities";
+import type { NotebookDraftRunner, NotebookRuntimeInfoReader } from "@/core/notebook/execution-contracts";
+import type { ConnectionSchemaInspector } from "@/core/connections/contracts";
+import type { EdsRawWorkbook } from "@/core/eds";
 import { validateSemanticModel } from "@/core/semantic/model";
 import { StudioValidationError } from "@/core/schemas/errors";
 import { harnessRequestSchema, type HarnessRequest, type HarnessToolExecutionResult, type HarnessToolName } from "../contracts";
@@ -18,14 +21,14 @@ export interface NotebookToolBridgeOptions {
   /** The HTTP boundary, not the model, owns identity and source authorization. */
   request: HarnessRequest;
   dataRuntime: LocalDataRuntime;
-  notebookRunner: NonNullable<HarnessToolContext["notebookRunner"]>;
+  notebookRunner: NotebookDraftRunner;
   authorizeCurrentAccess(): void;
   /** The historical CSV PoC remains deliberately narrower than website tasks. */
   profile?: "csv" | "notebook";
-  rawWorkbook?: HarnessToolContext["rawWorkbook"];
-  notebookCapabilities?: HarnessToolContext["notebookCapabilities"];
-  pythonRuntimeInfo?: HarnessToolContext["pythonRuntimeInfo"];
-  connectionInspector?: HarnessToolContext["connectionInspector"];
+  rawWorkbook?: EdsRawWorkbook;
+  notebookCapabilities?: NotebookCapabilities;
+  pythonRuntimeInfo?: NotebookRuntimeInfoReader;
+  connectionInspector?: ConnectionSchemaInspector;
   signal?: AbortSignal;
   clock?: { now(): number; id(): string };
 }
@@ -237,11 +240,7 @@ export function createNotebookToolBridge(options: NotebookToolBridgeOptions): No
     notebookCapabilities: capabilities,
     pythonRuntimeInfo: options.pythonRuntimeInfo,
     connectionInspector: options.connectionInspector,
-    notebookRunner: (artifact) => options.notebookRunner(structuredClone(artifact), {
-      request: structuredClone(request), dataRuntime: structuredClone(dataRuntime),
-      notebookCapabilities: structuredClone(capabilities),
-      now: context.now, id: context.id, signal: controller.signal,
-    }),
+    notebookRunner: options.notebookRunner,
   };
 
   return {

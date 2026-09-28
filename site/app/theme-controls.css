@@ -1,0 +1,130 @@
+/* Themes owns control appearance; this file connects tokens and application layout. */
+.radix-themes {
+  --default-font-family: var(--font-geist-sans), "Microsoft YaHei", sans-serif;
+  --code-font-family: var(--font-geist-mono), monospace;
+  --cursor-button: pointer;
+  --cursor-checkbox: pointer;
+  --cursor-menu-item: pointer;
+  --studio-font: var(--default-font-family);
+  --studio-paper: #faf9f7;
+  --studio-surface: var(--color-panel-solid);
+  --studio-soft: var(--gray-3);
+  --studio-ink: var(--gray-12);
+  --studio-secondary: var(--gray-11);
+  --studio-muted: var(--gray-11);
+  --studio-border: var(--gray-6);
+  --studio-border-strong: var(--gray-8);
+  --studio-hairline: var(--gray-4);
+  --ink: var(--studio-ink);
+  --muted: var(--studio-secondary);
+  --line: var(--studio-border);
+  --soft: var(--studio-paper);
+  --violet: var(--accent-11);
+}
+.ui-select-field { width: 100%; min-width: 0; }
+.ui-button { margin: 0; }
+.workspace-sidebar-collapse.rt-Button { display: none; position: absolute; }
+.workspace.pages-expanded .workspace-sidebar-collapse.rt-Button { display: flex; }
+.ui-field { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.ui-field > label { font-size: var(--font-size-2); font-weight: var(--font-weight-medium); color: var(--gray-12); }
+.ui-field-hint { font-size: var(--font-size-1); line-height: 1.6; color: var(--gray-11); }
+.ui-field-error { color: var(--red-11); font-size: var(--font-size-2); line-height: 1.6; overflow-wrap: anywhere; }
+.ui-dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+.rt-DialogContent.semantic-dialog { display: flex; flex-direction: column; padding: 0; max-width: 1120px; height: min(880px, calc(100dvh - 48px)); overflow: hidden; }
+.ui-combobox-trigger { justify-content: space-between; width: 100%; text-align: left; font-weight: var(--font-weight-regular); }
+.ui-combobox-trigger > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-combobox-content { width: max(var(--radix-popover-trigger-width), 260px); max-width: min(420px, calc(100vw - 32px)); padding: var(--space-2); }
+.ui-combobox-content [cmdk-input] { width: 100%; padding: var(--space-2); border: 0; border-bottom: 1px solid var(--gray-6); background: transparent; color: var(--gray-12); font: inherit; outline: none; }
+.ui-combobox-content [cmdk-list] { max-height: min(250px, var(--radix-popover-content-available-height)); overflow-y: auto; padding-top: var(--space-1); overscroll-behavior: contain; }
+.ui-combobox-content [cmdk-item] { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-2); font-size: var(--font-size-2); cursor: pointer; }
+.ui-combobox-content [cmdk-item] > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.ui-combobox-content [cmdk-item] small { display: block; margin-top: var(--space-1); color: var(--gray-11); font-size: var(--font-size-1); }
+.ui-combobox-content [cmdk-item][data-selected="true"] { background: var(--accent-3); color: var(--accent-11); }
+.ui-combobox-content [cmdk-item][data-disabled="true"] { opacity: .45; pointer-events: none; }
+.ui-combobox-content [cmdk-empty] { padding: var(--space-4) var(--space-2); color: var(--gray-11); font-size: var(--font-size-2); text-align: center; }
+
+/* Layout of navigation and document controls, independent from visual variants. */
+.studio-navigation-item.rt-Button { width: 100%; height: auto; min-height: 36px; justify-content: flex-start; padding: var(--space-2); white-space: normal; text-align: left; }
+.studio-navigation-toggle.rt-Button, .workspace-sidebar-rail .rt-Button { flex-shrink: 0; }
+.studio-navigation-search .rt-TextFieldRoot { flex: 1; min-width: 0; }
+.studio-navigation-search, .studio-navigation-search:focus-within { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.studio-navigation-search > svg, .studio-navigation-search > kbd { display: none; }
+.studio-navigation-quick .rt-Button { flex: 1; }
+.studio-navigation-create .rt-TextFieldRoot { min-width: 0; flex: 1; }
+.studio-navigation-item[aria-current="page"], .notebook-outline .rt-Button[aria-current="step"] { background: var(--accent-3); color: var(--accent-11); }
+.notebook-outline .rt-Button { display: flex; justify-content: flex-start; width: 100%; min-height: 34px; height: auto; padding: var(--space-2); text-align: left; }
+.notebook-outline .rt-Button > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notebook-title.rt-Button { height: auto; margin: 0; padding: 0; color: var(--gray-12); font-size: 22px; line-height: 1.4; font-weight: 600; white-space: normal; text-align: left; }
+.notebook-title-editor .rt-TextFieldRoot { flex: 1; min-width: 160px; }
+.notebook-cell-tools .rt-Button, .notebook-heading-actions .rt-Button { flex-shrink: 0; }
+.notebook-input-list label { align-items: center; }
+.notebook-editor .rt-TextFieldRoot, .notebook-editor .rt-TextArea, .notebook-editor .ui-select-field { width: 100%; min-width: 0; }
+.notebook-editor fieldset > label, .notebook-chart-controls > label { gap: var(--space-2); font-size: var(--font-size-2); }
+.notebook-table-search .rt-TextFieldRoot { flex: 1; min-width: 0; }
+.notebook-column-popover label { display: flex; align-items: center; gap: var(--space-2); }
+.notebook-cell-menu { display: grid; min-width: 180px; gap: var(--space-1); }
+.notebook-cell-menu .rt-Button { justify-content: flex-start; }
+.notebook-data-options > .rt-Button { height: auto; min-height: 76px; justify-content: flex-start; text-align: left; padding: var(--space-4); }
+.notebook-question .rt-TextFieldRoot { flex: 1; min-width: 0; }
+.notebook-result-sort.rt-Button { width: 100%; height: auto; justify-content: flex-start; padding: var(--space-2); }
+.semantic-library-item.rt-Button { width: 100%; height: auto; padding: var(--space-3); gap: var(--space-1); flex-direction: column; align-items: flex-start; white-space: normal; text-align: left; }
+.files-toolbar .ui-select-field { width: auto; }
+.rt-PopoverContent.studio-navigation-popover { padding: 0; width: 310px; }
+.rt-PopoverContent .studio-navigation-menu { width: 100%; border: 0; box-shadow: none; }
+.interface-switcher-trigger { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.conversation-switch-trigger.rt-Button { flex: 1 1 0; min-width: 0; max-width: calc(100% - 38px); justify-content: flex-start; }
+.conversation-switch-trigger.rt-Button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-new.rt-Button { flex: 0 0 28px; width: 28px; padding: 0; }
+.workspace-mode-tabs.rt-TabsList { padding: 0; border: 0; background: transparent; }
+.workspace-mode-tabs .rt-TabsTriggerInner { gap: var(--space-2); }
+.workspace-mode-tabs .rt-TabsTriggerInner svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.25; }
+.notebook-cell-tools > .rt-Button:not(:last-child) { opacity: 0; }
+.notebook-cell:is(:hover, :focus-within, .is-editing, .is-selected) .notebook-cell-tools > .rt-Button,
+.notebook-cell-tools > .rt-Button:focus-visible { opacity: 1; }
+.notebook-sort-button.rt-Button { display: flex; width: 100%; height: auto; min-height: 34px; padding: var(--space-1) var(--space-2); justify-content: space-between; text-align: left; }
+.notebook-table-search { padding: 0; border: 0; background: transparent; }
+.notebook-table-search > span { display: none; }
+.notebook-column-popover { min-width: 240px; }
+.notebook-column-popover label { padding-block: var(--space-2); font-size: var(--font-size-2); }
+.notebook-column-popover label small { display: block; color: var(--gray-11); }
+.notebook-editor .rt-TextArea { min-height: 96px; }
+.notebook-chart-types .rt-Button { min-width: 0; padding-inline: 6px; gap: 4px; font-size: 12px; white-space: nowrap; }
+.compact-studio .notebook-chart-types .rt-Button > span { font-size: 14px; line-height: 16px; }
+.compact-studio .notebook-cell:is(.is-editing, .is-selected) { border-color: var(--accent-7); }
+.compact-studio .notebook-output-name, .compact-studio .notebook-source-summary,
+.compact-studio .notebook-cell-status, .compact-studio .notebook-feedback { font-size: 12px; }
+.compact-studio .notebook-result :is(th, td) { font-size: 12px; }
+.compact-studio .notebook-preview-export > div { font-size: 11px; line-height: 1.7; }
+.project-model-grid > .rt-Button, .data-browser-table-list > .rt-Button { height: auto; flex-direction: column; align-items: flex-start; white-space: normal; padding: var(--space-3); }
+.rt-DialogContent:is(.csv-upload-dialog, .ai-api-settings-dialog, .data-browser) { width: 100%; padding: 0; }
+.rt-DialogContent.data-browser { display: flex; flex-direction: column; height: min(850px, calc(100dvh - 48px)); overflow: hidden; }
+.rt-AlertDialogContent.file-delete-dialog { position: relative; inset: auto; margin: auto; width: 100%; max-height: calc(100dvh - 48px); }
+.file-delete-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+.file-delete-impact { margin-top: var(--space-4); font-size: var(--font-size-2); line-height: 1.7; }
+.file-delete-impact ul { max-height: 180px; margin-block: var(--space-2); padding-left: var(--space-4); overflow: auto; }
+.file-delete-impact small { display: block; color: var(--gray-11); }
+.file-delete-ack { display: flex; align-items: flex-start; gap: var(--space-2); margin-top: var(--space-4); font-size: var(--font-size-2); }
+.data-browser-body > nav .rt-Button { display: flex; justify-content: flex-start; width: 100%; min-height: 36px; margin-bottom: var(--space-1); }
+.data-browser-body > nav .rt-Button small { margin-left: auto; }
+
+/* Short, interruptible feedback; layout and running work do not wait for animation. */
+@media (prefers-reduced-motion: no-preference) {
+  .radix-themes :is(.rt-Button, .rt-IconButton, .rt-SelectTrigger, .rt-TextFieldRoot) {
+    transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 120ms ease;
+  }
+  .radix-themes :is(.rt-Button, .rt-IconButton):active:not(:disabled) { transform: translateY(1px); }
+  .radix-themes :is(.rt-TabsTriggerInner, .rt-SegmentedControlIndicator) { transition: background-color 160ms ease, color 160ms ease, transform 160ms ease; }
+  .notebook-cell-tools { transition: opacity 140ms ease; }
+  .notebook-cell-tools > .rt-Button { transition: opacity 140ms ease, background-color 140ms ease, color 140ms ease; }
+  .notebook-editor { animation: studio-reveal 180ms cubic-bezier(.2,.8,.2,1); }
+  .notebook-outline .rt-Button { transition: background-color 140ms ease, color 140ms ease; }
+}
+@keyframes studio-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+@container notebook (max-width: 680px) {
+  .notebook-cell-tools > .rt-Button:not(:last-child) { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radix-themes :is(.rt-Button, .rt-IconButton, .rt-SelectTrigger, .rt-TextFieldRoot, .notebook-editor) { transition: none; animation: none; }
+  .radix-themes :is(.rt-DialogOverlay, .rt-DialogContent, .rt-AlertDialogOverlay, .rt-AlertDialogContent, .rt-PopoverContent, .rt-DropdownMenuContent, .rt-SelectContent, .rt-TabsTriggerInner, .rt-SpinnerLeaf) { transition: none; animation: none; }
+}

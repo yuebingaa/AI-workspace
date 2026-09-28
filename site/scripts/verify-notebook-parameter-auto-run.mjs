@@ -187,14 +187,6 @@ async function selectPage(name, id) {
   await page.getByRole('menu', { name: '工作界面列表', exact: true }).getByRole('menuitem').filter({ has: page.getByText(name, { exact: true }) }).click();
   pageId = id; await auto().waitFor();
 }
-async function changeDemoRole(role) {
-  await page.getByRole('button', { name: '打开工作区菜单', exact: true }).click();
-  const menu = page.getByRole('navigation', { name: '工作区功能菜单' });
-  await menu.locator('.studio-navigation-settings > summary').click();
-  await menu.getByLabel('界面演示角色，不影响服务端授权', { exact: true }).selectOption(role);
-  await menu.getByRole('button', { name: '收起工作区菜单', exact: true }).click();
-}
-
 try {
   await page.goto(base, { waitUntil: 'networkidle', timeout: 60000 });
   await step('Create a real parameter, shared-ancestor SQL and text graph; default stays manual', async () => {
@@ -331,13 +323,19 @@ try {
     await shot('11-late-response-ignored-1440', heading(), ['Hiding Notebook resets automatic mode and cancels its active run', 'A real successful late Response is deliberately delivered after cancellation but cannot populate results']);
     await runManual(); await assertMain(9); await assertIndependent();
   });
-  await step('Losing local edit permission resets automatic mode without a request or document mutation', async () => {
+  await step('Retired presentation-role selector is absent; opening settings leaves automatic mode and document intact', async () => {
     const before = await savedDocument(), count = actions.length;
-    await auto().check(); await changeDemoRole('viewer');
-    assert.equal(await auto().isChecked(), false); assert.equal(await auto().isDisabled(), true);
+    await auto().check();
+    await page.getByRole('button', { name: '打开工作区菜单', exact: true }).click();
+    const menu = page.getByRole('navigation', { name: '工作区功能菜单' });
+    await menu.locator('.studio-navigation-settings > summary').click();
+    assert.equal(await menu.getByLabel('界面演示角色，不影响服务端授权', { exact: true }).count(), 0);
+    assert.equal(await menu.getByText('界面演示角色', { exact: true }).count(), 0);
+    assert.equal(await auto().isChecked(), true); assert.equal(await auto().isDisabled(), false);
     await noNewRuns(count); assert.deepEqual(await savedDocument(), before);
-    await shot('12a-local-viewer-default-off-1440', heading(), ['Local viewer display mode resets and disables automatic recalculation', 'This is the existing UI role demonstration, not a claim of changed server authorization']);
-    await changeDemoRole('editor'); assert.equal(await auto().isChecked(), false); assert.equal(await auto().isDisabled(), false);
+    await shot('12a-settings-without-demo-role-1440', menu.locator('.studio-navigation-settings'), ['Presentation-role selector is absent from workspace settings', 'Opening settings leaves automatic mode and the project document unchanged']);
+    await menu.getByRole('button', { name: '收起工作区菜单', exact: true }).click();
+    await auto().uncheck(); assert.equal(await auto().isChecked(), false);
   });
   await step('Page, project and browser reload boundaries reset the non-persistent switch and leave documents intact', async () => {
     const old = await savedDocument(), beforeCount = actions.length;

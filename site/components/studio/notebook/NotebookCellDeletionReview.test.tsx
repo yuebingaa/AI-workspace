@@ -1,4 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { buttonMarkup } from "@/test-support/markup";
+import { renderToStaticMarkup } from "@/test-support/render-themed";
 import { describe, expect, it, vi } from "vitest";
 import type { NotebookDocument } from "@/core/notebook/contracts";
 import { prepareNotebookCellDeletion } from "@/core/notebook/cell-deletion";
@@ -35,7 +37,7 @@ describe("Notebook cell deletion impact review", () => {
   it.each([{ disabled: true, stale: false }, { disabled: false, stale: true }, { disabled: true, stale: true }])("blocks confirmation but leaves a way to close the review: %j", (options) => {
     const html = render("query_id", options);
     expect(html).toMatch(/disabled=""[^>]*>确认删除 3 个单元/u);
-    expect(html).toMatch(options.stale ? /<button type="button">关闭过期审阅<\/button>/u : /<button type="button">保留<\/button>/u);
+    expect(buttonMarkup(html, options.stale ? "关闭过期审阅" : "保留").disabled).toBe(false);
     if (options.stale) expect(html).toContain("文档已变化，本次删除审阅已过期，未删除任何步骤");
   });
   it("distinguishes deletion of steps from retained external resources and explicit-reference scope", () => {

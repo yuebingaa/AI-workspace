@@ -21,12 +21,12 @@ export function harnessConversationId(pageId: string, contextId?: string) {
   try { localStorage.setItem(storageKey(), JSON.stringify(ids)); } catch { /* Session only. */ }
   return ids[pageId];
 }
-export async function clearHarnessConversations(session?: { contextId: string; pageIds: string[] }) {
+export async function clearHarnessConversations(session?: { contextId: string; pageIds: string[] }, experience: "classic" | "dsh-conversation" = "classic") {
   const key = storageKey();
   const headers = projectHeaders({ "content-type": "application/json" });
   const entries = session ? [...new Set(session.pageIds)].map((pageId) => [pageId, session.contextId]) : Object.entries(readIds());
   for (const [pageId, conversation_id] of entries) {
-    const response = await fetch("/api/ai/harness/conversation", {
+    const response = await fetch(experience === "dsh-conversation" ? "/api/ai/dsh/conversation/clear" : "/api/ai/harness/conversation", {
       method: "DELETE", headers,
       body: JSON.stringify({ pageId, conversation_id }), cache: "no-store",
       signal: AbortSignal.timeout(10_000),

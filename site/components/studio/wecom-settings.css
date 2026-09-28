@@ -1,3 +1,4 @@
+@layer studio-legacy {
 .wecom-trigger { white-space: nowrap; }
 .wecom-status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--studio-muted); }
 .wecom-status-dot.connected { background: #10b981; }
@@ -26,3 +27,5 @@
 .wecom-examples { display: grid; gap: 8px; }
 .wecom-examples button { text-align: left; background: var(--studio-surface); }
 .wecom-footer { border-top: 1px solid var(--studio-border); padding-top: 14px; }
+
+}

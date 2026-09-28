@@ -6,7 +6,7 @@ export const MAX_ASSISTANT_CONVERSATION_TURNS = 20;
 export const assistantConversationTurnSchema = z.object({
   id: z.string().min(1).max(180),
   instruction: z.string().trim().min(1).max(1_000),
-  response: z.string().trim().min(1).max(2_000),
+  response: z.string().trim().min(1),
   createdAt: z.iso.datetime(),
   state: z.enum(["success", "blocked", "failed", "cancelled"]),
   taskId: z.string().min(1).max(160).optional(),

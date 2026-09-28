@@ -83,17 +83,8 @@ async function main() {
     await evaluate(client, `(() => { localStorage.clear(); location.reload(); return true; })()`);
     await waitFor(client, `document.readyState === "complete" && Boolean(document.querySelector('textarea[aria-label="AI 指令"]'))`, "安全演示状态重载");
 
-    const publishOpened = await evaluate(client, `(() => { const button = document.querySelector(".top-actions .publish"); button?.click(); return Boolean(button); })()`);
-    assert(publishOpened, "顶部缺少发布入口");
-    await waitFor(client, `Boolean(document.querySelector(".publish-readiness-dialog"))`, "发布准备说明打开");
-    const publishDialog = await evaluate(client, `(() => ({
-      text: document.querySelector(".publish-readiness-dialog")?.innerText || "",
-      focusInside: document.querySelector(".publish-readiness-dialog")?.contains(document.activeElement) || false,
-    }))()`);
-    assert(publishDialog.text.includes("当前按钮不会直接提交代码或部署网站") && publishDialog.text.includes("浏览器本地草稿"), "发布准备说明缺少保存与部署边界");
-    assert(publishDialog.focusInside, "发布准备说明打开后焦点未进入弹层");
-    await evaluate(client, `document.querySelector('button[aria-label="关闭发布准备说明"]')?.click()`);
-    await waitFor(client, `!document.querySelector(".publish-readiness-dialog") && document.activeElement === document.querySelector(".top-actions .publish")`, "关闭发布说明并恢复焦点");
+    const publishUiAbsent = await evaluate(client, `!document.querySelector(".top-actions .publish, .publish-readiness-dialog, button[aria-label='关闭发布准备说明']") && ![...document.querySelectorAll(".top-actions button")].some((button) => button.textContent.trim().startsWith("发布"))`);
+    assert(publishUiAbsent, "已移除的发布入口或说明弹层仍出现在工作台");
 
     const submitted = await evaluate(client, `(() => {
       const textarea = document.querySelector('textarea[aria-label="AI 指令"]');
@@ -237,7 +228,7 @@ async function main() {
       harnessRequests: 0,
       containsApiKey: false,
       containsOriginalWorkbook: false,
-      publishDialogVerified: true,
+      publishUiAbsent: true,
       responsiveHeaderVerified: true,
     }, null, 2));
   } finally {

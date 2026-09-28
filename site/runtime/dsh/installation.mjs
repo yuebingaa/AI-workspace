@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { VERSION } from './policy.mjs';
+
+const { VERSION } = await import(new URL(`./policy.mjs${new URL(import.meta.url).search}`, import.meta.url).href);
 
 export const DEFAULT_RUNTIME_ROOT = fileURLToPath(new URL('../../.runtime/', import.meta.url));
 export const ACTIVE_FILE = 'dsh-runtime-active.json';
@@ -28,11 +29,12 @@ function strictKeys(value, keys) {
     && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
-export function validateSelection(value) {
+export function validateSelection(value, { allowOtherVersions = false } = {}) {
   if (strictKeys(value, ['kind']) && value.kind === 'legacy') return Object.freeze({ kind: 'legacy' });
   if (strictKeys(value, ['kind', 'id']) && (value.kind === 'slot' || value.kind === 'bundled')
-    && typeof value.id === 'string' && value.id.startsWith(`${VERSION}-`)
-    && /^[a-f0-9]{64}$/.test(value.id.slice(VERSION.length + 1))) {
+    && typeof value.id === 'string' && value.id.length <= 160
+    && /^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?-[a-f0-9]{64}$/.test(value.id)
+    && (allowOtherVersions || value.id.startsWith(`${VERSION}-`))) {
     return Object.freeze({ kind: value.kind, id: value.id });
   }
   throw new Error('Invalid isolated DSH installation selection.');
@@ -44,8 +46,10 @@ export function validatePointer(value) {
   }
   return Object.freeze({
     schemaVersion: 1,
-    active: validateSelection(value.active),
-    previous: value.previous === null ? null : validateSelection(value.previous),
+    // An installer must be able to read the previous release's pointer before
+    // replacing it. Actual runtime resolution still requires VERSION below.
+    active: validateSelection(value.active, { allowOtherVersions: true }),
+    previous: value.previous === null ? null : validateSelection(value.previous, { allowOtherVersions: true }),
   });
 }
 

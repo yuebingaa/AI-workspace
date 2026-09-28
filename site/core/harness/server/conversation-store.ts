@@ -85,7 +85,11 @@ export class HarnessConversationStore {
         try { this.persist(); task.conversationStorage = this.adapter ? "persistent" : "memory"; }
         catch { task.conversationStorage = "unavailable"; }
       },
-      release: () => { released = true; this.active.delete(key); },
+      release: () => {
+        if (released) return;
+        released = true;
+        this.active.delete(key);
+      },
     };
   }
 
@@ -93,6 +97,27 @@ export class HarnessConversationStore {
     this.load();
     const key = this.key(namespace, conversationId, pageId);
     if (this.active.has(key)) throw new Error("请先停止当前会话任务，再清除上下文。");
+    this.clearEntry(key);
+  }
+
+  /** Coordinate an external history clear with this store's existing per-thread
+   * run lease. Acquire before touching either history and retain it across the
+   * await, so a new run cannot commit between native and webpage clearing.
+   * This is mutual exclusion, not a cross-store disk transaction.
+   */
+  async clearWith(namespace: string, conversationId: string, pageId: string, beforeClear: () => Promise<void>) {
+    this.load();
+    const key = this.key(namespace, conversationId, pageId);
+    if (this.active.has(key)) throw new Error("请先停止当前会话任务，再清除上下文。");
+    if (this.active.size >= 100) throw new Error("并行会话数量达到上限，请稍后再试。");
+    this.active.add(key);
+    try {
+      await beforeClear();
+      this.clearEntry(key);
+    } finally { this.active.delete(key); }
+  }
+
+  private clearEntry(key: string) {
     const prior = this.entries.get(key);
     this.entries.delete(key);
     try { this.persist(); } catch (error) { if (prior) this.entries.set(key, prior); throw error; }

@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ExcelExportArtifact } from "@/core/exports/contracts";
 import { ExcelDownloadError, fetchExcelExport } from "@/core/exports/client";
@@ -101,16 +102,17 @@ export function ExcelDownloadButton({ artifact, label }: { artifact: ExcelExport
 
   return (
     <span className="excel-download-control">
-      <button
+      <Button variant="secondary"
         type="button"
         data-download-url={artifact.downloadUrl}
         disabled={busy || serverExpired}
+        loading={busy}
         aria-busy={busy}
         aria-live="polite"
         onClick={() => { void download(); }}
       >
         {serverExpired ? "下载已过期" : busy ? "正在下载…" : locallyExpired ? "验证并下载" : label}
-      </button>
+      </Button>
       {displayedError
         ? <small role="alert" aria-live="assertive" aria-atomic="true">{displayedError}</small>
         : serverExpired

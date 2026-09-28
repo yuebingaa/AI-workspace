@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useMemo, useState } from "react";
 import { executeDataRecipe } from "@/core/data";
 import type { ExcelExportArtifact } from "@/core/exports/contracts";
@@ -107,19 +108,19 @@ export function SpreadsheetWorkspace({
         <div><span className="spreadsheet-workspace-mark">▦</span><div><small>SPREADSHEET WORKSPACE</small><h2>表格工作区</h2><p>原始数据、配方结果和 AI 处理结果统一放在这里。</p></div></div>
         <div className="spreadsheet-workspace-actions">
           {exportArtifact && <ExcelDownloadButton artifact={exportArtifact} label="下载处理结果" />}
-          {source && <button type="button" onClick={onOpenDataSource}>数据源详情</button>}
-          <button type="button" className="primary" onClick={onImportSpreadsheet}>导入本机表格</button>
+          {source && <Button variant="secondary" type="button" onClick={onOpenDataSource}>数据源详情</Button>}
+          <Button variant="primary" type="button" className="primary" onClick={onImportSpreadsheet}>导入本机表格</Button>
         </div>
       </header>
       {!selected ? (
-        <button type="button" className="spreadsheet-workspace-empty" onClick={onImportSpreadsheet}>
+        <Button variant="secondary" type="button" className="spreadsheet-workspace-empty" onClick={onImportSpreadsheet}>
           <b>把 CSV 或 XLSX 放到这里</b>
           <span>点击选择电脑上的文件；导入后 Harness 可以检查字段并按指令处理。</span>
-        </button>
+        </Button>
       ) : (
         <>
           <div className="spreadsheet-workspace-tabs" role="tablist" aria-label="表格结果类型">
-            {views.map((view) => <button key={view.id} type="button" role="tab" aria-selected={selected.id === view.id} onClick={() => selectView(view.id)}>{view.label}<span>{view.totalRowCount.toLocaleString("zh-CN")}</span></button>)}
+            {views.map((view) => <Button variant="secondary" key={view.id} type="button" role="tab" aria-selected={selected.id === view.id} onClick={() => selectView(view.id)}>{view.label}<span>{view.totalRowCount.toLocaleString("zh-CN")}</span></Button>)}
           </div>
           <div className="spreadsheet-workspace-summary"><div><b>{selected.name}</b><span>{selected.totalRowCount.toLocaleString("zh-CN")} 行 · {selected.fields.length} 列 · {selected.note}</span></div>{selected.id === "ai" && <span className="spreadsheet-ai-badge">✦ Harness 结果</span>}</div>
           <div className="spreadsheet-grid-scroll" tabIndex={0} aria-label={`${selected.name} 横向滚动表格`}>
@@ -128,7 +129,7 @@ export function SpreadsheetWorkspace({
               <tbody>{visibleRows.map((row, rowIndex) => <tr key={`${page}-${rowIndex}`}><td className="row-number">{page * ROWS_PER_PAGE + rowIndex + 1}</td>{selected.fields.map((field) => <td key={field.name} title={displayCell(row[field.name])}>{displayCell(row[field.name])}</td>)}</tr>)}</tbody>
             </table>
           </div>
-          <footer className="spreadsheet-workspace-footer"><span>当前显示 {visibleRows.length} 行{selected.totalRowCount > selected.rows.length ? `；任务产物仅保留 ${selected.rows.length} 行可视预览` : ""}</span><div><button type="button" disabled={page === 0} onClick={() => selectPage(Math.max(0, page - 1))}>上一页</button><span>{page + 1} / {totalPages}</span><button type="button" disabled={page + 1 >= totalPages} onClick={() => selectPage(Math.min(totalPages - 1, page + 1))}>下一页</button></div></footer>
+          <footer className="spreadsheet-workspace-footer"><span>当前显示 {visibleRows.length} 行{selected.totalRowCount > selected.rows.length ? `；任务产物仅保留 ${selected.rows.length} 行可视预览` : ""}</span><div><Button variant="secondary" type="button" disabled={page === 0} onClick={() => selectPage(Math.max(0, page - 1))}>上一页</Button><span>{page + 1} / {totalPages}</span><Button variant="secondary" type="button" disabled={page + 1 >= totalPages} onClick={() => selectPage(Math.min(totalPages - 1, page + 1))}>下一页</Button></div></footer>
         </>
       )}
     </section>

@@ -1,0 +1,23 @@
+.dsh-conversation-shell { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+.compact-studio.dsh-conversation-shell .workspace { flex: 1; min-height: 0; height: auto; }
+.official-dsh-panel .conversation { display: flex; flex-direction: column; min-height: 0; }
+.official-dsh-panel.agent-workspace-panel .conversation { position: relative; max-width: none; width: 100%; padding: 0 12px; }
+.official-dsh-panel .dsh-web-frame-surface { flex: 1 0 300px; min-height: 300px; display: flex; flex-direction: column; position: relative; }
+.dsh-web-frame-surface iframe { flex: 1; width: 100%; min-height: 300px; border: 0; background: #faf9f6; }
+.dsh-web-empty-welcome { position: absolute; inset: 0 12px 120px; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; color: var(--studio-ink); }
+.dsh-web-empty-art { display: block; width: 220px; height: auto; margin-bottom: 18px; }
+.dsh-web-empty-welcome h2 { margin: 0; font-size: 19px; font-weight: 650; line-height: 1.5; }
+.dsh-web-empty-welcome p { margin: 8px 0 0; color: var(--studio-muted); font-size: 14px; line-height: 1.7; }
+@media (max-height: 650px) {
+  .dsh-web-empty-art { width: 155px; margin-bottom: 12px; }
+  .dsh-web-empty-welcome h2 { font-size: 16px; }
+  .dsh-web-empty-welcome p { font-size: 12px; }
+}
+.dsh-web-frame-surface > p, .dsh-web-load-error { padding: 12px; color: #66625d; font-size: 13px; }
+.dsh-web-feedback { max-width: 780px; width: 100%; margin: 4px auto; font-size: 13px; }
+.dsh-web-feedback button { padding: 6px 10px; border: 1px solid #e6e3df; border-radius: 6px; background: transparent; cursor: pointer; }
+.official-dsh-panel .assistant-controls { margin-top: 0; }
+.official-dsh-panel .assistant-controls > div { width: 100%; }
+.dsh-assistant-label { color: #77736e; font-size: 11px; }
+.assistant-head-actions .dsh-context-trigger { border: 1px solid #e6e3df; border-radius: 6px; padding: 4px 8px; background: transparent; color: #56534e; white-space: nowrap; cursor: pointer; }
+.assistant-head-actions .dsh-context-trigger:disabled { opacity: .5; cursor: default; }

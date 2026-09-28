@@ -1,13 +1,12 @@
 import type { HarnessRequest, HarnessToolExecutionResult, HarnessToolName, HarnessEditableNodeSummary, HarnessSemanticIntentDecision } from "../contracts";
 import type { LocalDataRuntime } from "@/core/models";
-import type { HarnessNotebookArtifact } from "../notebook-contracts";
-import type { NotebookRun } from "@/core/notebook/contracts";
+import type { NotebookDraftRunner, NotebookRuntimeInfoReader } from "@/core/notebook/execution-contracts";
 import type { NotebookCapabilities } from "@/core/notebook/capabilities";
-import type { ConnectionSchema } from "@/core/connections/contracts";
+import type { ConnectionSchemaInspector } from "@/core/connections/contracts";
 import type { HarnessAnalysisPlanArtifact } from "../analysis-plan-contracts";
 import type { NotebookCellSession } from "../notebook-cell-tools";
 import type { HarnessMcpRuntime, HarnessMcpToolSummary } from "../mcp/contracts";
-import type { EdsWorkbookSheet } from "@/core/eds";
+import type { EdsRawWorkbook } from "@/core/eds";
 import type { z } from "zod";
 
 export interface HarnessToolContext {
@@ -18,11 +17,11 @@ export interface HarnessToolContext {
   resultBudgetChars?: number;
   resultBudgetEntries?: number;
   excelExporter?: HarnessExcelExporter;
-  notebookRunner?: (artifact: HarnessNotebookArtifact, context: HarnessToolContext) => Promise<NotebookRun>;
-  pythonRuntimeInfo?: () => Promise<Record<string, unknown>>;
+  notebookRunner?: NotebookDraftRunner;
+  pythonRuntimeInfo?: NotebookRuntimeInfoReader;
   /** Server-owned execution policy. Missing means the backwards-compatible default. */
   notebookCapabilities?: NotebookCapabilities;
-  connectionInspector?: (connectionId: string, signal?: AbortSignal) => Promise<ConnectionSchema>;
+  connectionInspector?: ConnectionSchemaInspector;
   analysisPlanStore?: Map<string, HarnessAnalysisPlanArtifact>;
   notebookCellSession?: NotebookCellSession;
   notebookDiagnostics?: import("../notebook-diagnostics").NotebookDiagnosticSession;
@@ -31,11 +30,8 @@ export interface HarnessToolContext {
   signal?: AbortSignal;
 }
 
-export interface HarnessRawWorkbook {
-  fileName: string;
-  contentHash: string;
-  sheets: EdsWorkbookSheet[];
-}
+/** Compatibility name; parsed workbook data is owned by the workbook domain. */
+export type HarnessRawWorkbook = EdsRawWorkbook;
 
 export interface HarnessExcelExporterArgs {
   recipeId: string;

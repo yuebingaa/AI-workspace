@@ -8,7 +8,7 @@ import type { runDshSession } from "../runtime/dsh/driver.mjs";
 
 type ToolName = "cellSearch" | "inspectConnectionSchema";
 
-/** Real SDK + DeepSeek adapter + broker + business bridge; only the model and DB I/O are fixtures. */
+/** Real SDK + Chat Completions adapter + broker + business bridge; only the model and DB I/O are fixtures. */
 export async function verifyDshDispatch(runSession: typeof runDshSession) {
   assert.ok(demoFixtureResult.success);
   const scenarios = [];
@@ -101,7 +101,7 @@ export async function verifyDshDispatch(runSession: typeof runDshSession) {
       provider.closeAllConnections(); await new Promise<void>((resolve) => provider.close(() => resolve()));
     }
   }
-  return { passed: true, officialSdk: true, officialDeepSeekAdapter: true, actualBrokerAndBusinessBridge: true,
+  return { passed: true, officialSdk: true, officialChatCompletionsAdapter: true, actualBrokerAndBusinessBridge: true,
     realPaidModel: false, realDatabase: false, scenarios,
     conclusion: "Both multi-tool response orders execute serially; the current default SDK dispatch does not conflict with the Notebook busy guard. This does not identify the earlier real-model failure arguments." };
 }

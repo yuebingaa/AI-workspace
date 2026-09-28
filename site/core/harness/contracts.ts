@@ -31,8 +31,8 @@ export const DEFAULT_HARNESS_LIMITS = {
 } as const;
 
 export const HARNESS_CLIENT_TIMEOUT_MS = 95_000;
-/** Browser ceiling for a server-announced long-running execution kernel. */
-export const HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS = 185_000;
+/** Platform timer range, not an execution budget. null disables the deadline. */
+export const HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS = 2_147_483_647;
 
 export const harnessStateSchema = z.enum([
   "planning",
@@ -479,7 +479,7 @@ export const harnessTraceEventSchema = z.object({
   taskState: harnessStateSchema.optional(),
   counters: harnessCountersSchema.optional(),
   executionTiming: harnessExecutionTimingSchema.optional(),
-  clientTimeoutMs: z.number().int().positive().max(HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS).optional(),
+  clientTimeoutMs: z.number().int().positive().max(HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS).nullable().optional(),
   toolCall: harnessEventSchema.shape.toolCall,
   plan: z.object({
     revision: z.number().int(),
@@ -509,8 +509,9 @@ export const harnessTaskSummarySchema = z.object({
   events: z.array(harnessEventSchema).max(MAX_HARNESS_EVENTS),
   trace: z.array(harnessTraceEventSchema).max(256).optional(),
   conversationStorage: z.enum(["persistent", "memory", "unavailable"]).optional(),
+  nativeConversation: z.enum(["new", "resumed", "reset"]).optional(),
   counters: harnessCountersSchema,
-  resultMessage: z.string().max(2_000).optional(),
+  resultMessage: z.string().optional(),
   pendingChangeSet: changeSetSchema.optional(),
   exportArtifact: excelExportArtifactSchema.optional(),
   tableArtifact: harnessTableArtifactSchema.optional(),

@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import type { RefObject } from "react";
 import { StudioIcon, type StudioIconName } from "./StudioIcon";
 
@@ -16,9 +17,9 @@ interface WorkspaceSidebarRailProps {
 
 function RailButton({ label, tooltip = label, icon, buttonRef, expanded, controls, onClick }: { label: string; tooltip?: string; icon: StudioIconName; buttonRef?: RefObject<HTMLButtonElement | null>; expanded?: boolean; controls?: string; onClick: () => void }) {
   return (
-    <button ref={buttonRef} type="button" aria-label={label} aria-expanded={expanded} aria-controls={controls} data-tooltip={tooltip} onClick={onClick}>
+    <Button variant="ghost" size="icon" ref={buttonRef} type="button" aria-label={label} aria-expanded={expanded} aria-controls={controls} data-tooltip={tooltip} onClick={onClick}>
       <StudioIcon name={icon} />
-    </button>
+    </Button>
   );
 }
 

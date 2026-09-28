@@ -9,6 +9,7 @@ import type { HarnessRequest, HarnessToolExecutionResult, HarnessToolName } from
 import type { HarnessToolContext } from "./tools/contracts";
 import { createHarnessNotebookArtifact } from "./notebook";
 import { notebookTextResults } from "./notebook-text-results";
+import { notebookDraftExecutionContext } from "./notebook-runner";
 import { cellSearchSchema, searchNotebookCellSession } from "./notebook-cell-search";
 import { NotebookSubmissionError } from "./notebook-submission-error";
 export { cellSearchSchema } from "./notebook-cell-search";
@@ -134,7 +135,7 @@ export async function runNotebookCells(args: z.infer<typeof notebookSessionVersi
   const diagnosticGeneration = context.notebookDiagnostics?.begin(artifact, state.editVersion);
   state.run = undefined;
   state.runVersion = undefined;
-  const rawRun = await context.notebookRunner(structuredClone(artifact), context);
+  const rawRun = await context.notebookRunner(structuredClone(artifact), notebookDraftExecutionContext(artifact, context));
   session(context, args.editVersion); // Ignore cancelled or superseded late results.
   let run: NotebookRun;
   try { run = parseNotebookRunReceipt(rawRun, expected); }

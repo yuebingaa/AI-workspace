@@ -1,10 +1,17 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { renderDialogMarkup as renderToStaticMarkup } from "@/test-support/render-dialog";
 import { describe, expect, it, vi } from "vitest";
 import { projectCompatibilityMessage, type ProjectCompatibility } from "@/core/projects/compatibility";
 import { DataBrowser } from "./DataBrowser";
 
 const { useProjects } = vi.hoisted(() => ({ useProjects: vi.fn() }));
 vi.mock("./LocalProjectsProvider", () => ({ useLocalProjects: useProjects }));
+// This test covers the current compatibility state; async project refresh is covered in browser checks.
+vi.mock("@/core/projects/client", async importOriginal => ({
+  ...await importOriginal<typeof import("@/core/projects/client")>(),
+  loadProject: vi.fn(() => new Promise(() => {})),
+  projectRequest: vi.fn(() => new Promise(() => {})),
+}));
 
 function render(compatibility?: ProjectCompatibility) {
   useProjects.mockReturnValue({

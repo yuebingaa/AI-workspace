@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { resolveDshInstallation } from '../../runtime/dsh/installation.mjs';
+import { VERSION as DSH_VERSION } from '../../runtime/dsh/policy.mjs';
 import { randomUUID } from 'node:crypto';
 
-export const DSH_VERSION = '0.1.6-alpha.2';
-export const DSH_COMMIT = 'ddefc45fbc7f8e46dd73185e68295696d1297887';
-const dependencyRoot = new URL('../../.runtime/dsh-pilot-deps/', import.meta.url);
+export { DSH_VERSION };
+export const DSH_RELEASE = `dsh-v${DSH_VERSION}`;
 const roots = [
   '@deepseek-ai/cordis', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-session-projection', '@deepseek-ai/dsh-system-prompt',
@@ -14,18 +15,15 @@ const roots = [
 let running = false;
 
 async function loadKernel() {
-  const manifestUrl = new URL('package.json', dependencyRoot);
-  const manifest = JSON.parse(await readFile(manifestUrl, 'utf8'));
-  const resolver = createRequire(manifestUrl);
+  const installation = await resolveDshInstallation();
+  const resolver = createRequire(installation.manifestPath);
   for (const name of roots) {
-    const expected = name === '@deepseek-ai/cordis' ? '4.0.2' : DSH_VERSION;
-    if (manifest.dependencies[name] !== expected) throw new Error(`Unpinned DSH dependency: ${name}`);
+    const expected = name === '@deepseek-ai/cordis' ? '4.0.4' : DSH_VERSION;
     const packageJson = JSON.parse(await readFile(resolver.resolve(`${name}/package.json`), 'utf8'));
     if (packageJson.version !== expected) throw new Error(`Unexpected installed DSH version: ${name}`);
   }
   return Promise.all(roots.map((name) => import(pathToFileURL(resolver.resolve(name)).href)));
 }
-
 function textChunks(text) {
   return [
     { type: 'block-start', index: 0, blockType: 'text' },
@@ -151,13 +149,13 @@ export async function runDshFixture({
     const finalResponse = assistant?.data.message?.content
       ?.filter((block) => block.type === 'text').map((block) => block.text).join('') ?? '';
     const failures = events.filter((event) => event.type === 'tool/result'
-      && event.data.message.content.some((block) => block.type === 'tool-result' && block.isError));
+      && event.data.message.isError === true);
     const turnEnd = events.findLast((event) => event.type === 'turn/end');
     const outcome = cancelled || turnEnd?.data.reason.kind === 'aborted' ? 'cancelled'
       : failures.length || turnEnd?.data.reason.kind !== 'completed'
         || modelCalls !== actions.length + 1 ? 'failed' : 'completed';
     return {
-      runtime: 'official-dsh-in-process-test-composition', version: DSH_VERSION, commit: DSH_COMMIT,
+      runtime: 'official-dsh-in-process-test-composition', version: DSH_VERSION, release: DSH_RELEASE,
       sessionId, outcome, events, finalResponse, modelCalls, toolNames, toolResults,
       failedToolCount: failures.length, networkAttempts, realModel: false,
       persistence: 'memory-only', cancellation: 'cooperative-agent-cancel-and-drain',
@@ -177,5 +175,3 @@ export async function runDshFixture({
     }
   }
 }
-
-export const isolatedDependencyPath = fileURLToPath(dependencyRoot);

@@ -8,12 +8,13 @@ import { HarnessClientError, requestHarnessTask } from "@/core/harness/client";
 import { DEFAULT_HARNESS_LIMITS, MAX_HARNESS_IMAGE_ATTACHMENTS, MAX_HARNESS_IMAGE_BYTES, MAX_HARNESS_TOTAL_IMAGE_BYTES, MAX_HARNESS_REQUEST_RECIPES, type HarnessExecutionTiming, type HarnessTaskSummary } from "@/core/harness/contracts";
 import { appendAssistantConversationTurn, assistantConversationFromHarnessTasks, isLightweightConversation, isUiMutationCapabilityQuestion, lightweightConversationReply, uiMutationCapabilityReply, type AssistantConversationTurn } from "@/core/harness/conversation";
 import { harnessConversationId, clearHarnessConversations } from "@/core/harness/conversation-client";
-import { activeAssistantSession, assistantSessionsForPage, createAssistantSessions, MAX_ASSISTANT_SESSIONS, MAX_PROJECT_ASSISTANT_SESSIONS, newAssistantSession, restoreAssistantSessions, selectAssistantPage, selectAssistantSession, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
+import { activeAssistantSession, assistantSessionExperience, assistantSessionsForPage, createAssistantSessions, MAX_ASSISTANT_SESSIONS, MAX_PROJECT_ASSISTANT_SESSIONS, newAssistantSession, restoreAssistantSessions, selectAssistantPage, selectAssistantSession, updateActiveAssistantSession, type AssistantExperience, type AssistantSessions } from "@/core/harness/assistant-sessions";
 import { failureResponse } from "@/core/harness/failure-response";
 import { instructionRequestsRawWorkbook } from "@/core/harness/raw-workbook";
 import { resolveHarnessPageDataSourceIds } from "@/core/harness/source-scope";
 import { appendHarnessEvent, appendHarnessTask, createHarnessTask, type HarnessTaskClock } from "@/core/harness/task-state";
 import type { AppSpec, ChangeSet, ChangeSetAuditRecord, DataProduct, DataSourceDefinition, QueryExecutionRecord } from "@/core/models";
+import type { NotebookDocument } from "@/core/notebook/contracts";
 import type { StudioRole } from "@/core/permissions";
 import { readableValidationError } from "@/core/schemas";
 import { selectedSemanticModel } from "@/core/semantic/model";
@@ -22,6 +23,8 @@ import type { AiRequestUiStatus } from "../AiBuilderAssistant";
 import type { ImportedWorkbookAttachment } from "../CsvUploadDialog";
 import type { PersistWorkspace, WorkspaceFeedback, WorkspacePreviewBindings } from "./contracts";
 import { assistantTurnState } from "./assistant-turn-state";
+// The explicit request identity also preserves plain DSH replies after refresh.
+import { newAssistantRequestIdempotencyKey } from "@/core/harness/assistant-request-identity";
 
 export const harnessUiClock: HarnessTaskClock = {
   now: () => new Date(),
@@ -43,11 +46,11 @@ function initialHarnessTiming(): HarnessExecutionTiming {
   };
 }
 
-export function useStudioAssistantState(repurchaseChangeSet: ChangeSet, activePageId?: string) {
+export function useStudioAssistantState(repurchaseChangeSet: ChangeSet, activePageId?: string, experience: AssistantExperience = "classic") {
   const [aiChangeSet, setAiChangeSet] = useState<ChangeSet>(() => structuredClone(repurchaseChangeSet));
   const [aiMessage, setAiMessage] = useState("我已检查数据结构和当前画布，建议先预览以下结构化变更。");
   const [aiMetadata, setAiMetadata] = useState<AiPlanMetadata | null>(null);
-  const [assistantSessions, setAssistantSessions] = useState(() => createAssistantSessions([], activePageId));
+  const [assistantSessions, setAssistantSessions] = useState(() => createAssistantSessions([], activePageId, experience));
   const selectedSession = activeAssistantSession(assistantSessions);
   const aiInstruction = selectedSession.draft;
   const setAiInstruction = useCallback((value: SetStateAction<string>) => setAssistantSessions((sessions) => {
@@ -83,8 +86,8 @@ export function useStudioAssistantState(repurchaseChangeSet: ChangeSet, activePa
   useEffect(() => () => aiRequestAbortRef.current?.abort(), []);
   // Adjust the owning component before children render, including page changes
   // from imports / previews, so the previous interface's chat never flashes.
-  if (activePageId && selectedSession.pageId !== activePageId) {
-    const next = selectAssistantPage(restoreAssistantSessions(assistantSessions, [], activePageId, harnessTasks), activePageId);
+  if (activePageId && (selectedSession.pageId !== activePageId || assistantSessionExperience(selectedSession) !== experience)) {
+    const next = selectAssistantPage(restoreAssistantSessions(assistantSessions, [], activePageId, harnessTasks), activePageId, experience);
     const target = activeAssistantSession(next), last = target.turns.at(-1);
     const task = harnessTasks.find((item) => item.id === last?.taskId && item.pageId === activePageId);
     const pending = task?.state === "awaitingConfirmation" && task.pendingChangeSet;
@@ -143,6 +146,7 @@ export type StudioAssistantState = ReturnType<typeof useStudioAssistantState>;
 export interface StudioAssistantActionsContext extends WorkspaceFeedback,
   Pick<WorkspacePreviewBindings, "execution" | "setExecution" | "setPendingPuckChangeSet" | "setPendingChangeSource" | "setCanvasMode" | "auditCurrentPreviewCancellation"> {
   assistant: StudioAssistantState;
+  experience?: AssistantExperience;
   role: StudioRole;
   activePageId: string;
   renderedSpec: AppSpec;
@@ -154,6 +158,7 @@ export interface StudioAssistantActionsContext extends WorkspaceFeedback,
   queryRecords: QueryExecutionRecord[];
   persistExplicitly: PersistWorkspace;
   notebookContext?: HarnessPublicRequest["notebookContext"];
+  onNotebookDraftReady?: (task: HarnessTaskSummary, baseline: NotebookDocument) => void;
   notebookInteractionBusy?: boolean;
   conversationSwitchBlocked?: boolean;
 }
@@ -173,6 +178,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     instructionOverride?: string,
     retryOfTaskId?: string,
     analysisContext?: { dataSourceId: string; rawWorkbook?: File },
+    onAccepted?: () => void,
   ) {
     if (selectedSession.pageId && selectedSession.pageId !== activePageId) return;
     if (context.notebookInteractionBusy) {
@@ -193,13 +199,16 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
       ? { file: analysisContext.rawWorkbook }
       : activeOriginalWorkbook;
     const hasEdsContext = Boolean(edsWorkspace && activePageId === EDS_WORKSPACE_PAGE_ID);
-    const localReply = !retryOfTaskId && submittedImages.length === 0
+    const localReply = context.experience !== "dsh-conversation" && !retryOfTaskId && submittedImages.length === 0
       ? isLightweightConversation(submittedInstruction)
         ? lightweightConversationReply(submittedInstruction, hasEdsContext)
         : isUiMutationCapabilityQuestion(submittedInstruction)
           ? uiMutationCapabilityReply(hasEdsContext)
           : undefined
       : undefined;
+    // Admission is a UI notification, not task completion. A caller observing
+    // it must not interrupt an already-established reply or running task.
+    const notifyAccepted = () => { try { onAccepted?.(); } catch { /* Keep the existing task lifecycle intact. */ } };
     if (localReply) {
       const nextConversation = appendAssistantConversationTurn(assistantConversation, {
         id: `local_conversation_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`,
@@ -222,6 +231,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
       setSaveLabel("已回复 · 未调用 DeepSeek");
       persistExplicitly(execution, auditRecords, queryRecords, dataProduct, harnessTasks, edsWorkspace, nextConversation,
         updateActiveAssistantSession(assistantSessions, { turns: nextConversation, draft: "" }));
+      notifyAccepted();
       return;
     }
 
@@ -242,7 +252,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     harnessRequestActiveRef.current = true;
     const baseExecution = cancelPreview(execution);
     if (execution.preview) auditCurrentPreviewCancellation();
-    const idempotencyKey = `request_${Date.now()}_${crypto.randomUUID().replaceAll("-", "")}`;
+    const idempotencyKey = newAssistantRequestIdempotencyKey(context.experience);
     const initialTask = createHarnessTask(idempotencyKey, submittedInstruction, activePageId, role, harnessUiClock, {
       executionTiming: initialHarnessTiming(),
       ...(retryOfTaskId ? { retryOfTaskId } : {}),
@@ -271,7 +281,10 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     setValidationError(null);
     setSaveLabel("Harness 运行中 · 正式 AppSpec 未修改");
     persistExplicitly(baseExecution, auditRecords, queryRecords, dataProduct, initialTasks, edsWorkspace, assistantConversation, requestSessions);
+    notifyAccepted();
 
+    let notebookBaseline: NotebookDocument | undefined;
+    let notebookDraftReady: HarnessTaskSummary | undefined;
     try {
       const pageConversation = assistantConversation.filter((turn) =>
         (turn.pageId ?? harnessTasks.find((candidate) => candidate.id === turn.taskId)?.pageId) === activePageId);
@@ -291,6 +304,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
       const hasConversationContext = previousInstruction.length > 0
         || previousAssistantMessage.length > 0
         || Boolean(previousWorkingMemory);
+      notebookBaseline = context.notebookContext ? structuredClone(context.notebookContext.document) : undefined;
       const { task } = await requestHarnessTask({
         idempotencyKey,
         conversation_id: harnessConversationId(activePageId, selectedSession.contextId),
@@ -301,7 +315,8 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
         ...(context.notebookContext ? { notebookContext: context.notebookContext } : {}),
         ...(hasConversationContext ? {
           conversationContext: {
-            recentMessages: pageConversation.slice(-10).map(({ instruction, response }) => ({ instruction, response })),
+            // Request context remains a bounded summary; the visible/persisted reply is complete.
+            recentMessages: pageConversation.slice(-10).map(({ instruction, response }) => ({ instruction, response: response.slice(0, 2_000) })),
             ...(previousInstruction ? { previousInstruction } : {}),
             ...(previousAssistantMessage ? { previousAssistantMessage } : {}),
             ...(previousWorkingMemory ? { workingMemory: previousWorkingMemory } : {}),
@@ -312,6 +327,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
         ...(edsWorkspace ? { edsWorkspace } : {}),
         ...(retryOfTaskId ? { retryOfTaskId } : {}),
       }, {
+        experience: context.experience,
         signal: controller.signal,
         stream: true,
         onEvent: (event) => {
@@ -358,6 +374,8 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
       }
       persistExplicitly(baseExecution, auditRecords, queryRecords, dataProduct, nextTasks, edsWorkspace, nextConversation,
         updateActiveAssistantSession(requestSessions, { turns: nextConversation }));
+      if (role !== "viewer" && notebookBaseline && task.notebookArtifact && !task.pendingChangeSet
+        && (task.state === "awaitingConfirmation" || task.state === "completed")) notebookDraftReady = task;
     } catch (error) {
       const clientError = error instanceof HarnessClientError
         ? error
@@ -392,6 +410,12 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
       if (aiRequestAbortRef.current === controller) aiRequestAbortRef.current = null;
       harnessRequestActiveRef.current = false;
     }
+    // Only the live, saved response can schedule Notebook work. Keeping this
+    // outside the request catch preserves a successful AI task if local setup fails.
+    if (notebookDraftReady && notebookBaseline && !controller.signal.aborted && context.onNotebookDraftReady) {
+      try { context.onNotebookDraftReady(notebookDraftReady, notebookBaseline); }
+      catch { setSaveLabel("Notebook 自动运行未启动 · 请在 Notebook 查看并手动处理"); }
+    }
   }
 
 
@@ -404,12 +428,16 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     if (harnessRequestActiveRef.current || !assistantConversation.length || context.assistant.isSessionChanging) return;
     harnessRequestActiveRef.current = true;
     setIsSessionChanging(true);
-    try { await clearHarnessConversations({ contextId: selectedSession.contextId,
-      pageIds: [...selectedSession.pageIds, ...assistantConversation.flatMap((turn) => turn.pageId ? [turn.pageId] : [])] }); }
+    try {
+      const scope = { contextId: selectedSession.contextId,
+        pageIds: [...selectedSession.pageIds, ...assistantConversation.flatMap((turn) => turn.pageId ? [turn.pageId] : [])] };
+      if (context.experience === "dsh-conversation") await clearHarnessConversations(scope, context.experience);
+      else await clearHarnessConversations(scope);
+    }
     catch { setAiRequestError("服务端上下文清除失败，尚未清除聊天。请稍后重试。"); return; }
     finally { harnessRequestActiveRef.current = false; setIsSessionChanging(false); }
     setAssistantConversation([]);
-    const nextSessions = updateActiveAssistantSession(assistantSessions, { turns: [], draft: "", title: "新会话", pageIds: selectedSession.pageId ? [selectedSession.pageId] : [], contextId: newAssistantSession().contextId });
+    const nextSessions = updateActiveAssistantSession(assistantSessions, { turns: [], draft: "", title: "新会话", pageIds: selectedSession.pageId ? [selectedSession.pageId] : [], contextId: newAssistantSession([], activePageId, context.experience).contextId });
     setAssistantSessions(nextSessions);
     setLastSubmittedInstruction("");
     setLastHarnessTaskId("");
@@ -445,14 +473,14 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
   }
 
   function handleSelectAssistantSession(id: string) {
-    if (id === assistantSessions.activeId || !assistantSessions.items.some((item) => item.id === id && (!item.pageId || item.pageId === activePageId))) return;
+    if (id === assistantSessions.activeId || !assistantSessions.items.some((item) => item.id === id && (!item.pageId || item.pageId === activePageId) && assistantSessionExperience(item) === (context.experience ?? "classic"))) return;
     activateSession(selectAssistantSession(assistantSessions, id));
   }
   function handleNewAssistantSession() {
     if (!selectedSession.turns.length && !aiInstruction && !aiImageAttachments.length) return;
-    if (assistantSessionsForPage(assistantSessions, activePageId).length >= MAX_ASSISTANT_SESSIONS) { setAiRequestError(`当前界面最多保留 ${MAX_ASSISTANT_SESSIONS} 个会话。`); return; }
+    if (assistantSessionsForPage(assistantSessions, activePageId, context.experience).length >= MAX_ASSISTANT_SESSIONS) { setAiRequestError(`当前界面最多保留 ${MAX_ASSISTANT_SESSIONS} 个会话。`); return; }
     if (assistantSessions.items.length >= MAX_PROJECT_ASSISTANT_SESSIONS) { setAiRequestError("项目会话容量已满，请先备份并整理项目。"); return; }
-    const session = newAssistantSession([], activePageId);
+    const session = newAssistantSession([], activePageId, context.experience);
     activateSession(selectAssistantSession({ ...assistantSessions, items: [...assistantSessions.items, session] }, session.id));
   }
 

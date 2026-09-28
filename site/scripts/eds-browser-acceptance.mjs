@@ -741,13 +741,16 @@ async function main() {
 
       await client.send("Page.reload", { ignoreCache: true });
       await waitFor(client, `document.readyState === "complete" && document.body.innerText.includes("飞达异常分析看板") && document.querySelectorAll(".dashboard .table-card tbody tr").length === 24`, "刷新恢复 EDS 看板");
+      await waitFor(client, `document.querySelector(".assistant-panel-slot .dsh-context-trigger")?.getAttribute("title") === "当前数据：EDS 分析总览"`, "刷新恢复 AI 已选数据来源");
       const restored = await evaluate(client, `({
         mainText: document.querySelector(".dashboard")?.innerText || "",
         navVisible: document.body.innerText.includes("EDS 异常分析"),
-        datasetContext: document.querySelector(".context-pill")?.innerText || "",
+        selectedDataTitle: document.querySelector(".assistant-panel-slot .dsh-context-trigger")?.getAttribute("title") || "",
+        contextStripCount: document.querySelectorAll(".context-pill").length,
       })`);
       assert(restored.mainText.includes("4,651") && restored.mainText.includes("231.78"), "刷新后 EDS KPI 未恢复");
-      assert(restored.navVisible && restored.datasetContext.includes("EDS 分析总览"), "刷新后 EDS 页面或 AI 数据上下文未恢复");
+      assert(restored.navVisible && restored.selectedDataTitle === "当前数据：EDS 分析总览", "刷新后 EDS 页面或 AI 已选数据来源未恢复");
+      assert(restored.contextStripCount === 0, "已移除的 AI 上下文灰条仍然出现");
       if (testConversationScroll) {
         const seeded = await evaluate(client, `(() => {
           const key = "datacanvas-ai:studio:v1";

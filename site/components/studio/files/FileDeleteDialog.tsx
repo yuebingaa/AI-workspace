@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type RefObject } from "react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/fields";
+import { useId, useRef, useState, type RefObject } from "react";
+import { AlertDialog } from "@radix-ui/themes";
 import type { NotebookFileReference } from "@/core/notebook/file-references";
-import { containDialogFocus } from "../dialog-focus";
 
 export function FileDeleteDialog({ name, references, recoverable, disabled, fallbackFocusRef, onConfirm, onClose }: {
   name: string; recoverable: boolean; disabled?: boolean;
@@ -10,7 +12,8 @@ export function FileDeleteDialog({ name, references, recoverable, disabled, fall
   fallbackFocusRef: RefObject<HTMLElement | null>;
   onConfirm: () => Promise<void>; onClose: () => void;
 }) {
-  const id = useId(), dialogRef = useRef<HTMLDialogElement>(null);
+  const id = useId(), dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null), confirmRef = useRef<HTMLButtonElement>(null);
   const submittingRef = useRef(false);
   const [pending, setPending] = useState(false), [error, setError] = useState("");
@@ -20,19 +23,6 @@ export function FileDeleteDialog({ name, references, recoverable, disabled, fall
   const requiresAcknowledgement = references.length > 0;
   const acknowledged = acknowledgedImpact === impactKey;
   const blocked = disabled || (requiresAcknowledgement && !acknowledged);
-
-  useEffect(() => {
-    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const fallback = fallbackFocusRef.current;
-    const dialog = dialogRef.current;
-    dialog?.showModal();
-    cancelRef.current?.focus();
-    return () => {
-      dialog?.close();
-      if (trigger?.isConnected) trigger.focus();
-      else if (fallback?.isConnected) fallback.focus();
-    };
-  }, [fallbackFocusRef]);
 
   function dismiss() {
     if (!submittingRef.current) onClose();
@@ -52,16 +42,12 @@ export function FileDeleteDialog({ name, references, recoverable, disabled, fall
     }
   }
 
-  return <dialog ref={dialogRef} className="file-delete-dialog" role="alertdialog" aria-modal="true"
+  return <AlertDialog.Root open onOpenChange={open => { if (!open) dismiss(); }}><AlertDialog.Content ref={dialogRef} className="file-delete-dialog" maxWidth="560px"
     aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`} aria-busy={pending} tabIndex={-1}
-    onKeyDown={(event) => { event.stopPropagation(); containDialogFocus(event); }}
-    onCancel={(event) => { event.preventDefault(); event.stopPropagation(); dismiss(); }}
-    onClick={(event) => {
-      if (event.target !== event.currentTarget) return;
-      const bounds = event.currentTarget.getBoundingClientRect();
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dismiss();
-    }}>
-    <h2 id={`${id}-title`}>删除文件</h2>
+    onOpenAutoFocus={event => { event.preventDefault(); triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; cancelRef.current?.focus(); }}
+    onCloseAutoFocus={event => { event.preventDefault(); const target = triggerRef.current?.isConnected ? triggerRef.current : fallbackFocusRef.current; target?.focus(); }}
+    onEscapeKeyDown={event => { event.preventDefault(); event.stopPropagation(); dismiss(); }}>
+    <AlertDialog.Title id={`${id}-title`}>删除文件</AlertDialog.Title>
     <div id={`${id}-description`} className="file-delete-description">
       <p>确定删除 <code>{name}</code> 吗？</p>
       <p className="file-delete-note">{recoverable
@@ -81,14 +67,14 @@ export function FileDeleteDialog({ name, references, recoverable, disabled, fall
       </> : <p>当前 Notebook 定义中未发现该文件名的显式引用；不检查自由代码或未采用草稿。</p>}
     </section>
     {requiresAcknowledgement && <label className="file-delete-ack">
-      <input type="checkbox" checked={acknowledged} disabled={pending || disabled}
-        onChange={(event) => setAcknowledgedImpact(event.target.checked ? impactKey : null)} />
+      <Checkbox  checked={acknowledged} disabled={pending || disabled}
+        onCheckedChange={(checked) => setAcknowledgedImpact(checked ? impactKey : null)} />
       <span>我已了解：读取该原件的步骤及下游可能无法重跑。{recoverable ? "恢复原件后需手动重新运行。" : "重新导入原件后需手动重新运行。"}</span>
     </label>}
     {error && <p className="file-delete-error" role="alert">{error}</p>}
     <div className="file-delete-actions">
-      <button type="button" ref={cancelRef} disabled={pending} onClick={dismiss}>取消</button>
-      <button type="button" ref={confirmRef} className="file-delete-confirm" disabled={pending || blocked} onClick={() => void confirm()}>{pending ? "正在删除…" : error ? "重试删除" : "删除"}</button>
+      <Button variant="secondary" type="button" ref={cancelRef} disabled={pending} onClick={dismiss}>取消</Button>
+      <Button variant="danger" type="button" ref={confirmRef} className="file-delete-confirm" disabled={pending || blocked} onClick={() => void confirm()}>{pending ? "正在删除…" : error ? "重试删除" : "删除"}</Button>
     </div>
-  </dialog>;
+  </AlertDialog.Content></AlertDialog.Root>;
 }

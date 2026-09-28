@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import type { DatasetLineage, NotebookDatasetProvenance } from "@/core/datasets/provenance";
 
 const labels = { data: "源数据", sql: "本地 SQL", python: "Python", warehouseSql: "数据库 SQL", semanticQuery: "语义查询", transform: "数据处理", table: "表格", chart: "图表", text: "说明", parameter: "参数" } satisfies Record<DatasetLineage["steps"][number]["kind"], string>;
@@ -22,6 +23,6 @@ export function DatasetProvenance({ provenance }: { provenance?: NotebookDataset
     <p>运行：{provenance.runId}</p>
     {lineage?.sourceFiles?.map((file) => <p key={file.name}>原始文件：{file.name} · SHA-256 {file.sha256}</p>)}
     <p>来源记录用于核对本次分析；重新查询时，源数据和权限可能已经变化。</p>
-    <button type="button" onClick={download}>下载来源记录</button>
+    <Button variant="secondary" type="button" onClick={download}>下载来源记录</Button>
   </details>;
 }

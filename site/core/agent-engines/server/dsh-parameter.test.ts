@@ -38,7 +38,7 @@ function fixture(existing = false) {
     dataRuntime: { rowsByDataSourceId: { [source.id]: rows } }, authorizeCurrentAccess() {},
     notebookRunner: (artifact, context) => runNotebook({
       document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
-      sources: [{ source: context.request.appSpec.dataSources.find(item => item.id === source.id)!, rows: context.dataRuntime.rowsByDataSourceId[source.id] }],
+      sources: context.sources,
       signal: context.signal, forAi: true, log() {},
     }),
   };

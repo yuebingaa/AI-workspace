@@ -9,8 +9,12 @@ import {
   HarnessRequestError,
 } from "@/core/harness/runtime";
 import { executeAgent } from "@/core/agent-engines/server/executor";
+import type { AuthorizedAgentDataPorts } from "@/core/agent-engines/server/authorized-ports";
 import { agentEngineSelection } from "@/core/agent-engines/server/selection";
 import { configuredDshExecutionPolicy } from "@/core/agent-engines/server/execution-policy";
+import { inspectOfficialDshRuntime } from "@/core/agent-engines/server/dsh-driver";
+import type { DshNativeSessionBinding } from "@/core/agent-engines/server/dsh-engine";
+import { runDshNativeConversation } from "@/core/agent-engines/server/native-conversation";
 import { configureDeepSeekHarness } from "@/core/ai/server/harness-composition";
 import {
   MAX_HARNESS_REQUEST_BYTES,
@@ -28,7 +32,6 @@ import { createHarnessExcelExporter } from "@/core/exports/server/harness-excel-
 import { requestDatasetRepository, requestProjectHandle, projectErrorResponse } from "@/core/projects/server/request";
 import { ProjectError } from "@/core/projects/server/store";
 import { validateSemanticModel } from "@/core/semantic/model";
-import { ownershipNamespace } from "@/core/identity/ownership";
 import { DEMO_IDENTITY_RESPONSE_HEADERS, resolveDemoRequestIdentity } from "@/core/identity/server/demo-identity";
 import { findLiveHarnessCase } from "@/core/evaluation/live/manifest";
 import { BoundedBodyError, readBoundedBodyBytes, readBoundedUtf8Body } from "@/core/http/server/bounded-body";
@@ -52,12 +55,12 @@ import {
 } from "@/core/evaluation/live/protocol";
 import { PlaywrightMultimodalVisualVerifier, type UploadedHarnessImage } from "@/core/harness/visual-verifier";
 import { createRequestMcpRuntime } from "@/core/wecom/server/runtime";
-import { wecomOwnershipNamespace } from "@/core/wecom/server/session";
 import { isDataIndependentUiStyleMutation } from "@/core/harness/conversation";
 import { resolveDeepSeekApiKey, resolveDeepSeekModel } from "@/core/ai/server/runtime-credentials";
 import { createHarnessStreamResponse } from "@/core/harness/stream";
 import type { HarnessTraceEvent } from "@/core/harness/contracts";
 import { harnessConversationStore } from "@/core/harness/server/conversation-store";
+import { harnessConversationNamespace } from "./conversation/namespace";
 
 export const runtime = "nodejs";
 const REQUEST_BODY_TIMEOUT_MS = 15_000;
@@ -243,10 +246,19 @@ function liveEvaluationCase(request: Request): LiveHarnessEvaluationCase | NextR
   return evaluationCase;
 }
 
-export async function handleHarnessRequest(request: Request, streaming = false, options: { visualizationLab?: boolean } = {}) {
+export async function handleHarnessRequest(request: Request, streaming = false, options: { visualizationLab?: boolean; dshConversation?: boolean } = {}) {
   // Only the dedicated server route selects this mode; it is not a public request flag.
   const visualizationLab = options.visualizationLab === true;
-  const liveEvaluation = visualizationLab ? undefined : liveEvaluationCase(request);
+  const dshConversation = options.dshConversation === true;
+  if (dshConversation) {
+    try { assertLocalProjectRequest(request); }
+    catch { return error("DSH 对话仅允许当前本机网站访问。", 403); }
+    if (visualizationLab || [LIVE_EVALUATION_SESSION_HEADER, LIVE_EVALUATION_NONCE_HEADER,
+      LIVE_EVALUATION_CASE_HEADER, LIVE_EVALUATION_RUN_HEADER].some(header => request.headers.has(header))) {
+      return error("DSH 对话不能使用可视化实验或旧 Harness 评测模式。", 400);
+    }
+  }
+  const liveEvaluation = visualizationLab || dshConversation ? undefined : liveEvaluationCase(request);
   if (liveEvaluation instanceof NextResponse) return liveEvaluation;
   const contentTypeHeader = request.headers.get("content-type") ?? "";
   const contentType = contentTypeHeader.split(";", 1)[0].trim().toLocaleLowerCase("en-US");
@@ -282,6 +294,7 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
   }
   const parsed = harnessPublicRequestSchema.safeParse(raw);
   if (!parsed.success) return error("Harness 请求格式不正确。", 400);
+  if (dshConversation && !parsed.data.conversation_id) return error("DSH 对话必须包含会话标识。", 400);
   if (!demoFixtureResult.success) return error("服务端演示数据不可用。", 500);
   const fixtures = demoFixtureResult.data;
   if (liveEvaluation) {
@@ -296,7 +309,7 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
     const identity = resolveDemoRequestIdentity();
     const datasetRepository = requestDatasetRepository(request);
     const projectHandle = requestProjectHandle(request);
-    const conversationNamespace = `${wecomOwnershipNamespace(request, ownershipNamespace(identity))}${projectHandle ? `:project:${projectHandle}` : ""}${visualizationLab ? ":visualization-lab" : ""}`;
+    const conversationNamespace = harnessConversationNamespace(request, identity, projectHandle, options);
     const publicRequest = visualizationLab
       ? createLabRequest(parsed.data.instruction, parsed.data.idempotencyKey)
       : liveEvaluation
@@ -326,7 +339,7 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
     ) {
       throw new HarnessRequestError("EDS 派生汇总上下文缺失或与工作台数据源不一致，请重新生成 EDS 看板。", 400);
     }
-    const uploaded = isDataIndependentUiStyleMutation(publicRequest.instruction) ? [] : await Promise.all(uploadedSourceIds.map(async (datasetId) => {
+    const uploaded = !dshConversation && isDataIndependentUiStyleMutation(publicRequest.instruction) ? [] : await Promise.all(uploadedSourceIds.map(async (datasetId) => {
       const stored = await datasetRepository.get(identity, datasetId);
       if (!stored) throw new HarnessRequestError(`上传数据集 ${datasetId} 不存在或已过期，请重新上传。`, 410);
       if (stored.descriptor.aiAccessPolicy === "pending") {
@@ -391,6 +404,11 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
     if (uploadedImages.length && !visualVerifier) {
       throw new HarnessRequestError("图片分析尚未配置，请先启用支持图像输入的视觉模型。", 503);
     }
+    if (dshConversation) {
+      const availability = await inspectOfficialDshRuntime().catch(() => undefined);
+      if (!availability?.available) throw new HarnessRequestError("DSH 运行组件尚不可用；请检查安装状态。本次不会切换到旧执行器。", 503);
+      if (request.signal.aborted) throw new HarnessRequestError("DSH 对话请求已取消。", 408);
+    }
     const runHarness = async (signal: AbortSignal, onEvent?: (event: HarnessTraceEvent) => void) => {
       // Keep the early SSE receipt; the Agent decides whether to inspect inputs.
       const preparing: HarnessTraceEvent = {
@@ -402,12 +420,12 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
         id: `${event.taskId}:${event.sequence + 1}`, sequence: event.sequence + 1,
         type: event.type === "task_started" ? "status_update" : event.type,
       });
-      const lease = agentEngineSelection.acquire(liveEvaluation || visualizationLab ? "harness" : undefined);
+      const lease = agentEngineSelection.acquire(dshConversation ? "dsh" : liveEvaluation || visualizationLab ? "harness" : undefined);
       let conversation: ReturnType<typeof harnessConversationStore.begin> | undefined;
-      let mcpRuntime;
+      let mcpRuntime: Awaited<ReturnType<typeof createRequestMcpRuntime>> | undefined;
       try {
         const dshPolicy = lease.engine === "dsh" ? configuredDshExecutionPolicy() : undefined;
-        if (dshPolicy) preparing.clientTimeoutMs = dshPolicy.totalExecutionTimeoutMs + 5_000;
+        if (dshPolicy) preparing.clientTimeoutMs = dshPolicy.totalExecutionTimeoutMs === null ? null : dshPolicy.totalExecutionTimeoutMs + 5_000;
         onEvent?.(preparing);
         conversation = harnessConversationStore.begin(serverRequest, conversationNamespace);
         const notebookCapabilities = getNotebookCapabilities();
@@ -425,55 +443,65 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
           ...(imageEvidence ? { userImageEvidence: imageEvidence } : {}),
           ...(mcpRuntime?.catalog().length ? { mcpTools: mcpRuntime.catalog() } : {}),
         });
-        const task = await executeAgent(lease.engine, effectiveRequest, {
-          agentMode: !liveEvaluation && !visualizationLab && process.env.HARNESS_MULTI_AGENT_MODE === "data" ? "data" : "single",
-          ...configureDeepSeekHarness({
-            dataRuntime,
-            apiKey: resolveDeepSeekApiKey(),
-            model: liveEvaluation ? process.env.DEEPSEEK_MODEL : resolveDeepSeekModel(),
-            signal,
-            onEvent: (event) => onEvent?.(sequenceEvent(event)),
-            excelExporter: createHarnessExcelExporter({ ownership: identity, repository: datasetRepository }),
-            connectionInspector: (connectionId, signal) => inspectConnectionSchema({ connectionId, signal, project: projectHandle, forAi: true }),
-            notebookRunner: async (artifact, context) => runNotebook({ document: { name: artifact.name,
-              revision: context.request.notebookContext?.document.revision ?? 0, cells: artifact.cells },
-              sources: artifact.sourceDataSourceIds.map((id) => {
-                const source = context.request.appSpec.dataSources.find((item) => item.id === id);
-                const rows = context.dataRuntime.rowsByDataSourceId[id];
-                if (!source || !rows) throw new Error("Notebook 源数据不可用");
-                return { source, rows };
-              }), semanticModels: context.request.semanticModel ? [context.request.semanticModel] : [],
+        const authorizedPorts: AuthorizedAgentDataPorts = {
+          dataRuntime,
+          connectionInspector: (connectionId, signal) => inspectConnectionSchema({ connectionId, signal, project: projectHandle, forAi: true }),
+          notebookRunner: async (artifact, context) => runNotebook({ document: { name: artifact.name,
+              revision: context.revision, cells: artifact.cells },
+              sources: context.sources, semanticModels: context.semanticModels,
               pythonFiles: rawWorkbook ? [{ name: rawWorkbook.fileName, bytes: rawWorkbook.bytes }] : [],
               connectionQuery: (connectionId, sql, signal) => executeConnectionSql({ connectionId, sql, signal, project: projectHandle, forAi: true }),
-              forAi: true, signal: context.signal, userId: identity.ownerId, taskId: `harness_${context.request.idempotencyKey}` }),
-            pythonRuntimeInfo: notebookPythonRuntimeInfo,
-            notebookCapabilities,
-            ...(rawWorkbook ? { rawWorkbook: { fileName: rawWorkbook.fileName, contentHash: rawWorkbook.contentHash, sheets: rawWorkbook.sheets } } : {}),
-            ...(mcpRuntime ? { mcpRuntime } : {}),
-            ...(visualVerifier ? {
-              visualVerifier,
-              visualVerificationTimeoutMs: positiveInteger(process.env.HARNESS_VISUAL_VERIFICATION_TIMEOUT_MS, 35_000),
-            } : {}),
-            authorizeModelCall: assertCurrentAiAccess,
-            bounds: dshPolicy ?? {
-              maxModelCalls: liveEvaluation?.limits.maxModelCalls ?? null,
-              maxToolCalls: liveEvaluation?.limits.maxToolCalls ?? positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
-              modelRequestTimeoutMs: positiveInteger(process.env.HARNESS_MODEL_REQUEST_TIMEOUT_MS, 25_000),
-              ...(positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 0) > 0 ? {
-                toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 0),
+              forAi: true, signal: context.signal, userId: identity.ownerId, taskId: context.taskId }),
+          pythonRuntimeInfo: notebookPythonRuntimeInfo,
+          notebookCapabilities,
+          ...(rawWorkbook ? { rawWorkbook: { fileName: rawWorkbook.fileName, contentHash: rawWorkbook.contentHash, sheets: rawWorkbook.sheets } } : {}),
+        };
+        const engineEvents = (event: HarnessTraceEvent) => onEvent?.(sequenceEvent(event));
+        const run = (requestToRun = effectiveRequest, nativeSession?: DshNativeSessionBinding) => {
+          if (lease.engine === "dsh") return executeAgent("dsh", requestToRun, {
+            ...authorizedPorts,
+            authorizeCurrentAccess: assertCurrentAiAccess,
+            signal,
+            onEvent: engineEvents,
+            executionPolicy: dshPolicy,
+          }, dshConversation ? { dshConversation: true, ...(nativeSession ? { nativeSession } : {}) } : undefined);
+          return executeAgent("harness", requestToRun, {
+            agentMode: !liveEvaluation && !visualizationLab && process.env.HARNESS_MULTI_AGENT_MODE === "data" ? "data" : "single",
+            ...configureDeepSeekHarness({
+              ...authorizedPorts,
+              apiKey: resolveDeepSeekApiKey(),
+              model: liveEvaluation ? process.env.DEEPSEEK_MODEL : resolveDeepSeekModel(),
+              signal,
+              onEvent: engineEvents,
+              excelExporter: createHarnessExcelExporter({ ownership: identity, repository: datasetRepository }),
+              ...(mcpRuntime ? { mcpRuntime } : {}),
+              ...(visualVerifier ? {
+                visualVerifier,
+                visualVerificationTimeoutMs: positiveInteger(process.env.HARNESS_VISUAL_VERIFICATION_TIMEOUT_MS, 35_000),
               } : {}),
-              totalExecutionTimeoutMs: liveEvaluation?.limits.activeElapsedReservationMs
-                ?? positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
-            },
-            ...(liveEvaluation ? {
-              contextBudget: { maxTotalPromptTokens: liveEvaluation.limits.promptTokenReservation },
-              modelMaxCompletionTokens: liveEvaluation.limits.maxCompletionTokensPerCall,
-              requireProviderUsage: true,
-              providerPromptTokenLimit: liveEvaluation.limits.promptTokenReservation,
-            } : {}),
-          }),
-        });
-        task.trace = [preparing, ...(task.trace ?? []).map(sequenceEvent)];
+              authorizeModelCall: assertCurrentAiAccess,
+              bounds: {
+                maxModelCalls: liveEvaluation?.limits.maxModelCalls ?? null,
+                maxToolCalls: liveEvaluation?.limits.maxToolCalls ?? positiveInteger(process.env.HARNESS_MAX_TOOL_CALLS, 6),
+                modelRequestTimeoutMs: positiveInteger(process.env.HARNESS_MODEL_REQUEST_TIMEOUT_MS, 25_000),
+                ...(positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 0) > 0 ? {
+                  toolCallTimeoutMs: positiveInteger(process.env.HARNESS_TOOL_CALL_TIMEOUT_MS, 0),
+                } : {}),
+                totalExecutionTimeoutMs: liveEvaluation?.limits.activeElapsedReservationMs
+                  ?? positiveInteger(process.env.HARNESS_TOTAL_EXECUTION_TIMEOUT_MS, 90_000),
+              },
+              ...(liveEvaluation ? {
+                contextBudget: { maxTotalPromptTokens: liveEvaluation.limits.promptTokenReservation },
+                modelMaxCompletionTokens: liveEvaluation.limits.maxCompletionTokensPerCall,
+                requireProviderUsage: true,
+                providerPromptTokenLimit: liveEvaluation.limits.promptTokenReservation,
+              } : {}),
+            }),
+          });
+        };
+        const task = dshConversation ? await runDshNativeConversation({ namespace: conversationNamespace,
+          request: effectiveRequest, capabilities: notebookCapabilities, signal, authorizeCurrentAccess: assertCurrentAiAccess, run }) : await run();
+        task.trace = [preparing, ...(task.trace ?? []).map(sequenceEvent)].slice(-256);
         conversation.commit(task);
         return task;
       } finally {
@@ -486,6 +514,11 @@ export async function handleHarnessRequest(request: Request, streaming = false, 
       const task = await (liveEvaluation
         ? runHarness(signal, onEvent)
         : idempotencyStore.execute(serverRequest, (emit) => runHarness(signal, emit), conversationNamespace, onEvent, signal));
+      if (dshConversation) {
+        signal.throwIfAborted();
+        try { assertCurrentAiAccess(); }
+        catch { throw new HarnessRequestError("DSH 对话的数据授权已变化，本次结果未交付；请重新检查数据来源。", 403); }
+      }
       if (!task.notebookDiagnostics) return task;
       // Cached/shared tasks do not re-enter the runtime's authorization boundary.
       // Filter this response only; never mutate the shared cached receipt or its original outcome.

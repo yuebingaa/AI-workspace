@@ -1,5 +1,7 @@
 "use client";
 
+
+import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   appSpecRevision,
@@ -44,7 +46,7 @@ import {
 } from "@/core/eds";
 import type { AiChangeSetAuditMetadata, ChangeOperation, ChangeSet, ChangeSetAuditRecord, ChangeSetAuditSource, ChangeSetAuditStatus, QueryExecutionRecord } from "@/core/models";
 import type { StudioRole } from "@/core/permissions";
-import { activeAssistantSession, MAX_PROJECT_ASSISTANT_SESSIONS, restoreAssistantSessions, selectAssistantPage } from "@/core/harness/assistant-sessions";
+import { activeAssistantSession, MAX_PROJECT_ASSISTANT_SESSIONS, restoreAssistantSessions, selectAssistantPage, type AssistantExperience } from "@/core/harness/assistant-sessions";
 import {
   createBrowserStudioRepository,
   createStudioSnapshot,
@@ -57,8 +59,6 @@ import {
 } from "@/core/repository";
 import { readableValidationError } from "@/core/schemas";
 import {
-  datasetsForWorkspace,
-  ensureInitialBlankWorkspaceInExecution,
   ensureInitialBlankWorkspaceInProduct,
   INITIAL_WORKSPACE_PAGE_ID,
   reconcileDataProductWorkspaces,
@@ -72,7 +72,6 @@ import { DataSourceDetailsPanel } from "./DataSourceDetailsPanel";
 import { EdsAnalysisDialog } from "./EdsAnalysisDialog";
 import { triggerBrowserDownload } from "./ExcelDownloadButton";
 import { PageStructurePanel } from "./PageStructurePanel";
-import { PublishReadinessDialog } from "./PublishReadinessDialog";
 import { OriginalWorkbookDialog } from "./OriginalWorkbookDialog";
 import { StudioHeader } from "./StudioHeader";
 import type { WorkspaceMode } from "./AgentWorkspace";
@@ -81,11 +80,12 @@ import { AiApiSettings } from "./AiApiSettings";
 import { AgentEngineSettings } from "./AgentEngineSettings";
 import { WecomSettings } from "./WecomSettings";
 import { NotebookPanel } from "./notebook/NotebookPanel";
+import type { AiNotebookRunRequest } from "./notebook/ai-run-scheduler";
 import { NotebookSnapshotReview } from "./notebook/NotebookSnapshotReview";
 import type { ComposerResultOption } from "./ComposerContextMenu";
 import { useStudioPageActions, selectablePageId, useStudioPagesState } from "./workspace/pages";
 import { harnessUiClock, useStudioAssistantActions, useStudioAssistantState } from "./workspace/assistant";
-import { assistantTurnState } from "./workspace/assistant-turn-state";
+import { prepareWorkspaceRestoration } from "./workspace/restore-projection";
 import { useStudioDatasetActions, useStudioDatasetsState } from "./workspace/datasets";
 import { useStudioSemanticState, useStudioSemanticActions } from "./workspace/semantics";
 import { useStudioPersistence } from "./workspace/persistence";
@@ -93,7 +93,6 @@ import { useNotebookContextSelection } from "./workspace/useNotebookContextSelec
 import { composerNotebookContext } from "./workspace/notebook-context-selection";
 import { notebookContextOptions } from "./notebook/NotebookContextSelection";
 import { SemanticModelManager } from "./SemanticModelManager";
-import { selectedSemanticModel } from "@/core/semantic/model";
 import { WorkspaceSidebarRail } from "./WorkspaceSidebarRail";
 import { LocalProjectsProvider, useLocalProjects } from "./projects/LocalProjectsProvider";
 import { PROJECT_COMPATIBILITY_SAVE_LABEL, ProjectCompatibilityNotice } from "./projects/ProjectCompatibilityNotice";
@@ -116,10 +115,10 @@ function changeOperationHighlightTargets(operation: ChangeOperation): string[] {
 }
 
 export function StudioWorkspace() {
-  return <LocalProjectsProvider><StudioProjectWorkspace /></LocalProjectsProvider>;
+  return <LocalProjectsProvider><StudioProjectWorkspace assistantExperience="dsh-conversation" /></LocalProjectsProvider>;
 }
 
-function StudioProjectWorkspace() {
+function StudioProjectWorkspace({ assistantExperience }: { assistantExperience: AssistantExperience }) {
   const project = useLocalProjects();
   if (!demoFixtureResult.success) {
     return (
@@ -133,10 +132,10 @@ function StudioProjectWorkspace() {
     );
   }
 
-  return <ValidatedStudioWorkspace key={`${project.session?.handle ?? "temporary"}:${project.instanceId}`} fixtures={demoFixtureResult.data} />;
+  return <ValidatedStudioWorkspace key={`${project.session?.handle ?? "temporary"}:${project.instanceId}:${assistantExperience}`} fixtures={demoFixtureResult.data} assistantExperience={assistantExperience} />;
 }
 
-function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
+function ValidatedStudioWorkspace({ fixtures, assistantExperience }: { fixtures: DemoFixtures; assistantExperience: AssistantExperience }) {
   const localProject = useLocalProjects();
   const localProjectSaveLabel = localProject.status.compatibility ? PROJECT_COMPATIBILITY_SAVE_LABEL : localProject.status.message;
   const [dataBrowserOpen, setDataBrowserOpen] = useState(false);
@@ -178,7 +177,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     isEdsAnalysisOpen,
     setOriginalWorkbooks,
     setOpenOriginalWorkbookId,
-    dataset,
     activeDataSource,
     workspaceDatasets,
     activeOriginalWorkbooks,
@@ -200,22 +198,25 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const [settingsPanel, setSettingsPanel] = useState<"api" | "agent" | "wecom" | null>(null);
   const [assistantCollapsed, setAssistantCollapsed] = useState(false);
   const [notebookInteractionBusy, setNotebookInteractionBusy] = useState(false);
+  const [aiNotebookAutoRun, setAiNotebookAutoRun] = useState(true);
+  const [aiNotebookRunRequest, setAiNotebookRunRequest] = useState<AiNotebookRunRequest | null>(null);
   const [puckDraft, setPuckDraft] = useState<StudioPuckData | null>(null);
   const [puckSessionKey, setPuckSessionKey] = useState(0);
   const [pendingPuckChangeSet, setPendingPuckChangeSet] = useState<ChangeSet | null>(null);
   const [notebookSnapshotReview, setNotebookSnapshotReview] = useState<NotebookDashboardReview | null>(null);
   const activeSnapshotReview = notebookSnapshotReview && notebookSnapshotReview.changeSetId === pendingPuckChangeSet?.id
     && notebookSnapshotReview.changeSetId === execution.preview?.changeSetId ? notebookSnapshotReview : null;
-  const [role, setRole] = useState<StudioRole>("editor");
+  // The retired UI role switch was only a local demo; retain the existing role contract.
+  const [role] = useState<StudioRole>("editor");
   const [queryRecords, setQueryRecords] = useState<QueryExecutionRecord[]>([]);
   const [auditRecords, setAuditRecords] = useState<ChangeSetAuditRecord[]>([]);
   const [pendingChangeSource, setPendingChangeSource] = useState<ChangeSetAuditSource | null>(null);
   const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
-  const assistant = useStudioAssistantState(repurchaseChangeSet, activePageId);
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const assistant = useStudioAssistantState(repurchaseChangeSet, activePageId, assistantExperience);
   const {
     aiChangeSet,
     setAiChangeSet,
-    aiMessage,
     setAiMessage,
     aiMetadata,
     setAiMetadata,
@@ -243,12 +244,10 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     aiRequestAbortRef,
   } = assistant;
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isPublishInfoOpen, setIsPublishInfoOpen] = useState(false);
   const [isPagesExpanded, setIsPagesExpanded] = useState(false);
   const [assistantPanelWidth, setAssistantPanelWidth] = useState<number | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
-  const publishButtonRef = useRef<HTMLButtonElement>(null);
   const pagesButtonRef = historyButtonRef;
   const assistantButtonRef = useRef<HTMLButtonElement>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
@@ -257,6 +256,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const assistantPanelSlotRef = useRef<HTMLDivElement>(null);
   const assistantResizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const repositoryRef = useRef<StudioRepository | null>(null);
+  const restorationGenerationRef = useRef(0);
   const puckDraftOriginRef = useRef<PuckDraftOrigin | null>(null);
   const latestDatasetWorkspaceRef = useRef({
     execution,
@@ -298,6 +298,14 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     notebookSelection.selectedCellIds, workspaceMode);
   const notebookDraft = harnessTasks.find((task) => task.pageId === activePageId && task.notebookArtifact
     && (task.state === "awaitingConfirmation" || task.state === "completed"))?.notebookArtifact;
+  // This key is captured by the submitted task's callback. A later project,
+  // conversation, source policy, model or attachment change cannot run its draft.
+  const notebookRunScopeKey = JSON.stringify({ project: localProject.session?.handle ?? "temporary", instance: localProject.instanceId,
+    page: activePageId, session: activeAssistantSession(assistantSessions).contextId, sources: notebookSources, models: semantic.models,
+    files: activeOriginalWorkbooks.map(({ file }) => [file.name, file.size, file.lastModified]) });
+  const handleNotebookRunRequestHandled = useCallback((taskId: string) => {
+    setAiNotebookRunRequest((current) => current?.taskId === taskId ? null : current);
+  }, []);
   const formalAppSpecRevision = useMemo(() => appSpecRevision(execution.present), [execution.present]);
   const canvasChangeFeedback = useMemo(() => {
     if (status !== "preview" && status !== "applied") return null;
@@ -503,39 +511,42 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       const repository = localProject.repository ?? createBrowserStudioRepository();
       repositoryRef.current = repository;
       const restored = loadStudioStateSafely(repository, initialProduct);
-      const restoredDataProduct = ensureInitialBlankWorkspaceInProduct(restored.dataProduct);
-      const restoredExecution = ensureInitialBlankWorkspaceInExecution(restored.execution);
-      setDataProduct({ ...restoredDataProduct, appSpec: restoredExecution.present });
-      setExecution(restoredExecution);
+      let projection: ReturnType<typeof prepareWorkspaceRestoration>;
+      try { projection = prepareWorkspaceRestoration(restored, assistantExperience); }
+      catch (error) {
+        // Leave hydration/persistence blocked; never replace a full saved history
+        // with the fresh in-memory session created before restore.
+        setEntryError(error instanceof Error ? error.message : "无法恢复当前入口的会话。");
+        return;
+      }
+      const restorationGeneration = ++restorationGenerationRef.current;
+      setDataProduct(projection.dataProduct);
+      setExecution(projection.execution);
       setAuditRecords(restored.auditRecords);
       if (restored.restored) setQueryRecords(restored.queryRecords);
       setHarnessTasks(restored.harnessTasks);
-      const migratedSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation, INITIAL_WORKSPACE_PAGE_ID, restored.harnessTasks);
-      const restoredPageId = selectablePageId(restoredExecution.present, activeAssistantSession(migratedSessions).pageId);
-      const restoredSessions = selectAssistantPage(migratedSessions, restoredPageId);
-      setAssistantSessions(restoredSessions);
+      setAssistantSessions(projection.sessions);
       setEdsWorkspace(restored.edsWorkspace);
       setDataRuntime(mergeEdsWorkspaceRuntime(localProject.session ? { rowsByDataSourceId: {} } : fixtures.dataRuntime, restored.edsWorkspace));
-      setActivePageId(restoredPageId);
-      setActiveDataSourceId(selectedSemanticModel(restoredDataProduct, restoredPageId)?.sourceDatasetId
-        ?? datasetsForWorkspace(restoredDataProduct.datasets, restoredPageId)[0]?.id ?? "");
-      const uploadedSourceIds = restoredExecution.present.dataSources
-        .filter((source) => source.sourceType === "csv")
-        .map((source) => source.id);
-      uploadedSourceIds.forEach((datasetId) => {
+      setActivePageId(projection.pageId);
+      setActiveDataSourceId(projection.activeDataSourceId);
+      projection.uploadedDatasetIds.forEach((datasetId) => {
         void loadUploadedDataset(datasetId).then((loaded) => {
-          if (cancelled) return;
-          setExecution((current) => synchronizeUploadedDatasetExecution(current, loaded.dataset));
-          setDataProduct((current) => synchronizeUploadedDatasetProduct(current, loaded.dataset));
-          setDataRuntime((current) => ({
+          if (cancelled || restorationGenerationRef.current !== restorationGeneration) return;
+          setExecution((current) => restorationGenerationRef.current === restorationGeneration
+            ? synchronizeUploadedDatasetExecution(current, loaded.dataset) : current);
+          setDataProduct((current) => restorationGenerationRef.current === restorationGeneration
+            ? synchronizeUploadedDatasetProduct(current, loaded.dataset) : current);
+          setDataRuntime((current) => restorationGenerationRef.current === restorationGeneration ? {
             rowsByDataSourceId: { ...current.rowsByDataSourceId, [datasetId]: loaded.rows },
-          }));
+          } : current);
         }).catch(() => {
-          if (!cancelled) setPersistenceNotice(localProject.session ? `项目数据表 ${datasetId} 恢复失败，请在 Data Browser 检查文件，不会自动删除数据。` : `临时数据集 ${datasetId} 已过期、未启用服务端持久化或恢复失败，请重新上传。`);
+          if (cancelled || restorationGenerationRef.current !== restorationGeneration) return;
+          setPersistenceNotice(localProject.session ? `项目数据表 ${datasetId} 恢复失败，请在 Data Browser 检查文件，不会自动删除数据。` : `临时数据集 ${datasetId} 已过期、未启用服务端持久化或恢复失败，请重新上传。`);
         });
       });
-      const latestConversationTurn = activeAssistantSession(restoredSessions).turns.at(-1);
-      const restoredTurn = assistantTurnState(latestConversationTurn);
+      const latestConversationTurn = projection.latestTurn;
+      const restoredTurn = projection.turnState;
       setAiRequestError(restoredTurn.requestError);
       if (latestConversationTurn) {
         setLastSubmittedInstruction(latestConversationTurn.instruction);
@@ -546,7 +557,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setIsLocalAssistantReply(!latestConversationTurn.taskId);
       }
       setLastHarnessTaskId(latestConversationTurn?.taskId ?? "");
-      const pendingHarnessTask = restored.harnessTasks.find((task) => task.id === latestConversationTurn?.taskId && task.state === "awaitingConfirmation" && task.pendingChangeSet);
+      const pendingHarnessTask = projection.pendingHarnessTask;
       if (pendingHarnessTask?.pendingChangeSet) {
         setAiChangeSet(pendingHarnessTask.pendingChangeSet);
         setAiMessage(pendingHarnessTask.resultMessage ?? "Harness 已恢复待确认变更，请重新预览后人工确认。");
@@ -566,7 +577,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setHasValidAiPlan(false);
         setAiRequestStatus("idle");
       }
-      setAssistantSessions(restoredSessions);
       setSaveLabel(restored.restored ? "已恢复 · 本地草稿" : "已保存 · 演示草稿");
       setPersistenceNotice(restored.notice?.includes("回退") ? restored.notice : null);
       setIsHistoryLoading(false);
@@ -574,7 +584,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     return () => { cancelled = true; };
   }, [fixtures.dataRuntime, initialProduct, setActivePageId, setAiChangeSet, setAiInstruction, setAiMessage,
     setAiMetadata, setAiRequestStatus, setAiRequestError, setAssistantSessions, setLastHarnessTaskId, setHarnessTasks, setHasValidAiPlan,
-    setIsLocalAssistantReply, setLastSubmittedInstruction, setActiveDataSourceId, setEdsWorkspace, localProject.repository, localProject.session]);
+    setIsLocalAssistantReply, setLastSubmittedInstruction, setActiveDataSourceId, setEdsWorkspace, localProject.repository, localProject.session, assistantExperience]);
 
 
   useEffect(() => {
@@ -617,11 +627,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
   const handleOpenHistory = useCallback(() => setIsHistoryOpen(true), []);
   const handleCloseHistory = useCallback(() => setIsHistoryOpen(false), []);
   const handleRestoreHistoryFocus = useCallback(() => restoreDialogTrigger(historyButtonRef.current), []);
-  const handleOpenPublishInfo = useCallback(() => setIsPublishInfoOpen(true), []);
-  const handleClosePublishInfo = useCallback(() => {
-    setIsPublishInfoOpen(false);
-    requestAnimationFrame(() => restoreDialogTrigger(publishButtonRef.current));
-  }, []);
   function toAuditMetadata(metadata: AiPlanMetadata | AiChangeSetAuditMetadata | null): AiChangeSetAuditMetadata | undefined {
     return metadata ? {
       model: metadata.model,
@@ -886,20 +891,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     persistExplicitly(nextExecution, nextAudits, current.queryRecords, current.dataProduct);
   }
 
-  function handleRoleChange(nextRole: StudioRole) {
-    aiRequestAbortRef.current?.abort();
-    auditCurrentPreviewCancellation();
-    setRole(nextRole);
-    setExecution(cancelPreview(execution));
-    setCanvasMode("preview");
-    setPendingPuckChangeSet(null);
-    setPendingChangeSource(null);
-    clearPuckDraft();
-    setPuckSessionKey((value) => value + 1);
-    setSaveLabel(`演示角色 · ${nextRole}`);
-    setValidationError(null);
-  }
-
   function handleExportBackup() {
     try {
       const now = new Date();
@@ -936,6 +927,9 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       }
       const serialized = await file.text();
       const inspected = importStudioBackup(serialized);
+      // Check this entry's capacity before replacing the saved workspace.
+      const inspectedSessions = restoreAssistantSessions(inspected.assistantSessions, inspected.assistantConversation, INITIAL_WORKSPACE_PAGE_ID, inspected.harnessTasks);
+      selectAssistantPage(inspectedSessions, selectablePageId(inspected.appSpec, activeAssistantSession(inspectedSessions).pageId), assistantExperience);
       const summary = [
         inspected.edsWorkspace ? `${getEdsWorkspaceReports(inspected.edsWorkspace).length} 份 EDS 派生汇总` : "无 EDS 派生汇总",
         inspected.assistantSessions ? `${inspected.assistantSessions.items.length} 个会话、${inspected.assistantSessions.items.reduce((total, item) => total + item.turns.length, 0)} 轮聊天` : `${inspected.assistantConversation.length} 轮聊天`,
@@ -949,17 +943,13 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       restoreStudioBackup(repository, serialized);
       const restored = loadStudioStateSafely(repository, initialProduct);
       if (!restored.restored) throw new Error(restored.notice ?? "备份未能恢复。");
-      const restoredDataProduct = ensureInitialBlankWorkspaceInProduct(restored.dataProduct);
-      const restoredExecution = ensureInitialBlankWorkspaceInExecution(restored.execution);
-
-      const migratedSessions = restoreAssistantSessions(restored.assistantSessions, restored.assistantConversation, INITIAL_WORKSPACE_PAGE_ID, restored.harnessTasks);
-      const restoredPageId = selectablePageId(restoredExecution.present, activeAssistantSession(migratedSessions).pageId);
-      const restoredSessions = selectAssistantPage(migratedSessions, restoredPageId);
-      const latestConversationTurn = activeAssistantSession(restoredSessions).turns.at(-1);
-      const restoredTurn = assistantTurnState(latestConversationTurn);
-      const pendingHarnessTask = restored.harnessTasks.find((task) => task.id === latestConversationTurn?.taskId && task.state === "awaitingConfirmation" && task.pendingChangeSet);
-      setDataProduct({ ...restoredDataProduct, appSpec: restoredExecution.present });
-      setExecution(restoredExecution);
+      const projection = prepareWorkspaceRestoration(restored, assistantExperience);
+      const restorationGeneration = ++restorationGenerationRef.current;
+      const latestConversationTurn = projection.latestTurn;
+      const restoredTurn = projection.turnState;
+      const pendingHarnessTask = projection.pendingHarnessTask;
+      setDataProduct(projection.dataProduct);
+      setExecution(projection.execution);
       setDataRuntime(mergeEdsWorkspaceRuntime(fixtures.dataRuntime, restored.edsWorkspace));
       setEdsWorkspace(restored.edsWorkspace);
       setOriginalWorkbooks([]);
@@ -968,14 +958,13 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       setOpenOriginalWorkbookId(null);
       setAuditRecords(restored.auditRecords);
       setHarnessTasks(restored.harnessTasks);
-      setAssistantSessions(restoredSessions);
+      setAssistantSessions(projection.sessions);
       assistant.clearSessionImages();
       assistant.setAiImageAttachments([]); assistant.setLastSubmittedImages([]);
       markQueriesRestored(restored.queryRecords);
       setQueryRecords(restored.queryRecords);
-      setActivePageId(restoredPageId);
-      setActiveDataSourceId(selectedSemanticModel(restoredDataProduct, restoredPageId)?.sourceDatasetId
-        ?? datasetsForWorkspace(restoredDataProduct.datasets, restoredPageId)[0]?.id ?? "");
+      setActivePageId(projection.pageId);
+      setActiveDataSourceId(projection.activeDataSourceId);
       setPendingPuckChangeSet(null);
       setPendingChangeSource(null);
       clearPuckDraft();
@@ -1015,20 +1004,23 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         setHasValidAiPlan(false);
         setIsLocalAssistantReply(true);
       }
-      setAssistantSessions(restoredSessions);
       setSaveLabel("已恢复 · 工作区备份");
       setPersistenceNotice(`已从“${file.name}”恢复：${summary}。临时 CSV 原始数据仍需在原服务端有效期内重新加载。`);
 
-      restored.execution.present.dataSources
-        .filter((source) => source.sourceType === "csv")
-        .forEach((source) => {
-          void loadUploadedDataset(source.id).then((loaded) => {
-            setExecution((current) => synchronizeUploadedDatasetExecution(current, loaded.dataset));
-            setDataProduct((current) => synchronizeUploadedDatasetProduct(current, loaded.dataset));
-            setDataRuntime((current) => ({
-              rowsByDataSourceId: { ...current.rowsByDataSourceId, [source.id]: loaded.rows },
-            }));
-          }).catch(() => setPersistenceNotice(`工作区已恢复，但临时数据集 ${source.id} 已过期或不属于当前服务端，请重新上传原始 CSV。`));
+      projection.uploadedDatasetIds.forEach((datasetId) => {
+          void loadUploadedDataset(datasetId).then((loaded) => {
+            if (restorationGenerationRef.current !== restorationGeneration) return;
+            setExecution((current) => restorationGenerationRef.current === restorationGeneration
+              ? synchronizeUploadedDatasetExecution(current, loaded.dataset) : current);
+            setDataProduct((current) => restorationGenerationRef.current === restorationGeneration
+              ? synchronizeUploadedDatasetProduct(current, loaded.dataset) : current);
+            setDataRuntime((current) => restorationGenerationRef.current === restorationGeneration ? {
+              rowsByDataSourceId: { ...current.rowsByDataSourceId, [datasetId]: loaded.rows },
+            } : current);
+          }).catch(() => {
+            if (restorationGenerationRef.current !== restorationGeneration) return;
+            setPersistenceNotice(`工作区已恢复，但临时数据集 ${datasetId} 已过期或不属于当前服务端，请重新上传原始 CSV。`);
+          });
         });
     } catch (error) {
       setPersistenceNotice(`工作区备份恢复失败，当前页面未被覆盖。${readableValidationError(error)}`);
@@ -1050,12 +1042,20 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       : execution.preview ? "请先确认或取消当前变更预览"
         : notebookInteractionBusy || isCsvUploadOpen ? "请先完成当前编辑或导入" : undefined;
   const { handleGenerateAiPlan, handleCancelAiRequest, handleClearAssistantConversation, handleRetryAiRequest, handleImageAttachmentsChange, handleSelectAssistantSession, handleNewAssistantSession } = useStudioAssistantActions({
+    experience: assistantExperience,
     assistant, role, activePageId, renderedSpec, activeDataSource, activeOriginalWorkbook,
     edsWorkspace, dataProduct, execution, auditRecords, queryRecords, persistExplicitly,
     setExecution, setPendingPuckChangeSet, setPendingChangeSource, setCanvasMode,
     auditCurrentPreviewCancellation, setValidationError, setSaveLabel,
     notebookInteractionBusy,
     conversationSwitchBlocked: Boolean(conversationDisabledReason),
+    onNotebookDraftReady: (task, baseline) => {
+      if (!aiNotebookAutoRun || !task.notebookArtifact) return;
+      setNotebookInteractionBusy(true);
+      setAiNotebookRunRequest({ taskId: task.id, draft: task.notebookArtifact, baseline, scopeKey: notebookRunScopeKey });
+      handleWorkspaceModeChange("notebook");
+      setSaveLabel("AI 草稿自动运行预览 · 确认后保存 Notebook");
+    },
     ...(selectedNotebookContext ? { notebookContext: selectedNotebookContext } : {}),
   });
 
@@ -1088,7 +1088,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     if (pageId === activePageId || !renderedSpec.pages.some((page) => page.id === pageId) || !canSwitchInterface()) return;
     try {
       // Check capacity before changing the page; the state hook installs its thread.
-      selectAssistantPage(assistantSessions, pageId);
+      selectAssistantPage(assistantSessions, pageId, assistantExperience);
       pageActions.handleInterfaceChange(pageId);
     } catch (error) { setPersistenceNotice(readableValidationError(error)); }
   }
@@ -1131,8 +1131,10 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
     setRemovedOriginalDatasetIds((items) => [...new Set([...items, ...ids])]);
   }
 
+  if (entryError) return <main className="local-project-loading"><div role="alert"><h1>暂时无法打开对话入口</h1><p>{entryError}</p><p>已有聊天和项目文件未被覆盖。</p><Button variant="secondary" type="button" onClick={() => window.location.reload()}>重新加载</Button></div></main>;
+
   return (
-    <main className="studio-shell with-workspace-modes compact-studio">
+    <main className={`studio-shell with-workspace-modes compact-studio${assistantExperience === "dsh-conversation" ? " dsh-conversation-shell" : ""}`}>
       <input
         ref={backupFileInputRef}
         className="visually-hidden"
@@ -1151,13 +1153,11 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           canClearConversation={assistantConversation.length > 0 && aiRequestStatus !== "loading"}
           projectName={localProject.session?.manifest.name} saveLabel={localProject.session ? localProjectSaveLabel : saveLabel}
           role={role} canUndo={role !== "viewer" && execution.history.length > 0}
-          resourceBusy={aiRequestStatus === "loading" || notebookInteractionBusy || isCsvUploadOpen} historyCount={harnessTasks.length + auditRecords.length}
-          onRoleChange={handleRoleChange} onInterfaceChange={handleInterfaceChange} onCreateInterface={handleCreateInterface} onAction={handleNavigationAction} />}
-        publishButtonRef={publishButtonRef}
+          resourceBusy={aiRequestStatus === "loading" || isSessionChanging || notebookInteractionBusy || isCsvUploadOpen} historyCount={harnessTasks.length + auditRecords.length}
+          onInterfaceChange={handleInterfaceChange} onCreateInterface={handleCreateInterface} onAction={handleNavigationAction} />}
         assistantButtonRef={assistantButtonRef}
         onInterfaceChange={handleInterfaceChange}
         onModeChange={handleWorkspaceModeChange}
-        onOpenPublish={handleOpenPublishInfo}
         onOpenAssistant={() => {
           if (!assistantCollapsed) setAssistantCollapsed(true);
           else openAssistantPanel();
@@ -1166,7 +1166,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
       {localProject.compatibility ? <><ProjectCompatibilityNotice issue={localProject.compatibility} /><div className="persistence-notice" role="status">上次项目未打开，当前为临时工作区。可在 Data Browser 中重新选择项目。</div></>
         : localProject.notice && <div className="persistence-notice" role="alert">{localProject.notice}</div>}
       {localProject.status.state === "error" && <div className="persistence-notice" role="alert">{localProject.status.compatibility ? "项目版本不兼容，自动保存已暂停；请在 Data Browser 查看详情。" : `${localProject.status.message}。`}请先使用“备份”导出当前定义，避免丢失未保存修改。</div>}
-      {persistenceNotice && <div className="persistence-notice" role="alert"><span>{persistenceNotice}</span><button type="button" onClick={() => setPersistenceNotice(null)}>知道了</button></div>}
+      {persistenceNotice && <div className="persistence-notice" role="alert"><span>{persistenceNotice}</span><Button variant="secondary" type="button" onClick={() => setPersistenceNotice(null)}>知道了</Button></div>}
       <div
         id="workspace-view-panel"
         role="tabpanel"
@@ -1198,7 +1198,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             onClose={closeFilesPanel} onImport={(files = []) => { setComposerImportFiles(files); setIsCsvUploadOpen(true); }}
             onPreview={(result) => handleUseProjectTable(result, "preview")} onWorkbook={handleOpenOriginalWorkbook}
             onBrowseData={() => handleNavigationAction("data")} onConnections={() => { closeFilesPanel(); handleNavigationAction("connections"); }} /> : <>
-          <button ref={sidebarPanelCloseRef} type="button" className="workspace-sidebar-collapse" aria-label="收起侧边栏" onClick={collapsePagesPanel}>‹</button>
+          <Button variant="secondary" ref={sidebarPanelCloseRef} type="button" className="workspace-sidebar-collapse" aria-label="收起侧边栏" onClick={collapsePagesPanel}>‹</Button>
           <PageStructurePanel
             appSpec={renderedSpec}
             activePageId={activePageId}
@@ -1249,6 +1249,8 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
           files={activeOriginalWorkbooks.map((workbook) => workbook.file)}
           onInteractionChange={setNotebookInteractionBusy}
           sources={notebookSources} models={semantic.models} draft={notebookDraft} canEdit={role !== "viewer"} externalBusy={aiRequestStatus === "loading"}
+          aiAutoRunEnabled={aiNotebookAutoRun} onAiAutoRunChange={setAiNotebookAutoRun}
+          aiRunRequest={aiNotebookRunRequest} aiRunScopeKey={notebookRunScopeKey} onAiRunRequestHandled={handleNotebookRunRequestHandled}
           onChange={handleNotebookChange} onImport={() => setIsCsvUploadOpen(true)} onSnapshot={handleNotebookSnapshot} onDataset={handleNotebookDataset}
           instruction={aiInstruction} onInstructionChange={setAiInstruction} onBrowseData={() => handleNavigationAction("data")}
           onAskAi={() => { if (!aiInstruction.trim()) setAiInstruction("请基于当前 Notebook 和已导入的数据，生成可运行的分析步骤草稿；先汇总关键指标，再生成图表和结果表，保留已有相关步骤，不修改正式看板。"); openAssistantPanel(); }} />
@@ -1272,7 +1274,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             onKeyDown={handleAssistantResizeKeyDown}
           />
           <AiBuilderAssistant
-            settingsInNavigation
+            onSubmitInstruction={(instruction, accepted) => handleGenerateAiPlan(instruction, undefined, undefined, accepted)}
             presentation={workspaceMode === "agent" ? "workspace" : "sidebar"}
             dataSources={workspaceDatasets.map(({ id, name, rowCount, columnCount }) => ({ id, name, detail: `${rowCount.toLocaleString("zh-CN")} 行 · ${columnCount} 列` }))}
             workspaces={interfaces.map(({ id, label, description }) => ({ id, name: label, detail: description }))}
@@ -1286,29 +1288,27 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             onManageSemanticModels={() => semantic.setEditor({ modelId: semantic.selected?.id })}
             onSelectWorkspace={handleInterfaceChange}
             onSelectResult={handleSelectContextResult}
-            onImportFiles={(files) => { setComposerImportFiles(files); setIsCsvUploadOpen(true); }}
             activeDataSourceId={activeDataSourceId}
             onSelectDataSource={setActiveDataSourceId}
             onImportData={() => setIsCsvUploadOpen(true)}
             onOpenWorkspace={() => handleWorkspaceModeChange("agent")}
             onOpenNotebook={() => handleWorkspaceModeChange("notebook")}
+            notebookAutoRunEnabled={aiNotebookAutoRun}
             pageTitle={activePage?.title ?? "未选择页面"}
-            datasetName={dataset?.name ?? "未选择数据集"}
             changeSet={aiChangeSet}
             status={status}
             validationError={validationError}
             canApply={role !== "viewer"}
             canPreview={hasValidAiPlan}
-            aiMessage={aiMessage}
             aiMetadata={aiMetadata}
             instruction={aiInstruction}
             requestStatus={aiRequestStatus}
             requestError={aiRequestError}
             canRetry={Boolean(lastSubmittedInstruction && aiRequestError)}
             harnessTask={isLocalAssistantReply ? null : harnessTasks.find((task) => task.id === lastHarnessTaskId) ?? null}
-            harnessTasks={harnessTasks}
             conversationTurns={assistantConversation}
             conversationSwitcher={{ sessions: assistantSessions, projectName: localProject.session?.manifest.name ?? "当前临时项目",
+              experience: assistantExperience,
               pageId: activePageId, pageName: activePage?.title ?? "当前界面",
               disabledReason: conversationDisabledReason, onSelect: handleSelectAssistantSession, onNew: handleNewAssistantSession }}
             pendingInstruction={aiRequestStatus === "loading" ? lastSubmittedInstruction : ""}
@@ -1317,7 +1317,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
             imageAttachments={aiImageAttachments}
             onInstructionChange={setAiInstruction}
             onImageAttachmentsChange={handleImageAttachmentsChange}
-            onGenerate={() => { void handleGenerateAiPlan(); }}
             onCancelRequest={handleCancelAiRequest}
             onRetry={handleRetryAiRequest}
             onPreview={handlePreview}
@@ -1327,7 +1326,7 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         </div>
       </div>
       <AiApiSettings hideTrigger open={settingsPanel === "api"} onOpenChange={open => { setSettingsPanel(open ? "api" : null); if (!open) historyButtonRef.current?.focus(); }} />
-      <AgentEngineSettings hideTrigger open={settingsPanel === "agent"} disabled={aiRequestStatus === "loading"} onOpenChange={open => { setSettingsPanel(open ? "agent" : null); if (!open) historyButtonRef.current?.focus(); }} />
+      <AgentEngineSettings hideTrigger open={settingsPanel === "agent"} disabled={aiRequestStatus === "loading"} onOpenModels={() => setSettingsPanel("api")} onOpenChange={open => { setSettingsPanel(open ? "agent" : null); if (!open) historyButtonRef.current?.focus(); }} />
       <WecomSettings hideTrigger open={settingsPanel === "wecom"} onOpenChange={open => { setSettingsPanel(open ? "wecom" : null); if (!open) historyButtonRef.current?.focus(); }} onSuggestion={instruction => { setAiInstruction(instruction); handleWorkspaceModeChange("agent"); }} />
       {isDataSourceOpen && activeDataSource && (
         <DataSourceDetailsPanel
@@ -1379,7 +1378,6 @@ function ValidatedStudioWorkspace({ fixtures }: { fixtures: DemoFixtures }) {
         onRestoreFocus={handleRestoreHistoryFocus}
         onClose={handleCloseHistory}
       />
-      {isPublishInfoOpen && <PublishReadinessDialog onDownloadBackup={handleExportBackup} onClose={handleClosePublishInfo} />}
     </main>
   );
 }

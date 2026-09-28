@@ -1,4 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { buttonMarkup } from "@/test-support/markup";
+import { renderToStaticMarkup } from "@/test-support/render-themed";
 import { describe, expect, it } from "vitest";
 import type { NotebookCell } from "@/core/notebook/definition";
 import type { NotebookParameter } from "@/core/notebook/parameter";
@@ -75,7 +77,7 @@ describe("Notebook parameter editor", () => {
     const html = renderToStaticMarkup(<NotebookCellEditor cell={cell({ type: "number", value: 5 })} availableInputs={[]} sources={[]} models={[]} disabled onSave={() => {}} onCancel={() => {}} />);
     expect(html).toContain('aria-label="参数类型"');
     expect(html).toContain('<fieldset disabled="">');
-    expect(html).toContain('class="notebook-primary" disabled=""');
+    expect(buttonMarkup(html, "保存单元").disabled).toBe(true);
     expect(html).not.toContain("输入表（勾选后才能在 SQL 中查询）");
   });
   it("shows saved type/value safely and keeps full configuration in source and review", () => {

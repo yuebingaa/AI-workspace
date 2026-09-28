@@ -5,6 +5,14 @@ import { setActiveProjectHandle } from "@/core/projects/client";
 import { PROJECT_HEADER } from "@/core/projects/contracts";
 
 afterEach(() => { setActiveProjectHandle(null); vi.unstubAllGlobals(); });
+it("clears the DSH namespace through its explicit route only", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 })); vi.stubGlobal("fetch", fetch);
+  const contextId = `dshconversation_${randomUUID().replaceAll("-", "")}`;
+  await clearHarnessConversations({ contextId, pageIds: ["page_one"] }, "dsh-conversation");
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch.mock.calls[0][0]).toBe("/api/ai/dsh/conversation/clear");
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ conversation_id: contextId, pageId: "page_one" });
+});
 it("isolates in-tab conversation IDs even when browser storage is disabled", () => {
   vi.stubGlobal("localStorage", { getItem: () => { throw new Error("disabled"); }, setItem: () => { throw new Error("disabled"); } });
   const a = randomUUID(), b = randomUUID();

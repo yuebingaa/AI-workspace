@@ -1,20 +1,15 @@
+import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AiPlanMetadata } from "@/core/ai/contracts";
-import {
-  MAX_HARNESS_IMAGE_ATTACHMENTS,
-  type HarnessTaskSummary,
-} from "@/core/harness/contracts";
+import type { HarnessTaskSummary } from "@/core/harness/contracts";
 import type { AssistantConversationTurn } from "@/core/harness/conversation";
 import type { ChangeOperation, ChangeSet } from "@/core/models";
 import { ExcelDownloadButton } from "./ExcelDownloadButton";
-import { AiApiSettings } from "./AiApiSettings";
-import { WecomSettings } from "./WecomSettings";
-import { HarnessTrace } from "./HarnessTrace";
-import { AssistantAnswer } from "./AssistantAnswer";
-import { AgentWorkspaceWelcome } from "./AgentWorkspace";
 import { ComposerContextMenu, type ComposerDataOption, type ComposerResultOption } from "./ComposerContextMenu";
 import { ConversationSwitcher, type ConversationSwitcherProps } from "./ConversationSwitcher";
 import { NotebookContextChips, type NotebookContextOption } from "./notebook/NotebookContextSelection";
+import { DshWebFrame } from "./dsh-web/DshWebFrame";
+import { StudioArtwork } from "./StudioArtwork";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
 export type AiRequestUiStatus = "idle" | "loading" | "success" | "blocked" | "error" | "cancelled" | "timeout";
@@ -24,19 +19,9 @@ export function isConversationNearBottom(position: Pick<HTMLElement, "scrollHeig
   return position.scrollHeight - position.scrollTop - position.clientHeight <= CONVERSATION_BOTTOM_THRESHOLD_PX;
 }
 
-const acceptedHarnessImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
-
-export function clipboardImageFiles(items: ArrayLike<Pick<DataTransferItem, "kind" | "type" | "getAsFile">>): File[] {
-  return Array.from(items).flatMap((item) => {
-    if (item.kind !== "file") return [];
-    const file = item.getAsFile();
-    return file && acceptedHarnessImageTypes.has(file.type || item.type) ? [file] : [];
-  });
-}
-
 interface AiBuilderAssistantProps {
+  onSubmitInstruction: (instruction: string, onAccepted: () => void) => Promise<void>;
   presentation?: "sidebar" | "workspace";
-  settingsInNavigation?: boolean;
   dataSources?: ComposerDataOption[];
   workspaces?: ComposerDataOption[];
   activeWorkspaceId?: string;
@@ -52,27 +37,24 @@ interface AiBuilderAssistantProps {
   onManageSemanticModels?: () => void;
   onSelectWorkspace?: (id: string) => void;
   onSelectResult?: (result: ComposerResultOption) => void;
-  onImportFiles?: (files: File[]) => void;
   activeDataSourceId?: string;
   onSelectDataSource?: (dataSourceId: string) => void;
   onImportData?: () => void;
   onOpenWorkspace?: () => void;
   onOpenNotebook?: () => void;
+  notebookAutoRunEnabled?: boolean;
   pageTitle: string;
-  datasetName: string;
   changeSet: ChangeSet;
   status: ChangeSetUiStatus;
   validationError: string | null;
   canApply: boolean;
   canPreview: boolean;
-  aiMessage: string;
   aiMetadata: AiPlanMetadata | null;
   instruction: string;
   requestStatus: AiRequestUiStatus;
   requestError: string | null;
   canRetry: boolean;
   harnessTask: HarnessTaskSummary | null;
-  harnessTasks?: HarnessTaskSummary[];
   conversationTurns: AssistantConversationTurn[];
   conversationSwitcher?: ConversationSwitcherProps;
   pendingInstruction: string;
@@ -81,7 +63,6 @@ interface AiBuilderAssistantProps {
   imageAttachments: File[];
   onInstructionChange: (instruction: string) => void;
   onImageAttachmentsChange: (files: File[]) => void;
-  onGenerate: () => void;
   onCancelRequest: () => void;
   onRetry: () => void;
   onPreview: () => void;
@@ -104,8 +85,8 @@ function operationTargets(operation: ChangeOperation): string[] {
 }
 
 export function AiBuilderAssistant({
+  onSubmitInstruction,
   presentation = "sidebar",
-  settingsInNavigation = false,
   dataSources = [],
   workspaces = [],
   activeWorkspaceId = "",
@@ -121,27 +102,24 @@ export function AiBuilderAssistant({
   onManageSemanticModels,
   onSelectWorkspace,
   onSelectResult,
-  onImportFiles,
   activeDataSourceId = "",
   onSelectDataSource,
   onImportData,
   onOpenWorkspace,
   onOpenNotebook,
+  notebookAutoRunEnabled = false,
   pageTitle,
-  datasetName,
   changeSet,
   status,
   validationError,
   canApply,
   canPreview,
-  aiMessage,
   aiMetadata,
   instruction,
   requestStatus,
   requestError,
   canRetry,
   harnessTask,
-  harnessTasks = [],
   conversationTurns,
   conversationSwitcher,
   pendingInstruction,
@@ -150,7 +128,6 @@ export function AiBuilderAssistant({
   imageAttachments,
   onInstructionChange,
   onImageAttachmentsChange,
-  onGenerate,
   onCancelRequest,
   onRetry,
   onPreview,
@@ -167,11 +144,7 @@ export function AiBuilderAssistant({
   const previousPendingInstructionRef = useRef("");
   const previousSessionIdRef = useRef("");
   const sessionId = conversationSwitcher?.sessions.activeId;
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [contextMenuAnchor, setContextMenuAnchor] = useState<HTMLElement | null>(null);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const promptRef = useRef<HTMLTextAreaElement>(null);
   const isWorkspace = presentation === "workspace";
   const latestTurn = conversationTurns.at(-1);
   const errorShownInConversation = Boolean(requestError && !isLoading && (!harnessTask || latestTurn?.taskId === harnessTask.id)
@@ -179,24 +152,14 @@ export function AiBuilderAssistant({
   const isConversationEmpty = !conversationTurns.length && !pendingInstruction
     && !isLoading && !requestError && !validationError && !showChangePlan && !harnessTask;
   const isWorkspaceEmpty = isWorkspace && isConversationEmpty;
+  const showDshEmptyWelcome = isWorkspaceEmpty && !instruction.trim()
+    && imageAttachments.length === 0 && !conversationSwitcher?.disabledReason;
   const selectedSource = dataSources.find((source) => source.id === activeDataSourceId);
+  const showControls = Boolean((requestError && !errorShownInConversation) || validationError || showChangePlan);
   const closeContextMenu = useCallback((restoreFocus = false) => {
     if (restoreFocus) requestAnimationFrame(() => { if (contextMenuAnchor?.isConnected) contextMenuAnchor.focus(); });
     setContextMenuAnchor(null);
   }, [contextMenuAnchor]);
-
-  function handleAttachmentFiles(files: File[]) {
-    const images = files.filter((file) => acceptedHarnessImageTypes.has(file.type));
-    const tables = files.filter((file) => /\.(?:csv|xlsx)$/iu.test(file.name));
-    const unsupported = files.filter((file) => !images.includes(file) && !tables.includes(file));
-    if (unsupported.length) {
-      setAttachmentError("目前支持 CSV、XLSX、JPEG、PNG 和 WebP 文件，请重新选择。");
-      return;
-    }
-    setAttachmentError(null);
-    if (images.length) onImageAttachmentsChange([...imageAttachments, ...images]);
-    if (tables.length) onImportFiles?.(tables);
-  }
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -211,15 +174,18 @@ export function AiBuilderAssistant({
   }, [conversationTurns.length, isLoading, pendingInstruction, harnessTask?.trace?.length, sessionId]);
 
   return (
-    <aside className={`right-panel panel${isWorkspace ? " agent-workspace-panel" : ""}${isWorkspaceEmpty ? " agent-workspace-empty" : ""}${isConversationEmpty ? " assistant-empty" : ""}`} aria-label={isWorkspace ? "AI 工作台" : "AI 助手"}>
+    <aside className={`right-panel panel${isWorkspace ? " agent-workspace-panel" : ""} official-dsh-panel`} aria-label={isWorkspace ? "AI 工作台" : "AI 助手"}>
       <div className={`assistant-head${conversationSwitcher ? " assistant-session-header" : ""}`}>
         {conversationSwitcher ? <ConversationSwitcher {...conversationSwitcher} /> : <div><span className="ai-mark">✦</span><div><b>{isWorkspace ? "AI 工作台" : dataAnalysisMode ? "AI 数据分析与看板助手" : "AI 构建助手"}</b><small>{isWorkspace ? "分析数据 · 创建图表 · 继续追问" : dataAnalysisMode ? (isLoading ? "正在分析已授权的数据" : rawDataAccessEnabled ? "分析汇总与已授权原始数据" : "分析数据 · 看板变更需确认") : (isLoading ? "正在准备看板变更预览" : "先预览，确认后应用")}</small></div></div>}
         <div className="assistant-head-actions">
-          {!isWorkspace && onOpenWorkspace && <button type="button" className="assistant-expand-button" aria-label="在 AI 工作台中打开" title="在 AI 工作台中打开" onClick={onOpenWorkspace}>⤢</button>}
-          {!settingsInNavigation && <><AiApiSettings /><WecomSettings onSuggestion={onInstructionChange} /></>}
+            <span className="dsh-assistant-label" title="DSH 官方对话，目前支持文字；/、@、+ 扩展尚未接入，分析来源请用“数据”选择。">DSH</span>
+            <Button variant="secondary" type="button" className="dsh-context-trigger" aria-label="选择分析数据与上下文" aria-haspopup="menu" aria-controls="composer-context-menu"
+              aria-expanded={Boolean(contextMenuAnchor)} disabled={isLoading || Boolean(conversationSwitcher?.disabledReason)}
+              title={selectedSource ? `当前数据：${selectedSource.name}` : "选择数据表、Notebook 单元或语义模型"}
+              onClick={(event) => setContextMenuAnchor(contextMenuAnchor ? null : event.currentTarget)}>数据</Button>
+          {!isWorkspace && onOpenWorkspace && <Button variant="secondary" type="button" className="assistant-expand-button" aria-label="在 AI 工作台中打开" title="在 AI 工作台中打开" onClick={onOpenWorkspace}>⤢</Button>}
         </div>
       </div>
-      {!isWorkspace && <div className="context-pill">上下文：{pageTitle} · {datasetName.replace(".csv", "")}</div>}
       <div
         ref={conversationRef}
         className="conversation"
@@ -230,50 +196,28 @@ export function AiBuilderAssistant({
           conversationPinnedToBottomRef.current = isConversationNearBottom(event.currentTarget);
         }}
       >
-        {isConversationEmpty && <AgentWorkspaceWelcome compact={!isWorkspace} onSuggestion={(value) => {
-          onInstructionChange(value);
-          promptRef.current?.focus();
-        }} />}
-        {conversationTurns.map((turn) => (
-          <article className={`conversation-turn ${turn.state}`} key={turn.id}>
-            <div className="user-message">
-              <small>你 · {new Date(turn.createdAt).toLocaleString("zh-CN")}</small>
-              <span>{turn.instruction}</span>
-            </div>
-            <HarnessTrace task={harnessTasks.find((task) => task.id === turn.taskId) ?? (harnessTask?.id === turn.taskId ? harnessTask : undefined)} />
-            <div className="assistant-message">
-              <span className="ai-mark small">✦</span>
-              <div>
-                {turn.state === "success" ? <AssistantAnswer text={turn.response} /> : <p>{turn.response}</p>}
-                <small className="conversation-meta">
-                  {turn.state === "success" ? "已回复" : turn.state === "blocked" ? "任务受限" : turn.state === "cancelled" ? "已取消" : "执行失败"}
-                  {turn.taskId ? " · Harness" : " · 本地回复"}
-                </small>
-                {turn.id === latestTurn?.id && errorShownInConversation && canRetry && (
-                  <div><button className="conversation-retry" type="button" onClick={onRetry}>重试这次任务</button></div>
-                )}
-              </div>
-            </div>
-          </article>
-        ))}
-        {pendingInstruction && <div className="user-message pending-message"><small>你 · 正在处理</small><span>{pendingInstruction}</span></div>}
-        {isLoading && <HarnessTrace task={harnessTask} running />}
-        {!isConversationEmpty && !conversationTurns.length && !pendingInstruction && (
-          <div className="assistant-message conversation-empty">
-            <span className="ai-mark small">✦</span>
-            <div><p>{aiMessage}</p><small>发送问题后，会在这里保留连续的聊天上下文。</small></div>
-          </div>
-        )}
-        {isLoading && !harnessTask?.trace?.length && (
-          <div className="assistant-message conversation-pending">
-            <span className="ai-mark small">✦</span>
-            <div className="ai-request-state" role="status"><span className="ai-spinner" />正在请求 DeepSeek 并校验结果…</div>
-          </div>
-        )}
+        <DshWebFrame key={sessionId ?? "current"} snapshot={{ version: 1,
+          session: { id: sessionId ?? "current", title: pageTitle.slice(0, 200) },
+          turns: conversationTurns.map(({ id, instruction, response, createdAt, state }) => ({ id, instruction, response, createdAt, state })),
+          draft: instruction, busy: isLoading,
+          canSend: !isLoading && !conversationSwitcher?.disabledReason && imageAttachments.length === 0,
+          pendingInstruction, statusText: (isLoading ? harnessTask?.trace?.at(-1)?.message ?? "DSH 正在处理" : requestError ?? "").slice(0, 1_000),
+        }} onDraft={onInstructionChange} onCancel={onCancelRequest}
+          onSend={onSubmitInstruction} />
+        {showDshEmptyWelcome && <div className="dsh-web-empty-welcome" data-agentcanvas-dsh-empty-welcome="true">
+          <StudioArtwork className="dsh-web-empty-art" />
+          <h2>想从数据中了解什么？</h2>
+          <p>提问、分析数据、创建图表。<br />从一个问题开始，让发现有据可循。</p>
+        </div>}
+        {!isLoading && canRetry && errorShownInConversation && <div className="dsh-web-feedback"><Button variant="secondary" type="button" onClick={onRetry}>重试这次任务</Button></div>}
+        {imageAttachments.length > 0 && <div className="dsh-web-feedback" role="alert">
+          <p>当前 DSH 对话暂不支持图片，请移除待发送图片后继续。</p>
+          <Button variant="secondary" type="button" disabled={isLoading} onClick={() => onImageAttachmentsChange([])}>移除待发送图片</Button>
+        </div>}
         {!isLoading && harnessTask?.notebookArtifact && onOpenNotebook && (
           <section className="notebook-assistant-artifact"><b>▤ {harnessTask.notebookArtifact.name}</b>
             <p>{harnessTask.notebookArtifact.cells.length} 个分析单元 · {harnessTask.notebookArtifact.executionEvidence?.status === "success" ? "已试运行" : "结构草稿"} · 正式看板未修改</p>
-            <button type="button" onClick={onOpenNotebook}>打开 Notebook 查看草稿 →</button>
+            <Button variant="secondary" type="button" onClick={onOpenNotebook}>{notebookAutoRunEnabled ? "打开 Notebook 查看分析 →" : "打开 Notebook 查看草稿 →"}</Button>
           </section>
         )}
         {!isLoading && harnessTask?.exportArtifact && (
@@ -285,14 +229,13 @@ export function AiBuilderAssistant({
             <ExcelDownloadButton artifact={harnessTask.exportArtifact} label="下载 Excel" />
           </div>
         )}
-        {!isConversationEmpty && (!errorShownInConversation || validationError || showChangePlan) && <div className="assistant-message assistant-controls">
-          <span className="ai-mark small">✦</span>
+        {showControls && <div className="assistant-message assistant-controls">
           <div>
             {requestError && !errorShownInConversation && (
               <div className={`validation-error${requestStatus === "blocked" ? " blocked-warning" : ""}`} role={requestStatus === "blocked" ? "status" : "alert"}>
                 <b>{requestStatus === "blocked" ? "任务受限/缺少能力" : requestStatus === "timeout" ? "请求超时" : requestStatus === "cancelled" ? "请求已取消" : "AI 生成失败"}</b>
                 <p>{requestError}</p>
-                {canRetry && <button type="button" onClick={onRetry}>重试</button>}
+                {canRetry && <Button variant="secondary" type="button" onClick={onRetry}>重试</Button>}
               </div>
             )}
             {validationError && (
@@ -326,14 +269,14 @@ export function AiBuilderAssistant({
               )}
               <div className="plan-actions">
                 {status === "preview" ? (
-                  <button type="button" onClick={onCancelPreview}>取消预览</button>
+                  <Button variant="secondary" type="button" onClick={onCancelPreview}>取消预览</Button>
                 ) : (
                   <>
-                    {harnessTask?.state === "awaitingConfirmation" && <button type="button" className="reject" onClick={onCancelPreview}>拒绝变更</button>}
-                    <button type="button" disabled={!canPreview || status === "applied" || isLoading} title={canPreview ? "预览已校验的 ChangeSet" : "当前没有通过校验的 AI ChangeSet"} onClick={onPreview}>画布预览</button>
+                    {harnessTask?.state === "awaitingConfirmation" && <Button variant="secondary" type="button" className="reject" onClick={onCancelPreview}>拒绝变更</Button>}
+                    <Button variant="secondary" type="button" disabled={!canPreview || status === "applied" || isLoading} title={canPreview ? "预览已校验的 ChangeSet" : "当前没有通过校验的 AI ChangeSet"} onClick={onPreview}>画布预览</Button>
                   </>
                 )}
-                <button
+                <Button variant="secondary"
                   type="button"
                   className="apply"
                   disabled={status !== "preview" || !canApply || isLoading}
@@ -341,110 +284,27 @@ export function AiBuilderAssistant({
                   onClick={onApply}
                 >
                   {status === "applied" ? "已全部应用 ✓" : "确认并应用"}
-                </button>
+                </Button>
               </div>
             </div>}
-            <p className="safe-note">{isWorkspace ? "分析基于当前工作界面的数据；看板变更会先生成预览，确认后应用。" : dataAnalysisMode ? rawDataAccessEnabled
-              ? "可按需分析完整原始工作簿，并返回统计结果和可溯源明细；看板修改会先生成预览，确认后应用。"
-              : "当前可分析已导入的数据和汇总。若需查询完整原始工作簿，请重新导入 XLSX；看板修改会先生成预览，确认后应用。"
-              : "看板修改会先生成预览，由你确认后应用。"}</p>
           </div>
         </div>}
       </div>
-      {isWorkspace && <div className="agent-context-bar agent-context-bar-menu">
-        <div className="composer-context-chips">
-          {selectedSource ? <span className="composer-context-chip" title={`优先分析：${selectedSource.name}`}><span aria-hidden="true">▦</span><b>{selectedSource.name}</b><button type="button" disabled={isLoading} aria-label={`取消指定数据表 ${selectedSource.name}`} onClick={() => onSelectDataSource?.("")}>×</button></span>
-            : <span className="composer-context-placeholder"><span aria-hidden="true">✧</span>添加上下文，让回答更有依据</span>}
-        </div>
-        <button type="button" className="context-add-trigger" disabled={isLoading} aria-haspopup="menu" aria-expanded={Boolean(contextMenuAnchor)} onClick={(event) => setContextMenuAnchor(contextMenuAnchor ? null : event.currentTarget)}>添加上下文 <span aria-hidden="true">↗</span></button>
-      </div>}
       <NotebookContextChips options={notebookOptions} selectedIds={selectedNotebookCellIds} disabled={isLoading || notebookContextDisabled}
         onRemove={(id) => onRemoveNotebookCell?.(id)} />
       {activeSemanticModelId && <div className="semantic-context"><span>◇ 使用语义模型：{semanticModels.find((model) => model.id === activeSemanticModelId)?.name}</span>
-        <button type="button" disabled={isLoading} onClick={onManageSemanticModels}>管理</button>
-        <button type="button" disabled={isLoading} aria-label="取消语义模型选择" onClick={() => onSelectSemanticModel?.(null)}>×</button></div>}
-      <div className="prompt-box">
-        {attachmentError && <p className="composer-attachment-error" role="alert">{attachmentError}</p>}
-        {imageAttachments.length > 0 && (
-          <div className="prompt-image-list" aria-label="待发送图片">
-            {imageAttachments.map((file, index) => (
-              <span className="prompt-image-chip" key={`${file.name}_${file.size}_${index}`}>
-                <span aria-hidden="true">▧</span>
-                <span title={file.name}>{file.name}</span>
-                <button
-                  type="button"
-                  aria-label={`移除图片 ${file.name}`}
-                  disabled={isLoading}
-                  onClick={() => onImageAttachmentsChange(imageAttachments.filter((_, itemIndex) => itemIndex !== index))}
-                >×</button>
-              </span>
-            ))}
-          </div>
-        )}
-        <textarea
-          ref={promptRef}
-          aria-label="AI 指令"
-          title="可输入文字，也可按 Ctrl+V 直接粘贴截图"
-          maxLength={1_000}
-          value={instruction}
-          disabled={isLoading}
-          placeholder={isWorkspace ? "问一个关于数据的问题，或描述你想创建的看板…" : dataAnalysisMode ? "例如：分析白夜班差异，或增加 B5FSL01 异常类型柱状图……" : "例如：将本月收入指标标题改为月度总收入……"}
-          onChange={(event) => onInstructionChange(event.target.value)}
-          onPaste={(event) => {
-            const files = clipboardImageFiles(event.clipboardData.items);
-            if (!files.length) return;
-            event.preventDefault();
-            onImageAttachmentsChange([...imageAttachments, ...files]);
-          }}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && (instruction.trim() || imageAttachments.length) && !isLoading) onGenerate();
-          }}
-        />
-        <div className="prompt-box-actions">
-          <span className="prompt-box-meta">
-            {onImportFiles && <input ref={attachmentInputRef} type="file" hidden multiple aria-label="选择文件或图片" accept=".csv,.xlsx,image/jpeg,image/png,image/webp" onChange={(event) => {
-              handleAttachmentFiles(Array.from(event.target.files ?? []));
-              event.target.value = "";
-            }} />}
-            <input
-              ref={imageInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              hidden
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                if (files.length) onImageAttachmentsChange([...imageAttachments, ...files]);
-                event.target.value = "";
-              }}
-            />
-            {onImportFiles ? <button type="button" className="prompt-attach-button context-plus-trigger" aria-label="添加附件或上下文" aria-haspopup="menu" aria-controls="composer-context-menu" aria-expanded={Boolean(contextMenuAnchor)} title="添加文件、数据表或处理结果" disabled={isLoading} onClick={(event) => setContextMenuAnchor(contextMenuAnchor ? null : event.currentTarget)}>＋</button> : <button
-              type="button"
-              className="prompt-attach-button"
-              aria-label="上传图片"
-              title="上传 JPEG、PNG 或 WebP，最多 3 张"
-              disabled={isLoading || imageAttachments.length >= MAX_HARNESS_IMAGE_ATTACHMENTS}
-              onClick={() => imageInputRef.current?.click()}
-            >＋</button>}
-            <span className="prompt-shortcuts">{imageAttachments.length ? `${imageAttachments.length} 张图片 · ` : ""}{instruction.length}/1000 · Ctrl+V 粘贴图片 · Ctrl+Enter 发送</span>
-          </span>
-          {isLoading ? (
-            <button type="button" aria-label="取消 AI 请求" onClick={onCancelRequest}>■</button>
-          ) : (
-            <button type="button" aria-label="发送 AI 指令" disabled={!instruction.trim() && !imageAttachments.length} onClick={onGenerate}>↑</button>
-          )}
-        </div>
-      </div>
+        <Button variant="secondary" type="button" disabled={isLoading} onClick={onManageSemanticModels}>管理</Button>
+        <Button variant="secondary" type="button" disabled={isLoading} aria-label="取消语义模型选择" onClick={() => onSelectSemanticModel?.(null)}>×</Button></div>}
       {contextMenuAnchor && !isLoading && <ComposerContextMenu
         key={`${activeWorkspaceId}:${sessionId ?? "current"}`}
-        anchor={contextMenuAnchor} workspaces={workspaces} activeWorkspaceId={activeWorkspaceId}
+        anchor={contextMenuAnchor} placement="below" workspaces={workspaces} activeWorkspaceId={activeWorkspaceId}
         dataSources={dataSources} activeDataSourceId={activeDataSourceId} results={contextResults}
         notebookOptions={notebookOptions} selectedNotebookCellIds={selectedNotebookCellIds} notebookContextDisabled={notebookContextDisabled}
         onToggleNotebookCell={onToggleNotebookCell} onOpenNotebook={onOpenNotebook}
         semanticModels={semanticModels} activeSemanticModelId={activeSemanticModelId}
         onSelectSemanticModel={(id) => onSelectSemanticModel?.(id)} onManageSemanticModels={onManageSemanticModels}
         onClose={closeContextMenu}
-        onChooseFiles={() => attachmentInputRef.current?.click()}
+        onChooseFiles={() => onImportData?.()}
         onImportData={() => onImportData?.()}
         onSelectWorkspace={(id) => onSelectWorkspace?.(id)}
         onSelectDataSource={(id) => onSelectDataSource?.(id)}

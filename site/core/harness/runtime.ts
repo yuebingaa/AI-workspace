@@ -1,6 +1,9 @@
 import { HarnessModelFormatError, HarnessModelProtocolError } from "./model-errors";
 import { notebookContextSelectionMetadata } from "@/core/notebook/context-selection";
 import type { NotebookCapabilities } from "@/core/notebook/capabilities";
+import type { NotebookDraftRunner, NotebookRuntimeInfoReader } from "@/core/notebook/execution-contracts";
+import type { ConnectionSchemaInspector } from "@/core/connections/contracts";
+import type { EdsRawWorkbook } from "@/core/eds";
 import { withinModelLimit, type HarnessModelLimit } from "./model-limits";
 import { inspectHarnessInput, inspectedModelContext, inputInspectionMessage, shouldInspectHarnessInput, toolNeedsInputInspection } from "./input-inspector";
 import { HARNESS_SEMANTIC_ROUTER_PROMPT, HARNESS_DYNAMIC_PLANNER_PROMPT } from "./model-policy";
@@ -79,7 +82,6 @@ import {
   harnessToolCatalog,
   HarnessToolArgumentsError,
   type HarnessExcelExporter,
-  type HarnessRawWorkbook,
 } from "./tool-registry";
 
 export const DEFAULT_HARNESS_BOUNDS = DEFAULT_HARNESS_LIMITS;
@@ -195,12 +197,12 @@ export interface HarnessRuntimeOptions {
   monotonicNow?: () => number;
   toolExecutor?: typeof executeHarnessTool;
   excelExporter?: HarnessExcelExporter;
-  notebookRunner?: import("./tool-registry").HarnessToolContext["notebookRunner"];
-  pythonRuntimeInfo?: import("./tool-registry").HarnessToolContext["pythonRuntimeInfo"];
+  notebookRunner?: NotebookDraftRunner;
+  pythonRuntimeInfo?: NotebookRuntimeInfoReader;
   /** Server-owned Notebook feature policy; the browser cannot widen it. */
   notebookCapabilities?: NotebookCapabilities;
-  connectionInspector?: import("./tool-registry").HarnessToolContext["connectionInspector"];
-  rawWorkbook?: HarnessRawWorkbook;
+  connectionInspector?: ConnectionSchemaInspector;
+  rawWorkbook?: EdsRawWorkbook;
   mcpRuntime?: HarnessMcpRuntime;
   contextBudget?: Partial<HarnessContextBudget>;
   modelMaxCompletionTokens?: number;

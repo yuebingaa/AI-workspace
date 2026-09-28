@@ -27,13 +27,25 @@ describe("Notebook run ownership", () => {
     expect(control.start("manual")).not.toBeNull();
   });
 
-  it.each(["manual", "auto"] as const)("mode-specific cancellation does not interrupt %s ownership", (kind) => {
+  it.each(["manual", "auto", "draft"] as const)("mode-specific cancellation does not interrupt %s ownership", (kind) => {
     const control = createNotebookRunControl();
     const lease = control.start(kind)!;
     expect(control.cancel(kind === "manual" ? "auto" : "manual")).toBe(false);
     expect(control.isCurrent(lease)).toBe(true);
     expect(control.cancel()).toBe(true);
     expect(control.isCurrent(lease)).toBe(false);
+  });
+
+  it("keeps AI draft execution independent of disabled parameter recomputation", () => {
+    const control = createNotebookRunControl();
+    const lease = control.start("draft")!;
+    expect(control.cancel("auto")).toBe(false);
+    expect(control.isCurrent(lease)).toBe(true);
+    expect(control.start("manual")).toBeNull();
+    expect(control.cancel("draft")).toBe(true);
+    expect(control.isCurrent(lease)).toBe(false);
+    expect(control.start("draft")).toBeNull();
+    expect(control.finish(lease)).toBe(true);
   });
 
   it("timeout aborts use the same commit guard and ownership rules", () => {

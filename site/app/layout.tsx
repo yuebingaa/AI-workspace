@@ -1,14 +1,10 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { normalizeIcpLicense, SiteComplianceFooter } from '@/components/site/SiteComplianceFooter';
+import { StudioTheme } from '@/components/ui/studio-theme';
 import './globals.css';
-import './semantic-models.css';
-// Shared studio palette follows the feature styles so chrome stays consistent.
-import './studio-theme.css';
-import './studio-layout.css';
-import './notebook-cells.css';
-import './files-panel.css';
-import './conversations.css';
+import '@radix-ui/themes/styles.css';
+import './theme-controls.css';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -40,8 +36,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased${icpLicense ? ' has-site-compliance-footer' : ''}`}
       >
-        {children}
-        <SiteComplianceFooter license={icpLicense ?? undefined} />
+        <StudioTheme>
+          {children}
+          <SiteComplianceFooter license={icpLicense ?? undefined} />
+        </StudioTheme>
       </body>
     </html>
   );

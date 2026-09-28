@@ -24,6 +24,7 @@ export function createWireFetch(upstream, { brokerUrl, brokerToken, modelConfig 
       // The existing website explicitly disables thinking and does not set an
       // effort. Do not leak an upstream adapter default into that request.
       delete body.reasoning_effort;
+      body.thinking = { type: 'disabled' };
       return upstream(new Request(request, { body: JSON.stringify(body), redirect: 'error' }));
     }
     throw new Error('Network request is outside the DSH task allowlist.');

@@ -1,3 +1,4 @@
+import { TextInput } from "@/components/ui/fields";
 import { useId, useState } from "react";
 
 /** A form draft is not a recipe value: an empty or incomplete number is not zero. */
@@ -19,7 +20,7 @@ export function RecipeNumberInput({ value, onChange, label, min, max, integer = 
     && (!integer || Number.isInteger(number));
   const invalid = !accepts(parseRecipeNumberInput(raw));
   return <>
-    <input type="number" data-recipe-number="" required step={integer ? 1 : "any"}
+    <TextInput type="number" data-recipe-number="" required step={integer ? 1 : "any"}
       aria-label={label} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined}
       min={min} max={max} value={raw} onChange={(event) => {
         const next = event.target.value;

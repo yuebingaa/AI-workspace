@@ -24,8 +24,6 @@
 .compact-studio .top-actions { justify-self: end; gap: 8px; min-width: 0; }
 .compact-studio .header-save-state { margin-right: 8px; white-space: nowrap; }
 .compact-studio .top-actions > button { min-height: 32px; padding: 6px 11px; font-size: 12px; }
-.compact-studio .top-actions .publish { margin: 0; background: transparent; color: var(--studio-ink); border: 1px solid var(--studio-border); }
-.compact-studio .top-actions .publish:hover { background: var(--studio-soft); }
 .compact-studio .studio-assistant-entry { display: block; border: 1px solid transparent; background: transparent; color: var(--studio-secondary); }
 .compact-studio .studio-assistant-entry[aria-expanded="true"] { background: var(--studio-paper); border-color: var(--studio-hairline); }
 
@@ -72,10 +70,26 @@
 .studio-navigation-settings > summary svg { width: 16px; height: 16px; color: var(--studio-muted); }
 .studio-navigation-settings > summary span { margin-left: auto; }
 .studio-navigation-settings > div > p { margin: 8px; font-size: 10px; line-height: 1.8; color: var(--studio-muted); }
-.studio-navigation-settings label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 12px 8px 6px; color: var(--studio-secondary); font-size: 10px; }
-.studio-navigation-settings select { width: 106px; padding: 5px; border: 1px solid var(--studio-border); border-radius: 4px; background: white; font-size: 10px; }
 .studio-navigation-menu > footer { display: flex; gap: 7px; padding: 11px 8px 2px; border-top: 1px solid var(--studio-hairline); color: var(--studio-muted); font-size: 10px; }
 .studio-navigation-empty { padding: 12px 8px; color: var(--studio-muted); font-size: 11px; line-height: 1.8; }
+/* Radix owns positioning, outside clicks, Escape and focus restoration. The menu keeps its existing navigation semantics. */
+.studio-navigation-popover { z-index: 30; outline: none; }
+.studio-navigation-popover .studio-navigation-menu { position: static; top: auto; left: auto; width: 316px; max-height: min(760px, calc(100dvh - 80px)); padding: 14px; border-radius: 12px; box-shadow: 0 18px 48px #25231e18, 0 3px 10px #25231e0b; }
+.studio-navigation-popover[data-state="open"] { animation: studio-menu-enter 140ms ease-out; transform-origin: var(--radix-popover-content-transform-origin); }
+.studio-navigation-menu > header { padding-bottom: 15px; }
+.studio-navigation-menu > header b { font-size: 13px; }
+.studio-navigation-menu > header small { font-size: 11px; }
+.studio-navigation-quick { gap: 8px; margin-bottom: 14px; }
+.studio-navigation-quick button { height: 36px; border-radius: 7px; font-size: 12px; }
+.studio-navigation-search { margin-bottom: 9px; padding: 9px 10px; border: 1px solid var(--studio-hairline); border-radius: 7px; background: var(--studio-paper); }
+.studio-navigation-search:focus-within { border-color: var(--studio-border-strong); box-shadow: 0 0 0 2px #29272312; }
+.studio-navigation-search input { font-size: 12px; }
+.studio-navigation-item { min-height: 38px; border-radius: 6px; font-size: 12px; }
+.studio-navigation-menu button, .studio-navigation-item, .studio-navigation-settings > summary, .studio-navigation-toggle, .compact-studio .workspace-mode-tabs button { transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, transform 140ms ease; }
+.studio-navigation-menu button:active:not(:disabled), .studio-navigation-item:active, .studio-navigation-settings > summary:active, .studio-navigation-toggle:active, .compact-studio .workspace-mode-tabs button:active { transform: translateY(1px); }
+.studio-navigation-menu button:focus-visible, .studio-navigation-item:focus-visible, .studio-navigation-settings > summary:focus-visible, .studio-navigation-toggle:focus-visible, .compact-studio .workspace-mode-tabs button:focus-visible { outline: 2px solid var(--studio-ink); outline-offset: -2px; }
+@keyframes studio-menu-enter { from { opacity: 0; transform: translateY(-4px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .studio-navigation-popover[data-state="open"] { animation: none; } .studio-navigation-menu button, .studio-navigation-item, .studio-navigation-settings > summary, .studio-navigation-toggle, .compact-studio .workspace-mode-tabs button { transition: none; } }
 dialog.ai-api-settings-overlay { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; border: 0; color: var(--studio-ink); }
 dialog.ai-api-settings-overlay::backdrop { background: transparent; }
 
@@ -114,43 +128,14 @@ dialog.ai-api-settings-overlay::backdrop { background: transparent; }
 .has-site-compliance-footer .compact-studio.with-workspace-modes .workspace { height: calc(100dvh - 84px); }
 
 /* Quiet Agent landing; the composer remains mounted across all three views. */
-.compact-studio .workspace-agent .agent-workspace-panel, .compact-studio .workspace-agent .agent-workspace-empty { background: var(--studio-surface); background-image: none; }
+.compact-studio .workspace-agent .agent-workspace-panel { background: var(--studio-surface); background-image: none; }
 .compact-studio .workspace-agent .agent-workspace-panel .assistant-head { display: none; }
 .compact-studio .agent-workspace-panel .conversation { padding: 24px max(24px, calc((100% - 760px) / 2)); }
-.compact-studio .assistant-empty .conversation { display: flex; }
-.compact-studio .workspace-agent .agent-workspace-empty { overflow-y: auto; padding-bottom: clamp(24px, 6vh, 60px); }
-.compact-studio .workspace-agent .agent-workspace-empty > .conversation { flex: 0 0 auto; margin-top: auto; padding-top: 32px; padding-bottom: 24px; overflow: visible; scrollbar-gutter: auto; }
-.compact-studio .agent-workspace-welcome { padding: 0; }
-.compact-studio .agent-welcome-art { width: 168px; height: 108px; margin: 0 auto 24px; }
-.compact-studio .agent-workspace-welcome h1 { font-size: 32px; font-weight: 600; letter-spacing: -.035em; line-height: 1.45; }
-.compact-studio .agent-welcome-description { margin: 12px 0 30px; color: var(--studio-secondary); font-size: 14px; line-height: 1.8; }
-.compact-studio .agent-suggestions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: none; gap: 10px; }
-.compact-studio .agent-suggestions button { align-items: center; min-height: 82px; min-width: 0; gap: 10px; padding: 15px 12px; border-color: var(--studio-hairline); border-radius: 6px; background: var(--studio-surface); transform: none; }
-.compact-studio .agent-suggestions button:hover { background: var(--studio-paper); border-color: var(--studio-border-strong); transform: none; }
-.compact-studio .agent-suggestion-icon { display: grid; place-items: center; flex: 0 0 30px; height: 32px; border-radius: 5px; background: var(--studio-paper); color: var(--studio-secondary); }
-.compact-studio .agent-suggestions .agent-suggestion-copy { display: grid; gap: 5px; min-width: 0; }
-.compact-studio .agent-suggestions .agent-suggestion-copy b { color: var(--studio-ink); font-size: 13px; font-weight: 550; }
-.compact-studio .agent-suggestions .agent-suggestion-copy small { color: var(--studio-secondary); font-size: 11px; line-height: 1.6; white-space: normal; }
-.compact-studio .agent-suggestions .agent-suggestion-arrow { font-size: 13px; }
 .compact-studio .agent-workspace-panel > .assistant-flow { width: min(760px, calc(100% - 48px)); }
-.compact-studio .agent-workspace-panel .agent-context-bar-menu { width: min(760px, calc(100% - 48px)); min-height: 32px; margin: 0 auto 7px; padding: 4px 2px; border: 0; border-radius: 0; background: transparent; }
-.compact-studio .agent-context-bar-menu > .context-add-trigger { background: transparent; border-color: var(--studio-hairline); padding: 6px 9px; font-size: 11px; }
-.compact-studio .prompt-box { border-color: var(--studio-border); box-shadow: 0 2px 6px #24232104; }
-.compact-studio .agent-workspace-panel .prompt-box { width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 17px; border-radius: 8px; border-color: var(--studio-border); box-shadow: 0 4px 18px #24232107; }
-.compact-studio .workspace-agent .agent-workspace-empty > .prompt-box { margin-bottom: auto; }
-.compact-studio .agent-workspace-panel .prompt-box textarea { min-height: 64px; font-size: 14px; }
-.compact-studio .prompt-box:focus-within { border-color: var(--studio-secondary); box-shadow: 0 0 0 3px #24232108; }
-.compact-studio .prompt-box .prompt-box-actions { padding-top: 8px; border-top: 1px solid var(--studio-hairline); }
-.compact-studio .prompt-box .context-plus-trigger { background: transparent; }
 .compact-studio .assistant-head { height: 48px; padding: 9px 14px; border-color: var(--studio-hairline); }
 .compact-studio .assistant-head small { display: none; }
 .compact-studio .assistant-head b { font-size: 12px; font-weight: 500; }
 .compact-studio .assistant-head .ai-mark { width: 22px; height: 22px; flex-basis: 22px; background: transparent; color: var(--studio-secondary); }
-.compact-studio .assistant-empty > .context-pill { display: none; }
-.compact-studio .agent-workspace-welcome.compact { padding: 16px 0; }
-.compact-studio .agent-workspace-welcome.compact .agent-welcome-art { width: 116px; height: 90px; margin-bottom: 20px; }
-.compact-studio .agent-workspace-welcome.compact h1 { font-size: 16px; }
-.compact-studio .agent-workspace-welcome.compact .agent-welcome-description { max-width: 255px; margin: 10px auto 0; font-size: 12px; }
 
 /* Document canvas: restrained chrome, an open starting area and focused cells. */
 .compact-studio .notebook-panel { padding: 22px clamp(24px, 3vw, 48px) 56px; background: var(--studio-surface); container: notebook / inline-size; scrollbar-width: thin; }
@@ -266,10 +251,6 @@ dialog.ai-api-settings-overlay::backdrop { background: transparent; }
   .compact-studio .notebook-data-options small { margin: 0; }
 }
 @media (max-height: 780px) and (min-width: 961px) {
-  .compact-studio .workspace-agent .agent-workspace-empty > .conversation { padding-top: 20px; padding-bottom: 18px; }
-  .compact-studio .agent-workspace-welcome:not(.compact) .agent-welcome-art { width: 130px; height: 84px; margin-bottom: 14px; }
-  .compact-studio .agent-workspace-welcome:not(.compact) h1 { font-size: 28px; }
-  .compact-studio .agent-workspace-welcome:not(.compact) .agent-welcome-description { margin-bottom: 22px; }
   .compact-studio .notebook-start { margin-top: 36px; }
   .compact-studio .notebook-data-entry { margin-top: 24px; }
   .compact-studio .notebook-panel.is-empty .notebook-add { margin-top: 28px; }
@@ -283,21 +264,6 @@ dialog.ai-api-settings-overlay::backdrop { background: transparent; }
 .compact-studio .empty-workspace-canvas h2 { font-size: 23px; }
 .compact-studio .spreadsheet-workspace-empty { background: var(--studio-paper); border-color: var(--studio-border); }
 
-.compact-studio .assistant-answer { min-width: 0; max-width: 100%; color: var(--studio-secondary); overflow-wrap: anywhere; line-height: 1.8; }
-.compact-studio .assistant-answer > p { margin: 0 0 12px; white-space: pre-wrap; }
-.compact-studio .assistant-answer > :last-child { margin-bottom: 0; }
-.compact-studio .assistant-answer h3, .compact-studio .assistant-answer h4 { margin: 16px 0 8px; color: var(--studio-ink); line-height: 1.6; font-size: 1em; font-weight: 650; }
-.compact-studio .assistant-answer h3 { font-size: 1.08em; }
-.compact-studio .assistant-answer > :first-child { margin-top: 0; }
-.compact-studio .assistant-answer strong { color: var(--studio-ink); font-weight: 650; }
-.compact-studio .assistant-answer ul, .compact-studio .assistant-answer ol { margin: 8px 0 12px; padding-inline-start: 24px; }
-.compact-studio .assistant-answer ul { list-style: disc; }
-.compact-studio .assistant-answer ol { list-style: decimal; }
-.compact-studio .assistant-answer li { margin-block: 4px; }
-.compact-studio .assistant-answer code { padding: 1px 4px; border-radius: 4px; background: var(--studio-paper); color: var(--studio-ink); font: .92em/1.7 Consolas, "SFMono-Regular", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.compact-studio .assistant-answer pre { max-width: 100%; margin: 12px 0; padding: 12px; overflow-x: auto; border: 1px solid var(--studio-border); border-radius: 7px; background: var(--studio-paper); white-space: pre; }
-.compact-studio .assistant-answer pre code { padding: 0; border-radius: 0; background: transparent; white-space: pre; overflow-wrap: normal; }
-.compact-studio .assistant-answer pre:focus-visible { outline: 2px solid var(--studio-secondary); outline-offset: -2px; }
 
 @media (max-width: 1200px) {
   .compact-studio .header-save-state { display: none; }

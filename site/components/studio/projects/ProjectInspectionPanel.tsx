@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { requestProjectInspection } from "@/core/projects/inspection-client";
 import type { ProjectInspection } from "@/core/projects/inspection";
@@ -50,10 +51,10 @@ export function ProjectInspectionPanel({ path, onBack }: { path: string; onBack:
   }, [path, attempt]);
   return <section aria-label="项目步骤只读查看" className="project-inspection-panel">
     <div className="data-browser-section-title"><div><h3>项目步骤 · 只读查看</h3><p>独立检查，不打开或覆盖当前工作区。</p></div>
-      <button ref={backRef} onClick={onBack}>返回项目列表</button></div>
+      <Button variant="secondary" ref={backRef} onClick={onBack}>返回项目列表</Button></div>
     {state.status === "loading" ? <p role="status">正在读取项目步骤… 可随时返回取消。</p>
       : state.status === "error" ? <div className="data-browser-error" role="alert">{state.message}</div>
         : <ProjectInspectionContent inspection={state.data} />}
-    {state.status !== "loading" && <button onClick={() => { backRef.current?.focus(); setState({ status: "loading" }); setAttempt((value) => value + 1); }}>重新读取</button>}
+    {state.status !== "loading" && <Button variant="secondary" onClick={() => { backRef.current?.focus(); setState({ status: "loading" }); setAttempt((value) => value + 1); }}>重新读取</Button>}
   </section>;
 }

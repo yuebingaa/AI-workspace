@@ -5,8 +5,7 @@
   --agent-chat-line-height: 1.72;
 }
 
-.right-panel .conversation,
-.right-panel .prompt-box textarea {
+.right-panel .conversation {
   font-family: var(--agent-chat-font-family);
   font-kerning: normal;
   text-rendering: optimizeLegibility;
@@ -28,33 +27,10 @@
   font-weight: 600;
 }
 
-.right-panel .user-message {
-  font-size: var(--agent-chat-user-size);
-  font-weight: 400;
-  line-height: 1.65;
-  letter-spacing: 0;
-}
 
-.right-panel .prompt-box textarea {
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.6;
-  letter-spacing: 0;
-}
 
 .workspace-agent .agent-workspace-panel {
   --agent-chat-assistant-size: 16px;
   --agent-chat-user-size: 15px;
   --agent-chat-line-height: 1.75;
-}
-
-.conversation-retry {
-  margin-top: 8px;
-  border: 1px solid currentColor;
-  border-radius: 6px;
-  padding: 4px 10px;
-  background: transparent;
-  color: inherit;
-  font-size: 12px;
-  cursor: pointer;
 }

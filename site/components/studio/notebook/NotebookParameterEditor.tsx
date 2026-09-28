@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button";
+import { SelectField, SelectItem, TextArea, TextInput } from "@/components/ui/fields";
 import { useState, type FormEvent } from "react";
 import { notebookCellSchema, type NotebookCell } from "@/core/notebook/definition";
 import { notebookParameterSchema, type NotebookParameter } from "@/core/notebook/parameter";
@@ -58,26 +60,26 @@ export function NotebookParameterEditor({ cell, disabled, onSave, onCancel }: {
 
   return <form className="notebook-editor" onSubmit={submit} noValidate>
     <fieldset disabled={disabled}>
-      <label>单元名称<input value={title} maxLength={120} required onChange={(event) => setTitle(event.target.value)} /></label>
-      <label>输出表名（SQL 中使用）<input value={outputName} required maxLength={120} onChange={(event) => setOutputName(event.target.value)} /></label>
-      <label>参数类型<select aria-label="参数类型" value={type} onChange={(event) => changeType(event.target.value)}>
-        <option value="text">文本</option><option value="number">数值</option><option value="date">日期</option><option value="select">单选</option>
-      </select></label>
-      {type === "text" && <label className="notebook-wide">参数值<textarea aria-label="参数值" rows={3} value={value} maxLength={2000} onChange={(event) => setValue(event.target.value)} /></label>}
-      {type === "number" && <label>参数值<input aria-label="参数值" inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} /></label>}
-      {type === "date" && <label>参数值<input aria-label="参数值" type="date" value={value} onChange={(event) => setValue(event.target.value)} /></label>}
+      <label>单元名称<TextInput value={title} maxLength={120} required onChange={(event) => setTitle(event.target.value)} /></label>
+      <label>输出表名（SQL 中使用）<TextInput value={outputName} required maxLength={120} onChange={(event) => setOutputName(event.target.value)} /></label>
+      <label>参数类型<SelectField aria-label="参数类型" value={type} onValueChange={(selectedValue) => changeType(selectedValue)}>
+        <SelectItem value="text">文本</SelectItem><SelectItem value="number">数值</SelectItem><SelectItem value="date">日期</SelectItem><SelectItem value="select">单选</SelectItem>
+      </SelectField></label>
+      {type === "text" && <label className="notebook-wide">参数值<TextArea aria-label="参数值" rows={3} value={value} maxLength={2000} onChange={(event) => setValue(event.target.value)} /></label>}
+      {type === "number" && <label>参数值<TextInput aria-label="参数值" inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} /></label>}
+      {type === "date" && <label>参数值<TextInput aria-label="参数值" type="date" value={value} onChange={(event) => setValue(event.target.value)} /></label>}
       {type === "select" && <>
         <div className="notebook-wide notebook-parameter-options" role="group" aria-label="单选选项">
           {options.map((option, index) => <div key={index}>
-            <label>单选选项 {index + 1}<textarea aria-label={`单选选项 ${index + 1}`} rows={2} maxLength={200} value={option} onChange={(event) => setOptions(options.map((item, i) => i === index ? event.target.value : item))} /></label>
-            <button type="button" aria-label={`移除选项 ${index + 1}`} disabled={options.length <= 1} onClick={() => setOptions(options.filter((_, i) => i !== index))}>移除</button>
+            <label>单选选项 {index + 1}<TextArea aria-label={`单选选项 ${index + 1}`} rows={2} maxLength={200} value={option} onChange={(event) => setOptions(options.map((item, i) => i === index ? event.target.value : item))} /></label>
+            <Button variant="secondary" type="button" aria-label={`移除选项 ${index + 1}`} disabled={options.length <= 1} onClick={() => setOptions(options.filter((_, i) => i !== index))}>移除</Button>
           </div>)}
-          <button type="button" disabled={options.length >= 50} onClick={() => setOptions([...options, ""])}>添加选项</button>
+          <Button variant="secondary" type="button" disabled={options.length >= 50} onClick={() => setOptions([...options, ""])}>添加选项</Button>
         </div>
-        <label>参数值<select aria-label="参数值" value={value} onChange={(event) => setValue(event.target.value)}>
-          {!options.includes(value) && <option value={value}>当前值已不在选项中，请重新选择</option>}
-          {options.map((option, index) => <option key={index} value={option}>{option || "（空选项，保存时需修正）"}</option>)}
-        </select></label>
+        <label>参数值<SelectField aria-label="参数值" value={value} onValueChange={(selectedValue) => setValue(selectedValue)}>
+          {!options.includes(value) && <SelectItem value={value}>当前值已不在选项中，请重新选择</SelectItem>}
+          {options.map((option, index) => <SelectItem key={index} value={option}>{option || "（空选项，保存时需修正）"}</SelectItem>)}
+        </SelectField></label>
       </>}
       <small className="notebook-wide">运行后输出一行 <code>value</code> 列。请在下游 SQL / Python 显式勾选此输入表；默认手动运行，仅显式开启参数自动重算后，保存值变更才触发相关步骤；不向数据库 SQL 插入值。</small>
       <small className="notebook-wide">SQL：<code>(SELECT value FROM {outputName || "参数表名"})</code>；Python：<code>{outputName || "参数表名"}[&quot;value&quot;].iloc[0]</code>。日期在 SQL 中比较时请显式 CAST；Python 已转换为日期列，与带时区数据比较时请显式统一时区。</small>
@@ -85,6 +87,6 @@ export function NotebookParameterEditor({ cell, disabled, onSave, onCancel }: {
       <small className="notebook-wide">参数值会随 Notebook 保存，并可能进入 AI 上下文。请勿填写密码、API Key 或其他秘密。</small>
     </fieldset>
     {error && <p role="alert">{error}</p>}
-    <footer><button type="button" onClick={onCancel}>取消编辑</button><button type="submit" className="notebook-primary" disabled={disabled}>保存单元</button></footer>
+    <footer><Button variant="secondary" type="button" onClick={onCancel}>取消编辑</Button><Button variant="primary" type="submit" className="notebook-primary" disabled={disabled}>保存单元</Button></footer>
   </form>;
 }

@@ -148,9 +148,9 @@ test("浏览器资源拒绝冒用锁定版本及替换后的可执行文件", as
   await assert.rejects(verifyPinnedBrowser(browser, { browserVersion: "151.0.7922.34", revision: "1234" }), /锁定资源不一致/u);
 });
 
-test("生产载体白名单包含所有生产 mjs，但不包含测试", async () => {
+test("生产载体白名单包含所有生产 mjs/cjs，但不包含测试", async () => {
   const { readdir } = await import("node:fs/promises");
-  const production = (await readdir(join(projectRoot, "runtime/dsh"))).filter((name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs"));
+  const production = (await readdir(join(projectRoot, "runtime/dsh"))).filter((name) => /\.[mc]js$/u.test(name) && !/\.test\.[mc]js$/u.test(name));
   assert.deepEqual([...DSH_CARRIER_FILES].sort(), production.sort());
 });
 

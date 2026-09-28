@@ -14,11 +14,20 @@ function availability(overrides: Partial<NotebookResultAvailability> = {}): Note
     canSaveDataset: true, canSnapshot: false, ...overrides };
 }
 describe("Notebook result preview scope", () => {
+  it.each(["incomplete", "inconsistent", "unknown"] as const)("keeps %s scope visible while the chart data table is collapsed", completeness => {
+    const chart: NotebookCell = { id: "chart", kind: "chart", title: "受限图表", inputCellId: "source", chartType: "bar", categoryField: "value", valueFields: ["value"] };
+    const html = renderToStaticMarkup(<NotebookResult cell={chart} table={table(2, true)} availability={availability({ previewRowCount: 2, knownRowCount: null, completeness, canSaveDataset: false })} />);
+    const controls = html.match(/<div class="notebook-result-view"[\s\S]*?<\/div>/u)?.[0] ?? "";
+    expect(controls).toContain("当前预览 2 行");
+    expect(controls).toContain(completeness === "incomplete" ? "结果不完整" : completeness === "inconsistent" ? "结果元数据不一致" : "完整性未知");
+    expect(controls).not.toContain("完整结果");
+    expect(html).toContain('<div hidden="" class="notebook-result"><div class="notebook-table-toolbar">');
+  });
   it("offers accessible sorting and explicitly preview-only export without a query action", () => {
     const html = renderToStaticMarkup(<NotebookResult cell={cell} table={table(45)} />);
     expect(html).toContain('aria-label="按合成值排序"');
     expect(html).toContain('aria-sort="none"');
-    expect(html).toContain("仅对当前预览排序，不会重新查询或改变下游计算。");
+    expect(html).toContain("搜索与排序仅作用于已返回的预览，不会重新查询或改变下游计算。");
     expect(html).toContain("原始顺序");
     expect(html).toContain('aria-label="当前预览导出"');
     expect(html).toContain("导出当前预览 CSV");

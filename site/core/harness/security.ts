@@ -6,9 +6,14 @@ const secretPatterns = [
   /reasoning_content\s*[=:]\s*[^,}\n]+/gi,
 ];
 
+/** Redaction and display truncation are separate: redact before applying a limit. */
+export function redactHarnessSecrets(value: string): string {
+  return secretPatterns.reduce((text, pattern) => text.replace(pattern, "[已脱敏]"), value);
+}
+
 export function sanitizeHarnessText(value: unknown, fallback = "Harness 执行失败，请稍后重试。"): string {
   const raw = value instanceof Error ? value.message : typeof value === "string" ? value : fallback;
-  return secretPatterns.reduce((text, pattern) => text.replace(pattern, "[已脱敏]"), raw).slice(0, 1_000) || fallback;
+  return redactHarnessSecrets(raw).slice(0, 1_000) || fallback;
 }
 
 export function jsonByteLength(value: unknown): number {

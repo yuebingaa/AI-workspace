@@ -1,5 +1,8 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { SelectField, SelectItem } from "@/components/ui/fields";
 import { useEffect, useRef, useState } from "react";
 import readXlsxFile, { type Sheet, type SheetData } from "read-excel-file/browser";
 import { CSV_UPLOAD_LIMITS, type DatasetUploadResponse } from "@/core/datasets";
@@ -202,9 +205,10 @@ export function CsvUploadDialog({
   }
 
   return (
-    <div className="csv-upload-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-      <section className="csv-upload-dialog multi-spreadsheet-dialog" role="dialog" aria-modal="true" aria-label="导入本机表格">
-        <header><div><small>GENERAL SPREADSHEET IMPORT</small><h2>导入本机表格</h2></div><button type="button" aria-label={busy ? "取消导入" : "关闭"} onClick={cancelOrClose}>×</button></header>
+    <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}>
+      <DialogContent maxWidth="780px" className="csv-upload-dialog multi-spreadsheet-dialog" aria-label="导入本机表格" aria-describedby={undefined}
+        onEscapeKeyDown={event => { if (busy) event.preventDefault(); }} onPointerDownOutside={event => { if (busy) event.preventDefault(); }}>
+        <header><div><small>GENERAL SPREADSHEET IMPORT</small><DialogTitle>导入本机表格</DialogTitle></div><Button variant="ghost" size="icon" type="button" aria-label={busy ? "取消导入" : "关闭"} onClick={cancelOrClose}>×</Button></header>
         {prepared.length === 0 ? (
           <div
             className={`csv-drop-zone${dragging ? " dragging" : ""}${busy ? " busy" : ""}`}
@@ -220,28 +224,28 @@ export function CsvUploadDialog({
             <span className="csv-upload-icon">XLSX</span>
             <h3>{preparing ? "正在读取文件结构" : "拖拽 CSV 或 XLSX 到这里"}</h3>
             <p>{preparing ? "请稍候…" : `支持一次多选，最多 ${MAX_BATCH_FILES} 份；XLSX 可分别选择工作表`}</p>
-            {!preparing && <div className="spreadsheet-upload-entry-actions"><button type="button" className="primary" onClick={() => inputRef.current?.click()}>选择多份文件</button>{onOpenEdsImport && <button type="button" onClick={() => { onClose(); onOpenEdsImport(); }}>EDS 模板导入</button>}</div>}
+            {!preparing && <div className="spreadsheet-upload-entry-actions"><Button variant="primary" type="button" className="primary" onClick={() => inputRef.current?.click()}>选择多份文件</Button>{onOpenEdsImport && <Button variant="secondary" type="button" onClick={() => { onClose(); onOpenEdsImport(); }}>EDS 模板导入</Button>}</div>}
           </div>
         ) : (
           <div className="spreadsheet-upload-queue">
-            <div className="spreadsheet-upload-queue-head"><div><b>待导入 {prepared.length} 份文件</b><span>每份文件可放入不同的工作界面</span></div><button type="button" onClick={() => inputRef.current?.click()} disabled={busy || prepared.length >= MAX_BATCH_FILES}>继续添加</button></div>
+            <div className="spreadsheet-upload-queue-head"><div><b>待导入 {prepared.length} 份文件</b><span>每份文件可放入不同的工作界面</span></div><Button variant="secondary" type="button" onClick={() => inputRef.current?.click()} disabled={busy || prepared.length >= MAX_BATCH_FILES}>继续添加</Button></div>
             <div className="spreadsheet-upload-file-list">
               {prepared.map((item, index) => (
                 <article className={`spreadsheet-upload-file${progress && uploadIndex === index ? " active" : ""}`} key={item.id}>
                   <span className="spreadsheet-upload-file-icon">{item.kind.toUpperCase()}</span>
                   <div className="spreadsheet-upload-file-name"><b title={item.file.name}>{item.file.name}</b><small>{(item.file.size / 1024).toFixed(1)} KiB</small></div>
                   {item.kind === "xlsx" && (
-                    <label>工作表<select value={item.selectedSheet} disabled={busy} onChange={(event) => updatePrepared(item.id, { selectedSheet: event.target.value })}>{item.sheets.map((sheet) => <option key={sheet.sheet} value={sheet.sheet}>{sheet.sheet}</option>)}</select></label>
+                    <label>工作表<SelectField value={item.selectedSheet} disabled={busy} onValueChange={(selectedValue) => updatePrepared(item.id, { selectedSheet: selectedValue })}>{item.sheets.map((sheet) => <SelectItem key={sheet.sheet} value={sheet.sheet}>{sheet.sheet}</SelectItem>)}</SelectField></label>
                   )}
                   {workspaceOptions.length > 0 && (
-                    <label>放入界面<select value={item.targetWorkspaceId} disabled={busy} onChange={(event) => updatePrepared(item.id, { targetWorkspaceId: event.target.value })}>{workspaceOptions.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.label}</option>)}</select></label>
+                    <label>放入界面<SelectField value={item.targetWorkspaceId} disabled={busy} onValueChange={(selectedValue) => updatePrepared(item.id, { targetWorkspaceId: selectedValue })}>{workspaceOptions.map((workspace) => <SelectItem key={workspace.id} value={workspace.id}>{workspace.label}</SelectItem>)}</SelectField></label>
                   )}
-                  <button type="button" className="spreadsheet-upload-remove" disabled={busy} aria-label={`移除 ${item.file.name}`} onClick={() => setPrepared((current) => current.filter((candidate) => candidate.id !== item.id))}>×</button>
+                  <Button variant="secondary" type="button" className="spreadsheet-upload-remove" disabled={busy} aria-label={`移除 ${item.file.name}`} onClick={() => setPrepared((current) => current.filter((candidate) => candidate.id !== item.id))}>×</Button>
                 </article>
               ))}
             </div>
             {progress && <div className="spreadsheet-upload-progress"><span>{uploadIndex + 1}/{prepared.length} · {prepared[uploadIndex]?.file.name} · {phaseLabels[progress.phase]} {progress.percent}%</span><div className="csv-progress" aria-label={`${phaseLabels[progress.phase]} ${progress.percent}%`}><i style={{ width: `${progress.percent}%` }} /></div></div>}
-            <footer className="spreadsheet-upload-actions"><button type="button" onClick={cancelOrClose}>{progress ? "取消" : "返回"}</button><button type="button" className="primary" disabled={busy} onClick={() => void uploadAll()}>导入 {prepared.length} 份文件</button></footer>
+            <footer className="spreadsheet-upload-actions"><Button variant="secondary" type="button" onClick={cancelOrClose}>{progress ? "取消" : "返回"}</Button><Button variant="primary" type="button" className="primary" disabled={busy} onClick={() => void uploadAll()}>导入 {prepared.length} 份文件</Button></footer>
           </div>
         )}
         <input
@@ -258,7 +262,7 @@ export function CsvUploadDialog({
           <li>XLSX 每份选择一个工作表生成独立数据源，原工作簿仍可会话内查看</li>
           <li>{projectMode ? "原始文件和数据表保存到当前本地项目，不按临时保留期过期" : "注册数据源最多保留 30 分钟；未启用本地持久化时重启失效"}</li>
         </ul>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

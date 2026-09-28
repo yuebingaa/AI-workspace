@@ -1,5 +1,7 @@
+// @vitest-environment happy-dom
+import { buttonMarkup } from "@/test-support/markup";
 import type { ComponentProps } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "@/test-support/render-themed";
 import { describe, expect, it } from "vitest";
 import type { NotebookDocument } from "@/core/notebook/contracts";
 import { NotebookPanel } from "./NotebookPanel";
@@ -81,18 +83,23 @@ describe("Notebook Python capability UI", () => {
 
     const python = article(html, "Python单元 Python 清洗");
     expect(python).toContain("python_out = raw.copy()");
-    expect(python).toMatch(/<button type="button" disabled="" title="Python 能力已关闭，定义已保留/iu);
-    expect(python).toContain('<button type="button" data-delete-cell-id="python">删除</button>');
-    expect(python).toMatch(/<button type="button" disabled="" title="Python 能力已关闭[^>]*>▶ 运行<\/button>/iu);
+    expect(buttonMarkup(python, "编辑").disabled).toBe(true);
+    expect(buttonMarkup(python, "编辑").title).toContain("Python 能力已关闭");
+    const menu = python.match(/<button[^>]*data-cell-menu-id="python"[^>]*>/u)?.[0];
+    expect(menu).toContain('aria-label="更多操作"');
+    expect(menu).not.toContain('disabled=""');
+    expect(buttonMarkup(python, "▶ 运行").disabled).toBe(true);
+    expect(buttonMarkup(python, "▶ 运行").title).toContain("Python 能力已关闭");
 
     const downstream = article(html, "表格单元 Python 下游");
     expect(downstream).toContain("上游能力阻塞");
     expect(downstream).toMatch(/title="上游 Python 能力已关闭，本步骤暂不能运行。"[^>]*>▶ 运行<\/button>/iu);
 
     const sql = article(html, "SQL单元 独立 SQL");
-    expect(sql).toContain('<button type="button">编辑</button>');
-    expect(sql).toContain('<button type="button">▶ 运行</button>');
-    expect(html).toMatch(/disabled="" title="Python 能力已关闭[^>]*>▶ 全部运行<\/button>/iu);
+    expect(buttonMarkup(sql, "编辑").disabled).toBe(false);
+    expect(buttonMarkup(sql, "▶ 运行").disabled).toBe(false);
+    expect(buttonMarkup(html, "▶ 全部运行").disabled).toBe(true);
+    expect(buttonMarkup(html, "▶ 全部运行").title).toContain("Python 能力已关闭");
   });
 
   it("restores the original creation and cell actions when Python is enabled and available", () => {
@@ -100,8 +107,8 @@ describe("Notebook Python capability UI", () => {
     expect(html).toContain('aria-label="＋ Python"');
     expect(html).not.toContain("Python 能力已关闭，定义已保留");
     const python = article(html, "Python单元 Python 清洗");
-    expect(python).toContain('<button type="button">编辑</button>');
-    expect(python).toContain('<button type="button">▶ 运行</button>');
+    expect(buttonMarkup(python, "编辑").disabled).toBe(false);
+    expect(buttonMarkup(python, "▶ 运行").disabled).toBe(false);
   });
 
   it("shows the server's missing-resource reason while preserving code and independent SQL actions", () => {
@@ -111,9 +118,10 @@ describe("Notebook Python capability UI", () => {
     const python = article(html, "Python单元 Python 清洗");
     expect(python).toContain(`role="status">Python 能力已关闭，定义已保留。 ${reason}`);
     expect(python).toContain("python_out = raw.copy()");
-    expect(python).toMatch(/<button type="button" disabled="" title="Python 能力已关闭[^>]*>▶ 运行<\/button>/iu);
+    expect(buttonMarkup(python, "▶ 运行").disabled).toBe(true);
+    expect(buttonMarkup(python, "▶ 运行").title).toContain("Python 能力已关闭");
     expect(html).not.toContain('aria-label="＋ Python"');
-    expect(article(html, "SQL单元 独立 SQL")).toContain('<button type="button">▶ 运行</button>');
+    expect(buttonMarkup(article(html, "SQL单元 独立 SQL"), "▶ 运行").disabled).toBe(false);
   });
 
   it("renders capability reasons as text instead of markup", () => {
@@ -142,6 +150,6 @@ describe("Notebook Python capability UI", () => {
     const html = renderToStaticMarkup(<NotebookPanel {...props} draft={draft} pythonCapability={disabledPython} />);
     const review = html.match(/<section class="notebook-draft"[\s\S]*?<\/section>/u)?.[0] ?? "";
     expect(review).toContain("能力关闭期间不能修改");
-    expect(review).toMatch(/<button type="button" class="notebook-primary" disabled="">采用草稿<\/button>/u);
+    expect(buttonMarkup(review, "采用草稿").disabled).toBe(true);
   });
 });

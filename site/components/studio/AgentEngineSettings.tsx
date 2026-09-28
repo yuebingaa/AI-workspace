@@ -1,118 +1,107 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { agentEngineSettingsSchema, type AgentEngineSettings as AgentEngineStatus } from "@/core/agent-engines/contracts";
+import { dshPluginSettingsSchema, type DshPluginSettings } from "@/core/agent-engines/plugin-settings";
+import { OfficialSettingsFrame } from "./dsh-settings/OfficialSettingsFrame";
 import { containDialogFocus } from "./dialog-focus";
 import "@/app/agent-engine-settings.css";
 
-type Engine = AgentEngineStatus["engine"];
-const endpoint = "/api/settings/agent-engine";
-
-export async function readAgentEngineSettingsResponse(response: Response): Promise<AgentEngineStatus> {
+const engineEndpoint = "/api/settings/agent-engine";
+const pluginEndpoint = "/api/settings/dsh-plugins";
+async function readPayload(response: Response): Promise<unknown> {
   let payload: unknown;
   try { payload = await response.json(); }
-  catch { throw new Error("执行引擎设置响应格式无效，请刷新状态后重试。"); }
+  catch { throw new Error("设置响应格式无效，请刷新后重试。"); }
   if (!response.ok) {
     const error = payload && typeof payload === "object" && "error" in payload ? payload.error : undefined;
     const message = error && typeof error === "object" && "message" in error ? error.message : undefined;
-    throw new Error(typeof message === "string" ? message.slice(0, 500) : "无法读取或更新执行引擎设置。");
+    throw new Error(typeof message === "string" ? message.slice(0, 500) : "无法读取或保存设置。");
   }
-  const parsed = agentEngineSettingsSchema.safeParse(payload);
-  if (!parsed.success) throw new Error("执行引擎设置响应格式无效，请刷新状态后重试。");
+  return payload;
+}
+export async function readAgentEngineSettingsResponse(response: Response): Promise<AgentEngineStatus> {
+  const parsed = agentEngineSettingsSchema.safeParse(await readPayload(response));
+  if (!parsed.success) throw new Error("执行引擎设置响应格式无效，请刷新后重试。");
+  return parsed.data;
+}
+export async function readDshPluginSettingsResponse(response: Response): Promise<DshPluginSettings> {
+  const parsed = dshPluginSettingsSchema.safeParse(await readPayload(response));
+  if (!parsed.success) throw new Error("插件设置响应格式无效，请刷新后重试。");
   return parsed.data;
 }
 
-interface ContentProps {
-  status: AgentEngineStatus | null;
-  selectedEngine: Engine;
-  loading: boolean;
-  busy: boolean;
-  disabled?: boolean;
-  needsRefresh?: boolean;
-  error?: string;
-  notice?: string;
-  onEngineChange(engine: Engine): void;
-  onRefresh(): void;
-  onApply(): void;
-  onClose(): void;
-}
-
-/** Pure settings view; plugin descriptions are text, never executable configuration. */
-export function AgentEngineSettingsContent({ status, selectedEngine, loading, busy, disabled = false,
-  needsRefresh = false, error, notice, onEngineChange, onRefresh, onApply, onClose }: ContentProps) {
-  const taskActive = disabled || Boolean(status && status.activeTasks > 0);
-  const locked = loading || busy || taskActive || !status || needsRefresh;
-  const canApply = !locked && selectedEngine !== status?.engine && (selectedEngine === "harness" || status?.dsh.available);
-  return <div className="agent-engine-content">
-    <header><div><h2 id="agent-engine-settings-heading">Agent 执行与插件</h2><p>选择执行任务的内核；模型密钥仍在“AI 接口配置”中管理。</p></div>
-      <button type="button" aria-label="关闭 Agent 执行与插件" disabled={busy} onClick={onClose}>×</button></header>
-    {loading && <p className="agent-engine-status" role="status">正在读取执行引擎状态…</p>}
-    {status && <>
-      <p className="agent-engine-current">当前引擎：<strong>{status.engine === "dsh" ? "DeepSeek Harness（实验）" : "原版 Harness"}</strong></p>
-      <fieldset className="agent-engine-options" disabled={locked} aria-describedby="agent-engine-scope">
-        <legend>执行引擎</legend>
-        <label className={selectedEngine === "harness" ? "selected" : undefined}>
-          <input type="radio" name="agent-execution-engine" value="harness" checked={selectedEngine === "harness"} onChange={() => onEngineChange("harness")} />
-          <span><strong>原版 Harness</strong><small>保留当前完整业务工具与执行流程。</small></span>
-        </label>
-        <label className={selectedEngine === "dsh" ? "selected" : undefined}>
-          <input type="radio" name="agent-execution-engine" value="dsh" checked={selectedEngine === "dsh"} disabled={!status.dsh.available} onChange={() => onEngineChange("dsh")} />
-          <span><strong>DeepSeek Harness <em>实验</em></strong><small>{status.dsh.available ? "本机组件可用" : "当前不可用"}{status.dsh.version ? ` · ${status.dsh.version}` : ""}</small>
-            {status.dsh.reason && <small>{status.dsh.reason}</small>}</span>
-        </label>
-      </fieldset>
-      <p id="agent-engine-scope" className="agent-engine-muted">DSH 支持已选数据源、本次附带的 Excel 原件、Notebook Python 和已授权只读数据库，结果可接表格、图表与说明。说明中的数值可绑定本轮完整单行结果，不执行表达式或脚本。支持文本、数字、日期和单选参数，以单行表传入本地 SQL 或 Python；不用于远端 SQL 参数绑定，也不是密码输入。选择单表语义模型后可用语义查询，沿用固定指标口径。Python 须部署能力可用，连接须允许 AI 使用。暂不支持多模型 Notebook、图片及外部工具；不支持的任务会明确报错，不自动切换引擎。</p>
-      {taskActive && <p className="agent-engine-status" role="status">有任务正在执行，暂不能切换引擎。任务结束后请刷新状态。</p>}
-      <section className="agent-engine-plugins" aria-labelledby="agent-engine-plugins-heading">
-        <div><h3 id="agent-engine-plugins-heading">DSH 已接入的工具插件</h3><small>只读目录</small></div>
-        <p className="agent-engine-muted">这里只展示已接线能力；每次任务按附件、授权和部署状态提供工具，不代表全部已启用。不提供安装、卸载或独立启停，草稿仍须由你确认采用。</p>
-        {status.plugins.length ? status.plugins.map(plugin => <article key={plugin.id}>
-          <h4>{plugin.name}</h4><p>{plugin.description}</p>
-          <ul>{plugin.tools.map(tool => <li key={tool}><code>{tool}</code></li>)}</ul>
-        </article>) : <p className="agent-engine-muted">当前没有已接入的工具插件。</p>}
-      </section>
-    </>}
-    {error && <p className="agent-engine-error" role="alert">{error}</p>}
-    {needsRefresh && <p className="agent-engine-muted">尚未确认服务器上的当前引擎，请先刷新状态再操作。</p>}
-    {notice && <p className="agent-engine-status" role="status">{notice}</p>}
-    <p className="agent-engine-persistence">设置仅保存在当前本机服务进程，重启后恢复原版；不写入项目或工作区备份。切换只影响后续任务，不会运行数据或调用模型。</p>
-    <footer><button type="button" disabled={loading || busy} onClick={onRefresh}>刷新状态</button><span />
-      <button type="button" disabled={busy} onClick={onClose}>取消</button>
-      <button type="button" className="agent-engine-primary" disabled={!canApply} onClick={onApply}>{busy ? "正在应用…" : "应用执行引擎"}</button></footer>
-  </div>;
-}
-
-function AgentEngineSettingsDialog({ disabled, onClose }: { disabled: boolean; onClose(): void }) {
+function AgentEngineSettingsDialog({ disabled, onClose, onOpenModels }: {
+  disabled: boolean; onClose(): void; onOpenModels?(): void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const alive = useRef(false);
-  const pending = useRef<{ method: "GET" | "PATCH"; controller: AbortController } | null>(null);
+  const pending = useRef<{ controller: AbortController; saving: boolean } | null>(null);
+  const current = useRef<DshPluginSettings | null>(null);
+  const draftSkills = useRef(false);
   const [status, setStatus] = useState<AgentEngineStatus | null>(null);
-  const [selectedEngine, setSelectedEngine] = useState<Engine>("harness");
+  const [plugins, setPlugins] = useState<DshPluginSettings | null>(null);
+  const [skills, setSkills] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [discard, setDiscard] = useState(false);
+  const dirty = plugins !== null && plugins.document.config.skills !== skills;
 
   const refresh = useCallback(async () => {
     if (pending.current || !alive.current) return;
-    const controller = new AbortController();
-    pending.current = { method: "GET", controller };
+    const preserveDraft = current.current !== null && draftSkills.current !== current.current.document.config.skills;
+    const operation = { controller: new AbortController(), saving: false };
+    pending.current = operation;
     setLoading(true); setError(""); setNotice("");
     try {
-      const next = await readAgentEngineSettingsResponse(await fetch(endpoint, { cache: "no-store", signal: controller.signal }));
-      if (!alive.current || controller.signal.aborted) return;
-      setStatus(next); setSelectedEngine(next.engine); setNeedsRefresh(false);
+      const init = { cache: "no-store" as const, signal: operation.controller.signal };
+      const [engine, next] = await Promise.all([
+        fetch(engineEndpoint, init).then(readAgentEngineSettingsResponse),
+        fetch(pluginEndpoint, init).then(readDshPluginSettingsResponse),
+      ]);
+      if (!alive.current || operation.controller.signal.aborted) return;
+      if (!preserveDraft) { draftSkills.current = next.document.config.skills; setSkills(next.document.config.skills); }
+      current.current = next;
+      setPlugins(next); setStatus(engine); setNeedsRefresh(false);
     } catch (caught) {
-      if (alive.current && !controller.signal.aborted) {
-        setNeedsRefresh(true);
-        setError(caught instanceof Error ? caught.message : "无法读取执行引擎状态。");
+      if (alive.current && !operation.controller.signal.aborted) {
+        setNeedsRefresh(true); setError(caught instanceof Error ? caught.message : "读取状态失败。");
       }
     } finally {
-      if (pending.current?.controller === controller) pending.current = null;
-      if (alive.current && !controller.signal.aborted) setLoading(false);
+      if (pending.current === operation) pending.current = null;
+      if (alive.current && !operation.controller.signal.aborted) setLoading(false);
     }
   }, []);
+
+  async function save() {
+    if (pending.current || !alive.current || !plugins || !dirty || needsRefresh || disabled
+      || plugins.activeTasks > 0 || plugins.persistence !== "json-file") return;
+    const operation = { controller: new AbortController(), saving: true };
+    pending.current = operation;
+    setSaving(true); setError(""); setNotice(""); setDiscard(false);
+    try {
+      const next = await readDshPluginSettingsResponse(await fetch(pluginEndpoint, { method: "PATCH",
+        headers: { "content-type": "application/json" }, signal: operation.controller.signal,
+        body: JSON.stringify({ revision: plugins.document.revision, config: { skills } }),
+      }));
+      if (!alive.current || operation.controller.signal.aborted) return;
+      current.current = next; draftSkills.current = next.document.config.skills;
+      setPlugins(next); setSkills(next.document.config.skills); setNeedsRefresh(false);
+      setNotice("配置已保存，下一轮任务生效。网页聊天记录保留。");
+    } catch (caught) {
+      if (alive.current && !operation.controller.signal.aborted) {
+        setNeedsRefresh(true);
+        setError((caught instanceof Error ? caught.message : "保存响应异常。") + " 请重新读取确认实际配置，不会自动重试保存。");
+      }
+    } finally {
+      if (pending.current === operation) pending.current = null;
+      if (alive.current && !operation.controller.signal.aborted) setSaving(false);
+    }
+  }
 
   useEffect(() => {
     alive.current = true;
@@ -120,60 +109,37 @@ function AgentEngineSettingsDialog({ disabled, onClose }: { disabled: boolean; o
     element?.showModal();
     const timer = setTimeout(() => void refresh(), 0);
     return () => {
-      alive.current = false;
-      clearTimeout(timer);
-      pending.current?.controller.abort();
-      pending.current = null;
-      element?.close();
+      alive.current = false; clearTimeout(timer);
+      pending.current?.controller.abort(); pending.current = null; element?.close();
     };
   }, [refresh]);
 
-  function close() {
-    if (pending.current?.method === "PATCH") return;
-    dialog.current?.close();
-    onClose();
+  function close(force = false) {
+    if (pending.current?.saving) return;
+    if (dirty && !force) { setDiscard(true); return; }
+    dialog.current?.close(); onClose();
   }
-
-  async function apply() {
-    if (!status || pending.current || disabled || status.activeTasks > 0 || needsRefresh || selectedEngine === status.engine
-      || (selectedEngine === "dsh" && !status.dsh.available)) return;
-    const controller = new AbortController();
-    pending.current = { method: "PATCH", controller };
-    setBusy(true); setError(""); setNotice("");
-    try {
-      const next = await readAgentEngineSettingsResponse(await fetch(endpoint, { method: "PATCH", cache: "no-store",
-        headers: { "content-type": "application/json" }, body: JSON.stringify({ engine: selectedEngine, revision: status.revision }), signal: controller.signal }));
-      if (!alive.current || controller.signal.aborted) return;
-      setStatus(next); setSelectedEngine(next.engine);
-      setNotice(`已切换为${next.engine === "dsh" ? " DeepSeek Harness（实验）" : "原版 Harness"}，仅对后续任务生效。`);
-    } catch (caught) {
-      if (alive.current && !controller.signal.aborted) {
-        setNeedsRefresh(true);
-        setError(caught instanceof Error ? caught.message : "未能确认切换结果，请刷新状态后核对。");
-      }
-    } finally {
-      if (pending.current?.controller === controller) pending.current = null;
-      if (alive.current && !controller.signal.aborted) setBusy(false);
-    }
-  }
-
-  return <dialog ref={dialog} className="agent-engine-dialog" aria-labelledby="agent-engine-settings-heading" onKeyDown={containDialogFocus}
+  return <dialog ref={dialog} className="agent-engine-dialog agent-engine-native-dialog" aria-label="Agent 执行与插件" onKeyDown={containDialogFocus}
     onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === event.currentTarget) close(); }}>
-    <AgentEngineSettingsContent status={status} selectedEngine={selectedEngine} loading={loading} busy={busy} disabled={disabled}
-      needsRefresh={needsRefresh} error={error} notice={notice} onEngineChange={engine => { setSelectedEngine(engine); setNotice(""); }}
-      onRefresh={() => void refresh()} onApply={() => void apply()} onClose={close} />
+    <OfficialSettingsFrame status={status} plugins={plugins} skills={skills} loading={loading} saving={saving} disabled={disabled}
+      needsRefresh={needsRefresh} error={error} notice={notice} dirty={dirty} discard={discard}
+      onSkills={value => { draftSkills.current = value; setSkills(value); setNotice(""); }} onRefresh={() => void refresh()} onSave={() => void save()}
+      onClose={() => close()} onDiscard={() => close(true)} onKeepEditing={() => setDiscard(false)}
+      onOpenModels={onOpenModels} />
   </dialog>;
 }
 
-export function AgentEngineSettings({ open: controlledOpen, onOpenChange, hideTrigger = false, disabled = false }: {
-  open?: boolean; onOpenChange?: (open: boolean) => void; hideTrigger?: boolean; disabled?: boolean;
+/** 当前对话固定使用 DSH；本组件不修改旧执行器选择。 */
+export function AgentEngineSettings({ open: controlledOpen, onOpenChange, hideTrigger = false, disabled = false, onOpenModels }: {
+  open?: boolean; onOpenChange?: (open: boolean) => void; hideTrigger?: boolean; disabled?: boolean; onOpenModels?(): void;
 } = {}) {
   const [localOpen, setLocalOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const open = controlledOpen ?? localOpen;
   const setOpen = onOpenChange ?? setLocalOpen;
   return <>
-    {!hideTrigger && <button ref={trigger} type="button" className="ai-api-settings-trigger" aria-label="Agent 执行与插件" onClick={() => setOpen(true)}>执行与插件</button>}
-    {open && <AgentEngineSettingsDialog disabled={disabled} onClose={() => { setOpen(false); trigger.current?.focus(); }} />}
+    {!hideTrigger && <Button variant="secondary" ref={trigger} type="button" className="ai-api-settings-trigger" aria-label="Agent 执行与插件" onClick={() => setOpen(true)}>执行与插件</Button>}
+    {open && <AgentEngineSettingsDialog disabled={disabled} onOpenModels={onOpenModels}
+      onClose={() => { setOpen(false); trigger.current?.focus(); }} />}
   </>;
 }

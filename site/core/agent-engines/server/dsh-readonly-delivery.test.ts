@@ -28,7 +28,7 @@ async function fixture() {
   });
   const runner = vi.fn<NonNullable<DshEngineOptions["notebookRunner"]>>((artifact, context) => runNotebook({
     document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
-    sources: [{ source, rows: context.dataRuntime.rowsByDataSourceId[source.id] }],
+    sources: context.sources,
     signal: context.signal, forAi: true, log: () => {},
   }));
   const options: Omit<DshEngineOptions, "driver"> = { dataRuntime: { rowsByDataSourceId: { [source.id]: parsed.rows } },

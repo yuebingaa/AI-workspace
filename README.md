@@ -15,7 +15,7 @@
 
 ## AI 执行器与限制
 
-“设置与备份”可选择原 Harness 或 DSH。选择只影响后续任务、暂存在服务进程中；源码默认仍为原 Harness。DSH 的固定 SDK 安装、Node 环境与可用性见 [Agent 架构](site/docs/architecture/agent-architecture.md)。API 密钥只保留在服务端私有配置，不提交到 Git。
+当前网站聊天固定使用 DSH，首页、`/dsh` 与 `/dsh/web` 共用官方 DSH 对话组件。“设置与备份”中的“DSH 执行与插件”仅查看组件与工具状态，不提供执行器切换；旧 Harness 执行层及兼容 API 仍保留，但不是网站聊天的备用界面，DSH 不可用时不会自动回退。DSH 的固定 SDK 安装、Node 环境与可用性见 [Agent 架构](site/docs/architecture/agent-architecture.md)。API 密钥只保留在服务端私有配置，不提交到 Git。
 
 DSH 已接入受控 Data / SQL / Table / Chart / Transform / Text / Parameter，以及满足能力与授权条件的 Python、只读数据库。说明可以保留静态文字，也可以引用本轮完整单行结果；动态数值要配置引用，不在模板中执行公式。参考 [DSH 说明单元记录](site/docs/verification/dsh-text-cells-2026-09-22.md)。文本、数字、日期和单选参数以单行 `value` 表传入本地 SQL/Python，不拼接代码；不是远端 SQL 参数绑定或密码输入，见 [参数边界与验收](site/docs/verification/dsh-parameters-2026-09-22.md)。询问“当前参数值是多少？”可只读取已保存定义，不运行Notebook；这不等于业务结果已经计算，见[参数问答验收](site/docs/verification/dsh-parameter-inspection-2026-09-22.md)。本次选择有效的单表语义模型后，还可生成和运行 `semanticQuery`，沿用模型定义的维度与指标；模型本身仍由用户管理。它不等于桌面 DSH 的任意插件运行环境，不会悄悄回退另一个执行器。语义边界与验收见 [DSH 语义查询记录](site/docs/verification/dsh-semantic-query-2026-09-22.md)。
 

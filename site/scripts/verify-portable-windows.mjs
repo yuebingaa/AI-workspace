@@ -7,6 +7,7 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { readEnvironment, sleep, stopChild } from './runtime/common.mjs';
+import { chooseUiOption } from './fixtures/ui-controls.mjs';
 
 const site = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const expected = [{ region: 'East', revenue: 300 }, { region: 'South', revenue: 160 }];
@@ -161,6 +162,8 @@ export async function verifyPortableWindows(options) {
     report.screenshots.push({ name, evidence, reviewed: false });
   }
   async function navigation(name) {
+    const notices = page.getByRole('button', { name: '知道了', exact: true });
+    while (await notices.count()) await notices.first().click();
     await page.getByRole('button', { name: '打开工作区菜单', exact: true }).click();
     const menu = page.getByRole('navigation', { name: '工作区功能菜单', exact: true });
     await menu.getByRole('textbox', { name: '查找功能或工作界面' }).fill(name);
@@ -181,6 +184,11 @@ export async function verifyPortableWindows(options) {
     await page.getByRole('group', { name: '添加分析单元', exact: true }).getByRole('button', { name: `＋ ${kind}`, exact: true }).click();
     await editor().getByLabel('单元名称', { exact: true }).fill(title);
     if (outputName) await editor().getByLabel('输出表名（SQL 中使用）', { exact: true }).fill(outputName);
+  }
+  async function selectChartField(label, value) {
+    await editor().getByRole('combobox', { name: label, exact: true }).click();
+    await page.getByRole('combobox', { name: `搜索${label}`, exact: true }).fill(value);
+    await page.getByRole('option').filter({ hasText: value }).first().click();
   }
   async function runAll() {
     const pending = page.waitForResponse(response => response.url() === `${runtime.base}/api/notebook/run`, { timeout: 90000 });
@@ -222,7 +230,7 @@ export async function verifyPortableWindows(options) {
       const original = window.fetch.bind(window);
       window.fetch = async (...input) => {
         const response = await original(...input);
-        if (new URL(response.url).pathname === '/api/ai/harness/stream') {
+        if (new URL(response.url).pathname === '/api/ai/dsh/conversation/stream') {
           window.__portableStream = { state: 'streaming' };
           void response.clone().text().then(body => { window.__portableStream = { state: 'complete', body }; }, () => { window.__portableStream = { state: 'failed' }; });
         }
@@ -231,10 +239,12 @@ export async function verifyPortableWindows(options) {
     });
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
+      if (!['http:', 'https:'].includes(url.protocol)) return route.continue();
       if (url.href === 'https://rsms.me/inter/inter.css') return route.fulfill({ status: 200, contentType: 'text/css', body: '' });
       if (url.origin !== runtime.base) { report.blockedRequests.push({ reason: 'external-origin' }); return route.abort(); }
       if (url.pathname.startsWith('/api/ai/')) {
-        if (!allowAi || !paid || request.method() !== 'POST' || url.pathname !== '/api/ai/harness/stream' || ++report.modelTaskAttempts > 1) {
+        if (request.method() === 'GET' && (url.pathname.startsWith('/api/ai/dsh/web/') || url.pathname === '/api/ai/dsh/conversation')) return route.continue();
+        if (!allowAi || !paid || request.method() !== 'POST' || url.pathname !== '/api/ai/dsh/conversation/stream' || ++report.modelTaskAttempts > 1) {
           report.blockedRequests.push({ reason: 'unapproved-model-task' }); return route.abort();
         }
       }
@@ -243,6 +253,8 @@ export async function verifyPortableWindows(options) {
     page = await context.newPage(); page.setDefaultTimeout(25000);
     page.on('pageerror', error => report.pageErrors.push({ kind: error.name }));
     await page.goto(runtime.base, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.frameLocator('iframe[title="官方 DSH 聊天"]').locator('[data-agentcanvas-dsh-native-web="true"]').waitFor();
+    report.checks.push('Official DSH Web chat resources loaded from the bundled SDK.');
     stage = 'missing-key-ui'; await navigation('AI 接口配置');
     await page.getByRole('dialog', { name: 'AI 接口配置', exact: true }).getByLabel('DeepSeek API Key', { exact: true }).waitFor();
     await shot('01-no-credentials.png', 'Fresh portable installation requests the user key; no credentials bundled.');
@@ -256,7 +268,7 @@ export async function verifyPortableWindows(options) {
     await dataBrowser().waitFor({ state: 'hidden' });
     const initialized = await saved(value => value.state?.appSpec.pages.length > 0); pageId = initialized.state.appSpec.pages[0].id;
     await page.getByRole('tab', { name: 'Notebook', exact: true }).click();
-    await page.locator('.notebook-heading').getByRole('button', { name: '导入数据', exact: true }).click();
+    await navigation('导入表格');
     const upload = page.getByRole('dialog', { name: '导入本机表格', exact: true });
     await upload.locator('input[type="file"]').setInputFiles({ name: filename, mimeType: 'text/csv', buffer: Buffer.from(csv) });
     const parsed = page.waitForResponse(response => response.url() === `${runtime.base}/api/datasets` && response.request().method() === 'POST');
@@ -265,7 +277,7 @@ export async function verifyPortableWindows(options) {
     const datasetId = (await parsedResponse.json()).dataset.datasetId;
     await upload.waitFor({ state: 'hidden' }); await saved(value => value.tables.length === 1 && value.files.length === 1);
     await addCell('Data', '合成销售数据', 'sales_data');
-    await editor().getByLabel('数据源', { exact: true }).selectOption(datasetId); await saveCell();
+    await chooseUiOption(page, editor().getByLabel('数据源', { exact: true }), datasetId); await saveCell();
     await addCell('Python', 'Python 倍增金额', 'cleaned');
     await editor().getByRole('checkbox').first().check();
     await editor().getByLabel('Python', { exact: true }).fill("import time\ncleaned = sales_data.assign(amount=sales_data['amount'] * 2)\ntime.sleep(2)  # Allow host process observation during portable acceptance.\nprint('3 synthetic records doubled')"); await saveCell();
@@ -280,10 +292,11 @@ export async function verifyPortableWindows(options) {
     assert.equal(report.packagedPythonBrowserObserved, true, 'Notebook Python must actually launch the bundled browser.');
     stage = 'create-chart';
     await addCell('图表', '地区销售图');
-    const options = await editor().getByLabel('上游输出', { exact: true }).locator('option').evaluateAll(items => items.map(item => ({ value: item.value, text: item.textContent })));
-    await editor().getByLabel('上游输出', { exact: true }).selectOption(options.find(item => item.text.includes('totals')).value);
-    await editor().getByLabel('分类字段', { exact: true }).fill('region');
-    await editor().getByLabel('数值字段（逗号分隔，最多 4 个）', { exact: true }).fill('revenue'); await saveCell();
+    const totalsId = book(await manifest()).cells.find(cell => cell.outputName === 'totals').id;
+    await chooseUiOption(page, editor().getByLabel('上游输出', { exact: true }), totalsId);
+    await selectChartField('分类字段', 'region');
+    for (const remove of await editor().getByRole('button', { name: /移除数值字段/u }).all()) await remove.click();
+    await selectChartField('添加数值字段', 'revenue'); await saveCell();
     stage = 'python-sql-chart'; await runAll();
     assert.equal(report.packagedPythonBrowserObserved, true, 'Notebook Python must actually launch the bundled browser.');
     const chart = page.getByRole('article', { name: '图表单元 地区销售图', exact: true });
@@ -299,7 +312,7 @@ export async function verifyPortableWindows(options) {
       const discovered = await discoveredResponse.json();
       const chosen = discovered.availableModels.find(model => model.id === 'deepseek-flash')?.id ?? discovered.model;
       if (chosen !== discovered.model) {
-        await api.getByLabel('选择模型', { exact: true }).selectOption(chosen);
+        await chooseUiOption(page, api.getByLabel('选择模型', { exact: true }), chosen);
         const applied = page.waitForResponse(response => response.url() === `${runtime.base}/api/settings/ai` && response.request().method() === 'PATCH');
         await api.getByRole('button', { name: '应用模型', exact: true }).click(); assert.equal((await applied).status(), 200);
       }
@@ -307,9 +320,10 @@ export async function verifyPortableWindows(options) {
       await page.getByRole('button', { name: '关闭 AI API 配置', exact: true }).click();
       const before = await saved(value => book(value)?.cells.length === 4);
       stage = 'single-paid-dsh-task'; await page.getByRole('tab', { name: 'AI 工作台', exact: true }).click();
-      await page.getByRole('textbox', { name: 'AI 指令', exact: true }).fill(instruction);
+      const composer = page.frameLocator('iframe[title="官方 DSH 聊天"]').locator('[data-composer-input="true"]');
+      await composer.fill(instruction);
       allowAi = true;
-      await page.getByRole('button', { name: '发送 AI 指令', exact: true }).click();
+      await composer.press('Enter');
       await page.waitForFunction(() => ['complete', 'failed'].includes(window.__portableStream?.state), undefined, { timeout: 240000 });
       allowAi = false;
       const stream = await page.evaluate(() => window.__portableStream); assert.equal(stream.state, 'complete');
@@ -320,7 +334,7 @@ export async function verifyPortableWindows(options) {
       report.task = { state: task.state, counters: task.counters, modelUsage: task.modelUsage };
       report.usage = task.modelUsage ?? 'Task counters observed; provider token totals and invoice amount were not independently captured.';
       await writeFile(join(output, 'synthetic-paid-task.json'), JSON.stringify({ task, frames }, null, 2), { flag: 'wx' });
-      await page.getByRole('button', { name: '取消 AI 请求', exact: true }).waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => document.querySelector('iframe[title="官方 DSH 聊天"]')?.contentDocument?.querySelector('[data-composer-input="true"]')?.getAttribute('contenteditable') === 'true');
       await shot('03-real-dsh-task.png', 'Single actual paid DSH task; no response replay or automatic paid retry.');
       assert.equal(task.state, 'awaitingConfirmation'); assert.ok(task.notebookArtifact);
       assert.deepEqual(book(await saved()).cells, book(before).cells, 'Unadopted AI draft must not replace formal Notebook.');

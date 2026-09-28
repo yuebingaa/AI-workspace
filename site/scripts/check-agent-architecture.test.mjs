@@ -10,9 +10,10 @@ test("architecture guard detects drift and ignores tests and line ending changes
   const temporaryRoot = resolve(tmpdir());
   const fixture = await mkdtemp(join(temporaryRoot, "agent-architecture-check-"));
   try {
-    for (const scope of ["scripts", "docs/architecture", "core/harness", "core/ai/server", "app/api/ai/harness", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/sql", "core/changesets", "core/visualization-lab", "app/api/ai/visualization-lab", "core/agent-engines", "app/api/settings/agent-engine", "runtime/dsh"]) {
+    for (const scope of ["scripts", "docs/architecture", "core/harness", "core/ai/server", "app/api/ai/harness", "app/api/ai/dsh", "app/dsh", "core/notebook", "core/semantic", "core/wecom", "core/projects", "app/api/projects", "core/connections", "app/api/connections", "app/api/notebook", "core/metadata", "core/datasets", "core/sql", "core/changesets", "core/visualization-lab", "app/api/ai/visualization-lab", "core/agent-engines", "app/api/settings/agent-engine", "runtime/dsh"]) {
       await mkdir(join(fixture, scope), { recursive: true });
     }
+    for (const scope of ["core/dsh-web", "components/studio/dsh-web"]) await mkdir(join(fixture, scope), { recursive: true });
     const script = join(fixture, "scripts/check-agent-architecture.mjs");
     await writeFile(script, await readFile(join(dirname(fileURLToPath(import.meta.url)), "check-agent-architecture.mjs")));
     const document = join(fixture, "docs/architecture/agent-architecture.md");
@@ -23,8 +24,8 @@ test("architecture guard detects drift and ignores tests and line ending changes
     for (const name of ["python-runtime-lock.json", "setup-python-runtime.mjs", "copy-notebook-runtime.mjs", "runtime/site-runtime.mjs", "setup-dsh-runtime.mjs"]) {
       await writeFile(join(fixture, "scripts", name), "initial runtime asset contract\n");
     }
-    const dshFiles = ["driver.mjs", "driver.d.mts", "controlled-plugin.mjs", "wire-policy.mjs", "policy.mjs", "policy.d.mts", "installation.mjs",
-      "tool-diagnostics.mjs", "tool-diagnostics.d.mts", "package.json", "package-lock.json"];
+    const dshFiles = ["driver.mjs", "driver.d.mts", "controlled-plugin.mjs", "chat-adapter.mjs", "native-loader.cjs", "session-server.mjs", "wire-policy.mjs", "policy.mjs", "policy.d.mts", "installation.mjs",
+      "tool-diagnostics.mjs", "tool-diagnostics.d.mts", "web-assets.mjs", "web-assets.d.mts", "web-client.mjs", "package.json", "package-lock.json"];
     for (const name of dshFiles) await writeFile(join(fixture, "runtime/dsh", name), "initial DSH runtime contract\n");
     const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8", windowsHide: true });
     assert.equal(run().status, 1);
@@ -64,7 +65,7 @@ test("architecture guard detects drift and ignores tests and line ending changes
     await writeFile(join(fixture, "core/changesets/confirmation.ts"), "export const confirmationVersion = 2;\n");
     assert.equal(run().status, 1);
     assert.equal(run("--sync").status, 0);
-    for (const source of ["core/agent-engines/contracts.ts", "app/api/settings/agent-engine/route.ts", "scripts/setup-dsh-runtime.mjs",
+    for (const source of ["core/dsh-web/protocol.ts", "components/studio/dsh-web/Frame.tsx", "core/agent-engines/contracts.ts", "app/api/settings/agent-engine/route.ts", "app/api/ai/dsh/route.ts", "app/dsh/page.tsx", "scripts/setup-dsh-runtime.mjs",
       ...dshFiles.map((name) => `runtime/dsh/${name}`)]) {
       await writeFile(join(fixture, source), "changed DSH source contract\n");
       assert.equal(run().status, 1, `DSH source drift must fail: ${source}`);

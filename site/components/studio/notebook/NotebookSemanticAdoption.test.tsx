@@ -1,4 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { buttonMarkup } from "@/test-support/markup";
+import { renderToStaticMarkup } from "@/test-support/render-themed";
 import { describe, expect, it } from "vitest";
 import { semanticFixture } from "@/core/semantic/test-fixture";
 import type { NotebookArtifact } from "@/core/notebook/definition";
@@ -27,13 +29,13 @@ describe("Notebook deleted-model draft display", () => {
     expect(html).toContain("已通过数据试运行");
     expect(html).toContain("草稿引用的语义模型已删除或不在当前工作界面");
     expect(html).toContain("现有 Notebook 未改动");
-    expect(html).toMatch(/class="notebook-primary" disabled="">采用草稿/);
+    expect(buttonMarkup(html, "采用草稿").disabled).toBe(true);
     expect(html).toContain("暂不采用");
   });
   it("allows adoption when the same model is present and distinguishes same-name replacements", () => {
     const valid = review([model]);
     expect(valid).not.toContain("草稿引用的语义模型已删除");
-    expect(valid).toContain('class="notebook-primary">采用草稿');
-    expect(review([{ ...model, id: "replacement_id" }])).toMatch(/class="notebook-primary" disabled="">采用草稿/);
+    expect(buttonMarkup(valid, "采用草稿").disabled).toBe(false);
+    expect(buttonMarkup(review([{ ...model, id: "replacement_id" }]), "采用草稿").disabled).toBe(true);
   });
 });

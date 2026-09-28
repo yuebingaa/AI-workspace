@@ -41,6 +41,17 @@ async function fixture(overrides: Partial<Parameters<typeof createDshToolBroker>
 }
 
 describe("DSH 任务级 loopback 工具 capability", () => {
+  it("only the explicit conversation profile permits an empty catalog, while all actual tools remain denied", async () => {
+    await expect(fixture({ tools: [] })).rejects.toThrow("catalog mismatch");
+    const { broker, execute, onModelCall } = await fixture({ tools: [], profile: "conversation" });
+    expect(JSON.parse((await send(broker, "/catalog").response).body)).toEqual({ profile: "conversation", tools: [] });
+    expect((await send(broker, "/authorize", { method: "POST", body: "{}" }).response).status).toBe(200);
+    expect(onModelCall).toHaveBeenCalledOnce();
+    for (const name of [...toolNames, "bash"]) {
+      expect((await send(broker, "/execute", { method: "POST", body: JSON.stringify({ name, args: {}, callId: name }) }).response).status).toBe(403);
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
   it.each(["notebook_submit_version_stale", "notebook_submit_no_changes", "notebook_submit_run_required",
     "notebook_submit_receipt_mismatch"] as const)("提交拒绝 %s 只发送严格有限code", async code => {
     const error = new NotebookSubmissionError(code);

@@ -255,14 +255,15 @@ describe("DSH read-only evidence verification", () => {
     expect(verifyDshReadonlyAnswer({ ...options(), mode: { allowRun: false, requireOutput: false } }).valid).toBe(false);
     expect(verifyDshReadonlyAnswer({ ...options(), formalUnchanged: false }).valid).toBe(false);
   });
-  it.each([undefined, "", "   ", "已完成", "分析已完成。", "done", "x".repeat(1801)])("rejects an absent, generic or oversized answer", finalResponse => {
+  it.each([undefined, "", "   ", "已完成", "分析已完成。", "done"])("rejects an absent or generic answer", finalResponse => {
     expect(verifyDshReadonlyAnswer({ ...options(), finalResponse }).valid).toBe(false);
   });
   it("redacts text and returns at most 15 actual evidence IDs within public task limits", () => {
     const input = { ...options(), observations: [...Array.from({ length: 20 }, (_, index) => search(`search_${index}`)), run(), output()],
-      finalResponse: "结果说明：Bearer synthetic_test_token sk-synthetic_only_123。" + "合成说明。".repeat(220) };
+      finalResponse: "结果说明：Bearer synthetic_test_token sk-synthetic_only_123。" + "合成说明。".repeat(1000) + "完整只读结尾" };
     const result = verifyDshReadonlyAnswer(input);
-    expect(result.valid).toBe(true); expect(result.message.length).toBeLessThanOrEqual(2000);
+    expect(result.valid).toBe(true); expect(result.message.length).toBeGreaterThan(5000);
+    expect(result.message.endsWith("完整只读结尾")).toBe(true);
     expect(result.message).not.toContain("synthetic_test_token"); expect(result.message).not.toContain("sk-synthetic_only_123");
     expect(result.evidenceIds).toEqual(input.observations.slice(-15).map(item => item.toolCallId));
     expect(verifyDshReadonlyAnswer({ ...options(), observations: [search(), search(), run(), output()] }).valid).toBe(false);

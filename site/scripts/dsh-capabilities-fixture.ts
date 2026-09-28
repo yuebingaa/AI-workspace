@@ -10,9 +10,8 @@ import type { NotebookRun } from "@/core/notebook/contracts";
 import type { DataTable } from "@/core/datasets/table-contracts";
 import { harnessRequestSchema, type HarnessRequest, type HarnessTraceEvent } from "@/core/harness/contracts";
 import { createHarnessStreamResponse, readHarnessStream } from "@/core/harness/stream";
-import { createAgentExecutor } from "@/core/agent-engines/server/executor";
+import { createAgentExecutor, type DshAgentExecutionOptions } from "@/core/agent-engines/server/executor";
 import { createOfficialDshDriver } from "@/core/agent-engines/server/dsh-driver";
-import type { CoordinatedHarnessOptions } from "@/core/harness/agents/coordinator";
 
 function request(name: string): HarnessRequest {
   if (!demoFixtureResult.success) throw new Error("Synthetic app unavailable");
@@ -22,9 +21,10 @@ function request(name: string): HarnessRequest {
     notebookContext: { sourceIds: [], document: { name, revision: 2, cells: [] } } });
 }
 
-async function execute(input: HarnessRequest, actions: Array<{ name: string; args: Record<string, unknown> }>, options: CoordinatedHarnessOptions) {
+async function execute(input: HarnessRequest, actions: Array<{ name: string; args: Record<string, unknown> }>, options: DshAgentExecutionOptions) {
   const before = structuredClone(input), events: HarnessTraceEvent[] = [];
-  const driver = createOfficialDshDriver(() => ({ mode: "fixture", actions, finalText: "UNTRUSTED_FINISHED_CLAIM" }));
+  const unsafeSaveClaim = "UNTRUSTED_ALREADY_SAVED_CLAIM: 已经自动保存正式步骤。";
+  const driver = createOfficialDshDriver(() => ({ mode: "fixture", actions, finalText: unsafeSaveClaim }));
   const engine = createAgentExecutor(async value => {
     assert.ok(!JSON.stringify(value.context).includes('"seconds":60'));
     assert.ok(!JSON.stringify(value.context).includes('"amount":100'));
@@ -32,7 +32,7 @@ async function execute(input: HarnessRequest, actions: Array<{ name: string; arg
   });
   const controller = new AbortController();
   const response = createHarnessStreamResponse(controller.signal, (signal, onEvent) => engine("dsh", input, {
-    ...options, signal, onEvent, modelClient: { next() { throw new Error("Old Harness execution prohibited"); } },
+    ...options, signal, onEvent,
   }));
   const { task } = await readHarnessStream(response, controller.signal, event => events.push(event));
   assert.equal(task.state, "awaitingConfirmation", task.error);
@@ -43,7 +43,8 @@ async function execute(input: HarnessRequest, actions: Array<{ name: string; arg
   assert.deepEqual(events.filter(event => event.type === "tool_completed").map(event => event.toolCall?.name), actions.map(action => action.name));
   assert.equal(task.pendingChangeSet, undefined);
   assert.equal(task.usage, undefined);
-  assert.ok(!JSON.stringify(task).includes("UNTRUSTED_FINISHED_CLAIM"));
+  assert.ok(!JSON.stringify(task).includes("UNTRUSTED_ALREADY_SAVED_CLAIM"), "Model prose cannot claim formal adoption");
+  assert.match(task.resultMessage ?? "", /待你确认后才保存正式步骤/u);
   assert.deepEqual(input, before);
   return { tools: actions.map(action => action.name), taskState: task.state, completedCells: task.notebookArtifact?.executionEvidence?.completedCellIds,
     sourceIds: task.notebookArtifact?.sourceDataSourceIds, connectionIds: task.notebookArtifact?.connectionIds,
@@ -74,7 +75,7 @@ export async function verifyDshCapabilities() {
     { name: "getKernelPackagesInfo", args: {} },
     { name: "editNotebookCells", args: { editVersion: 0, cells: excelCells } },
     { name: "runNotebookCells", args: { editVersion: 1 } }, { name: "submitNotebookDraft", args: { editVersion: 1 } },
-  ], { dataRuntime: { rowsByDataSourceId: {} }, authorizeModelCall() {},
+  ], { dataRuntime: { rowsByDataSourceId: {} }, authorizeCurrentAccess() {},
     rawWorkbook: { fileName, contentHash, sheets },
     notebookCapabilities: { python: { enabled: true } }, pythonRuntimeInfo: notebookPythonRuntimeInfo,
     notebookRunner: async (artifact, context) => {
@@ -105,7 +106,7 @@ export async function verifyDshCapabilities() {
     { name: "inspectConnectionSchema", args: { connectionId: "test_db" } },
     { name: "editNotebookCells", args: { editVersion: 0, cells: databaseCells } },
     { name: "runNotebookCells", args: { editVersion: 1 } }, { name: "submitNotebookDraft", args: { editVersion: 1 } },
-  ], { dataRuntime: { rowsByDataSourceId: {} }, authorizeModelCall() {},
+  ], { dataRuntime: { rowsByDataSourceId: {} }, authorizeCurrentAccess() {},
     connectionInspector: async id => {
       assert.equal(id, "test_db");
       return { columns: [{ table_schema: "public", table_name: "sales", column_name: "region", data_type: "text" }], truncated: false };

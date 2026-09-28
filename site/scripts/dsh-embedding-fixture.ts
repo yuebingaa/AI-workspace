@@ -46,8 +46,7 @@ export async function verifyDshEmbedding() {
   const controller = new AbortController();
   const response = createHarnessStreamResponse(controller.signal, (signal, emit) => executor("dsh", request, {
     signal, onEvent: emit, dataRuntime: { rowsByDataSourceId: { [source.id]: parsed.rows } },
-    authorizeModelCall() { authorizations++; },
-    modelClient: { next() { throw new Error("The original Harness must not execute."); } },
+    authorizeCurrentAccess() { authorizations++; },
     notebookRunner: async (artifact, context) => {
       trials++;
       const result = await runNotebook({ document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
@@ -83,7 +82,7 @@ export async function verifyDshEmbedding() {
     finally { driverSettled = true; }
   });
   const cancelTask = await cancelExecutor("dsh", { ...request, idempotencyKey: "dsh_sdk_embedding_cancelled" }, {
-    signal: cancelled.signal, dataRuntime: { rowsByDataSourceId: { [source.id]: parsed.rows } }, authorizeModelCall() {},
+    signal: cancelled.signal, dataRuntime: { rowsByDataSourceId: { [source.id]: parsed.rows } }, authorizeCurrentAccess() {},
     notebookRunner: async (_artifact, context) => {
       cancelledTrialSignal = context.signal;
       cancelled.abort();

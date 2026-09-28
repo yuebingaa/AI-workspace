@@ -4,7 +4,7 @@ import type { HarnessTaskSummary } from "./contracts";
 
 export const MAX_ASSISTANT_SESSIONS = 50;
 // Enough room to split all 50 legacy threads (20 turns + a pending page each)
-// without dropping history. New threads remain limited to 50 per interface.
+// without dropping history. New threads remain limited to 50 per interface / experience.
 export const MAX_PROJECT_ASSISTANT_SESSIONS = 1050;
 const sessionIdSchema = z.string().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/);
 const pageIdSchema = z.string().min(1).max(120);
@@ -43,16 +43,31 @@ export const assistantSessionsSchema = z.object({
 });
 export type AssistantSession = z.infer<typeof assistantSessionSchema>;
 export type AssistantSessions = z.infer<typeof assistantSessionsSchema>;
+export type AssistantExperience = "classic" | "dsh-conversation";
 
-export function newAssistantSession(turns: AssistantConversationTurn[] = [], pageId?: string): AssistantSession {
-  const id = `conversation_${crypto.randomUUID().replaceAll("-", "")}`;
+const conversationIdPrefixes: Record<AssistantExperience, string> = {
+  classic: "conversation_",
+  "dsh-conversation": "dshconversation_",
+};
+
+/** Session identity owns the experience; historical IDs remain classic. */
+export function assistantSessionExperience(session: Pick<AssistantSession, "id">): AssistantExperience {
+  return session.id.startsWith(conversationIdPrefixes["dsh-conversation"]) ? "dsh-conversation" : "classic";
+}
+
+export function newAssistantContextId(experience: AssistantExperience = "classic"): string {
+  return `${conversationIdPrefixes[experience]}${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+export function newAssistantSession(turns: AssistantConversationTurn[] = [], pageId?: string, experience: AssistantExperience = "classic"): AssistantSession {
+  const id = newAssistantContextId(experience);
   const now = new Date().toISOString();
   return { id, contextId: id, title: turns[0]?.instruction.replace(/\s+/gu, " ").slice(0, 48) || "新会话",
     createdAt: turns[0]?.createdAt ?? now, updatedAt: turns.at(-1)?.createdAt ?? now,
     draft: "", ...(pageId ? { pageId } : {}), pageIds: pageId ? [pageId] : [...new Set(turns.flatMap((turn) => turn.pageId ? [turn.pageId] : []))], turns };
 }
-export function createAssistantSessions(turns: AssistantConversationTurn[] = [], pageId?: string): AssistantSessions {
-  const session = newAssistantSession(turns, pageId);
+export function createAssistantSessions(turns: AssistantConversationTurn[] = [], pageId?: string, experience: AssistantExperience = "classic"): AssistantSessions {
+  const session = newAssistantSession(turns, pageId, experience);
   return { activeId: session.id, items: [session], ...(pageId ? { activeByPage: { [pageId]: session.id } } : {}) };
 }
 export function activeAssistantSession(sessions: AssistantSessions): AssistantSession {
@@ -80,7 +95,7 @@ export function restoreAssistantSessions(sessions: AssistantSessions | null | un
     return pages.map((pageId) => {
       const pageTurns = item.turns.filter((turn) => (turnPage(turn) ?? owner) === pageId).map((turn) => ({ ...turn, pageId }));
       const primary = pageId === owner;
-      const identity = primary ? item : newAssistantSession(pageTurns, pageId);
+      const identity = primary ? item : newAssistantSession(pageTurns, pageId, assistantSessionExperience(item));
       const scoped = { ...item, id: identity.id, contextId: identity.contextId, pageId, pageIds: [pageId],
         turns: pageTurns, draft: primary ? item.draft : "",
         title: pages.length === 1 ? item.title : pageTurns[0]?.instruction.replace(/\s+/gu, " ").slice(0, 48) || "新会话",
@@ -92,8 +107,8 @@ export function restoreAssistantSessions(sessions: AssistantSessions | null | un
   return { ...restored, activeId, items };
 }
 
-export function assistantSessionsForPage(sessions: AssistantSessions, pageId: string): AssistantSession[] {
-  return sessions.items.filter((item) => item.pageId === pageId);
+export function assistantSessionsForPage(sessions: AssistantSessions, pageId: string, experience: AssistantExperience = "classic"): AssistantSession[] {
+  return sessions.items.filter((item) => item.pageId === pageId && assistantSessionExperience(item) === experience);
 }
 
 export function selectAssistantSession(sessions: AssistantSessions, id: string): AssistantSessions {
@@ -102,18 +117,19 @@ export function selectAssistantSession(sessions: AssistantSessions, id: string):
   return { ...sessions, activeId: id, ...(target.pageId ? { activeByPage: { ...sessions.activeByPage, [target.pageId]: id } } : {}) };
 }
 
-/** Interface identity is the stable page ID, never its editable / duplicate title. */
-export function selectAssistantPage(sessions: AssistantSessions, pageId: string): AssistantSessions {
+/** Select / ensure an experience's page thread without removing other histories. */
+export function selectAssistantPage(sessions: AssistantSessions, pageId: string, experience: AssistantExperience = "classic"): AssistantSessions {
   const current = activeAssistantSession(sessions);
-  if (current.pageId === pageId) return sessions;
+  if (current.pageId === pageId && assistantSessionExperience(current) === experience) return sessions;
   sessions = selectAssistantSession(sessions, current.id);
   const remembered = Object.hasOwn(sessions.activeByPage ?? {}, pageId) ? sessions.activeByPage?.[pageId] : undefined;
-  const candidates = assistantSessionsForPage(sessions, pageId);
+  // The persisted map is a page-level hint and may belong to the other experience.
+  const candidates = assistantSessionsForPage(sessions, pageId, experience);
   const target = candidates.find((item) => item.id === remembered)
     ?? [...candidates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
   if (target) return selectAssistantSession(sessions, target.id);
   if (sessions.items.length >= MAX_PROJECT_ASSISTANT_SESSIONS) throw new Error("项目会话容量已满，请先备份并整理项目。");
-  const created = newAssistantSession([], pageId);
+  const created = newAssistantSession([], pageId, experience);
   return selectAssistantSession({ ...sessions, items: [...sessions.items, created] }, created.id);
 }
 
@@ -130,5 +146,5 @@ export function recoverAssistantSessions(sessions: AssistantSessions | null, tas
   }) };
 }
 export function rotateAssistantSessionContexts(sessions: AssistantSessions | null): AssistantSessions | null {
-  return sessions && { ...sessions, items: sessions.items.map((item) => ({ ...item, contextId: newAssistantSession().contextId })) };
+  return sessions && { ...sessions, items: sessions.items.map((item) => ({ ...item, contextId: newAssistantContextId(assistantSessionExperience(item)) })) };
 }

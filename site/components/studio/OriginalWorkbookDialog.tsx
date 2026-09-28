@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { readSheet, type SheetData } from "read-excel-file/browser";
 import { triggerBrowserDownload } from "./ExcelDownloadButton";
@@ -85,12 +86,12 @@ export function OriginalWorkbookDialog({ file, sheetNames, onClose }: OriginalWo
       >
         <header>
           <div><small>SESSION ORIGINAL WORKBOOK</small><h2 id="original-workbook-title">原始表格</h2><p>{file.name} · {(file.size / 1024).toFixed(1)} KiB</p></div>
-          <div><button type="button" onClick={() => triggerBrowserDownload(file, file.name)}>下载原文件</button><button type="button" aria-label="关闭原始表格" onClick={onClose}>×</button></div>
+          <div><Button variant="secondary" type="button" onClick={() => triggerBrowserDownload(file, file.name)}>下载原文件</Button><Button variant="secondary" type="button" aria-label="关闭原始表格" onClick={onClose}>×</Button></div>
         </header>
         <div className="original-workbook-privacy"><b>完整工作簿可用</b><span>AI 可按需查询全部工作表和数据行，预览按页显示。预览显示工作簿存储的单元格值，不运行宏。</span></div>
         <div className="original-workbook-tabs" role="tablist" aria-label="原始工作簿工作表">
           {sheetNames.map((sheetName, index) => (
-            <button type="button" role="tab" aria-selected={activeSheetIndex === index} key={sheetName} onClick={() => { setActiveSheetIndex(index); setPage(0); }}>{sheetName}</button>
+            <Button variant="secondary" type="button" role="tab" aria-selected={activeSheetIndex === index} key={sheetName} onClick={() => { setActiveSheetIndex(index); setPage(0); }}>{sheetName}</Button>
           ))}
         </div>
         <div className="original-workbook-body">
@@ -116,7 +117,7 @@ export function OriginalWorkbookDialog({ file, sheetNames, onClose }: OriginalWo
         </div>
         <footer>
           <span>{activeSheetName || "未选择工作表"} · {rows.length.toLocaleString("zh-CN")} 行 × {columnCount.toLocaleString("zh-CN")} 列</span>
-          <div><button type="button" disabled={loading || page <= 0} onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</button><b>{page + 1} / {totalPages}</b><button type="button" disabled={loading || page >= totalPages - 1} onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}>下一页</button></div>
+          <div><Button variant="secondary" type="button" disabled={loading || page <= 0} onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</Button><b>{page + 1} / {totalPages}</b><Button variant="secondary" type="button" disabled={loading || page >= totalPages - 1} onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}>下一页</Button></div>
         </footer>
       </section>
     </div>

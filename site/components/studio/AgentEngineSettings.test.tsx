@@ -1,110 +1,142 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import type { AgentEngineSettings as AgentEngineStatus } from "@/core/agent-engines/contracts";
-import { AgentEngineSettings, AgentEngineSettingsContent, readAgentEngineSettingsResponse } from "./AgentEngineSettings";
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEngineSettings as EngineStatus } from "@/core/agent-engines/contracts";
+import { defaultDshPluginDocument, type DshPluginSettings } from "@/core/agent-engines/plugin-settings";
+import { buildDshPluginCatalog } from "@/core/agent-engines/server/plugin-catalog";
+import { DSH_SETTINGS_CHANNEL } from "@/core/dsh-web/settings-projection";
+import { AgentEngineSettings, readAgentEngineSettingsResponse, readDshPluginSettingsResponse } from "./AgentEngineSettings";
 
-const status: AgentEngineStatus = {
-  engine: "harness", revision: 3, activeTasks: 0, persistence: "process-memory",
-  dsh: { available: true, version: "0.1.6-alpha.2" },
-  plugins: [{ id: "notebook", name: "Notebook 工具桥", description: "真实试运行与待采用草稿。",
-    tools: ["cellSearch", "editNotebookCells", "runNotebookCells", "submitNotebookDraft"] }],
-};
-const callbacks = { onEngineChange: () => {}, onRefresh: () => {}, onApply: () => {}, onClose: () => {} };
-function content(options: Partial<Parameters<typeof AgentEngineSettingsContent>[0]> = {}) {
-  return renderToStaticMarkup(<AgentEngineSettingsContent status={status} selectedEngine="harness" loading={false} busy={false} {...callbacks} {...options} />);
+const engine: EngineStatus = { engine: "harness", revision: 0, activeTasks: 0, persistence: "process-memory",
+  dsh: { available: true, version: "0.1.7-rc.2" }, plugins: [] };
+const settings: DshPluginSettings = { document: defaultDshPluginDocument(), persistence: "json-file", activeTasks: 0,
+  plugins: buildDshPluginCatalog(defaultDshPluginDocument(), { "dsh-skill": { installed: true }, "dsh-tool-skill": { installed: true } }) };
+const roots: Root[] = [];
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+beforeEach(() => {
+  vi.useFakeTimers();
+  // An isolated iframe peer tests the parent protocol without requesting any
+  // running website. Actual same-origin loading is covered in Edge.
+  const create = document.createElement.bind(document);
+  vi.spyOn(document, "createElement").mockImplementation((tag, options) => {
+    const element = create(tag, options);
+    if (tag === "iframe") {
+      element.setAttribute("srcdoc", "<!doctype html><body></body>");
+      Object.defineProperty(element, "contentWindow", { value: { postMessage: vi.fn() } });
+    }
+    return element;
+  });
+});
+afterEach(() => {
+  while (roots.length) act(() => roots.pop()!.unmount());
+  document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers();
+});
+async function settle() { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); }
+function network() {
+  const mock = vi.fn(async (url: string, init?: RequestInit) => new Response(JSON.stringify(
+    url.endsWith("/agent-engine") ? engine : init?.method === "PATCH"
+      ? { ...settings, document: { schemaVersion: 1, revision: 1, config: { skills: true } } } : settings)));
+  vi.stubGlobal("fetch", mock); return mock;
 }
-function applyButton(html: string) { return html.match(/<button[^>]*>应用执行引擎<\/button>/)?.[0]; }
-function dshRadio(html: string) { return html.match(/<input[^>]*value="dsh"[^>]*>/)?.[0]; }
-
-describe("Agent 执行与插件设置", () => {
-  it("展示真实引擎范围、进程内保存及四工具目录，不伪装插件安装管理", () => {
-    const html = content();
-    expect(html).toContain("原版 Harness");
-    expect(html).toContain("DeepSeek Harness");
-    expect(html).toContain("0.1.6-alpha.2");
-    expect(html).toContain("只读目录");
-    for (const tool of status.plugins[0].tools) expect(html).toContain(`<code>${tool}</code>`);
-    expect(html).toContain("本次附带的 Excel 原件");
-    expect(html).toContain("连接须允许 AI 使用");
-    expect(html).toContain("选择单表语义模型后可用语义查询，沿用固定指标口径");
-    expect(html).toContain("说明中的数值可绑定本轮完整单行结果，不执行表达式或脚本");
-    expect(html).toContain("支持文本、数字、日期和单选参数，以单行表传入本地 SQL 或 Python");
-    expect(html).toContain("不用于远端 SQL 参数绑定，也不是密码输入");
-    expect(html).toContain("暂不支持多模型 Notebook、图片及外部工具");
-    expect(html).not.toContain("暂不支持语义模型");
-    expect(html).toContain("不代表全部已启用");
-    expect(html).toContain("不提供安装、卸载或独立启停");
-    expect(html).toContain("不自动切换引擎");
-    expect(html).toContain("重启后恢复原版");
-    expect(html).toContain("不会运行数据或调用模型");
-    expect(html).not.toContain('type="password"');
-    expect(applyButton(html)).toContain('disabled=""');
+function mount(onOpenModels?: () => void) {
+  const container = document.createElement("div"); document.body.appendChild(container);
+  const root = createRoot(container); roots.push(root);
+  act(() => root.render(<AgentEngineSettings onOpenModels={onOpenModels} />));
+  return { root, container };
+}
+async function open(container: HTMLElement) {
+  act(() => container.querySelector<HTMLButtonElement>("button")!.click()); await settle();
+  const frame = container.querySelector<HTMLIFrameElement>("iframe")!;
+  expect(frame.title).toBe("官方 DSH 设置");
+  const spy = vi.spyOn(frame.contentWindow!, "postMessage");
+  const command = (value: object, overrides: MessageEventInit = {}) => act(() => {
+    window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow, origin: location.origin,
+      data: { channel: DSH_SETTINGS_CHANNEL, nonce: frame.getAttribute("src")!.split("#")[1], ...value }, ...overrides }));
   });
-
-  it("仅选择不同且可用的引擎后才开放显式应用", () => {
-    expect(applyButton(content({ selectedEngine: "dsh" }))).not.toContain("disabled");
-    expect(dshRadio(content({ selectedEngine: "dsh" }))).toContain('checked=""');
-    expect(applyButton(content({ status: { ...status, engine: "dsh" }, selectedEngine: "harness" }))).not.toContain("disabled");
+  command({ type: "ready" }); command({ type: "mounted" });
+  const snapshot = () => {
+    const message = spy.mock.calls.map(call => call[0]).filter(message => message.type === "snapshot").at(-1);
+    return message.snapshot;
+  };
+  return { frame, command, snapshot };
+}
+describe("official settings bridge preserves website configuration lifecycle", () => {
+  it("loads only after opening and read refresh preserves an edited draft", async () => {
+    const fetcher = network(), { container } = mount(); expect(fetcher).not.toHaveBeenCalled();
+    const ui = await open(container); expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(ui.frame.getAttribute("src")).toContain("?surface=settings#");
+    for (const [, init] of fetcher.mock.calls) { expect(init?.body).toBeUndefined(); expect(init?.signal).toBeInstanceOf(AbortSignal); }
+    ui.command({ type: "skills", skills: true }); expect(ui.snapshot().skills).toBe(true);
+    ui.command({ type: "refresh" }); await settle(); expect(ui.snapshot().skills).toBe(true);
+    expect(fetcher.mock.calls.every(([, init]) => init?.method !== "PATCH")).toBe(true);
   });
-
-  it("组件不可用显示原因并禁选 DSH，仍可返回原版", () => {
-    const unavailable = { ...status, dsh: { available: false, reason: "本机未安装固定版本组件。" } };
-    const html = content({ status: unavailable, selectedEngine: "dsh" });
-    expect(html).toContain("当前不可用");
-    expect(html).toContain("本机未安装固定版本组件。");
-    expect(dshRadio(html)).toContain('disabled=""');
-    expect(applyButton(html)).toContain('disabled=""');
-    expect(applyButton(content({ status: { ...unavailable, engine: "dsh" }, selectedEngine: "harness" }))).not.toContain("disabled");
+  it("saves only plugin revision/config, never the engine; suppresses duplicate saves", async () => {
+    const fetcher = network(), { container } = mount(), ui = await open(container);
+    ui.command({ type: "skills", skills: true }); ui.command({ type: "save" }); ui.command({ type: "save" }); await settle();
+    const writes = fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH");
+    expect(writes).toHaveLength(1); expect(writes[0][0]).toBe("/api/settings/dsh-plugins");
+    expect(JSON.parse(String(writes[0][1]?.body))).toEqual({ revision: 0, config: { skills: true } });
+    expect(ui.snapshot().notice).toContain("下一轮任务生效"); expect(ui.snapshot().dirty).toBe(false);
   });
-
-  it.each([{ disabled: true }, { status: { ...status, activeTasks: 1 } }])("窗口或服务端存在任务时禁止切换", options => {
-    const html = content({ selectedEngine: "dsh", ...options });
-    expect(html).toContain("有任务正在执行");
-    expect(html).toMatch(/<fieldset[^>]*disabled=""/);
-    expect(applyButton(html)).toContain('disabled=""');
+  it("refresh adopts a newer server configuration only when no unsaved edit exists", async () => {
+    const fetcher = network(), { container } = mount(), ui = await open(container);
+    fetcher.mockImplementation(async url => Response.json(url.endsWith("/agent-engine") ? engine
+      : { ...settings, document: { ...settings.document, revision: 1, config: { skills: true } } }));
+    ui.command({ type: "refresh" }); await settle();
+    expect(ui.snapshot().skills).toBe(true); expect(ui.snapshot().dirty).toBe(false);
+    ui.command({ type: "close" }); expect(container.querySelector("dialog")).toBeNull();
   });
-
-  it("加载失败仅允许刷新；不展示未经确认的可用性", () => {
-    const html = content({ status: null, needsRefresh: true, error: "读取失败" });
-    expect(html).toContain('role="alert"');
-    expect(html).toContain("读取失败");
-    expect(html).toContain("请先刷新状态再操作");
-    expect(html).not.toContain("本机组件可用");
-    expect(applyButton(html)).toContain('disabled=""');
-    expect(html).toContain('<button type="button">刷新状态</button>');
+  it("failed save retains the draft, locks until refresh and never auto-retries", async () => {
+    const fetcher = network(), { container } = mount(), ui = await open(container);
+    fetcher.mockImplementation(async (url, init) => init?.method === "PATCH"
+      ? Response.json({ error: { message: "版本冲突" } }, { status: 409 }) : Response.json(url.endsWith("/agent-engine") ? engine : settings));
+    ui.command({ type: "skills", skills: true }); ui.command({ type: "save" }); await settle();
+    expect(ui.snapshot()).toMatchObject({ skills: true, needsRefresh: true, locked: true });
+    expect(ui.snapshot().error).toContain("版本冲突");
+    ui.command({ type: "save" }); expect(fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
+    ui.command({ type: "refresh" }); await settle();
+    expect(ui.snapshot()).toMatchObject({ skills: true, needsRefresh: false, locked: false });
   });
-
-  it("应用中锁定选择和关闭；失败或未确认回执必须先刷新", () => {
-    const busy = content({ selectedEngine: "dsh", busy: true });
-    expect(busy).toContain("正在应用…");
-    expect(busy).toMatch(/aria-label="关闭 Agent 执行与插件" disabled=""/);
-    expect(busy).toContain('<button type="button" disabled="">取消</button>');
-    expect(applyButton(content({ selectedEngine: "dsh", needsRefresh: true }))).toContain('disabled=""');
+  it("requires explicit discard, keeps edits on cancel and reopens from saved server state", async () => {
+    network(); const { container } = mount(), ui = await open(container);
+    ui.command({ type: "skills", skills: true }); ui.command({ type: "close" }); expect(ui.snapshot().discard).toBe(true);
+    ui.command({ type: "keep" }); expect(ui.snapshot()).toMatchObject({ skills: true, discard: false });
+    ui.command({ type: "discard" }); expect(container.querySelector("dialog")).not.toBeNull();
+    ui.command({ type: "close" }); ui.command({ type: "discard" }); expect(container.querySelector("dialog")).toBeNull();
+    const next = await open(container); expect(next.snapshot().skills).toBe(false);
   });
-
-  it("加载、应用成功和空目录有真实文字状态，服务端文本按文本转义", () => {
-    expect(content({ status: null, loading: true })).toContain("正在读取执行引擎状态…");
-    expect(content({ notice: "已切换为原版 Harness，仅对后续任务生效。" })).toContain('role="status"');
-    expect(content({ status: { ...status, plugins: [] } })).toContain("当前没有已接入的工具插件");
-    const html = content({ status: { ...status, dsh: { available: false, reason: "<img src=x onerror=alert(1)>" } } });
-    expect(html).toContain("&lt;img");
-    expect(html).not.toContain("<img");
+  it("aborts pending reads and ignores late response after reopen", async () => {
+    const fetcher = network(); let finish!: (value: Response) => void;
+    fetcher.mockImplementation(url => url.endsWith("/agent-engine") ? Promise.resolve(Response.json(engine)) : new Promise(resolve => { finish = resolve; }));
+    const { container } = mount(), ui = await open(container), signal = fetcher.mock.calls[1][1]!.signal!;
+    ui.command({ type: "close" }); expect(signal.aborted).toBe(true);
+    fetcher.mockImplementation(async url => Response.json(url.endsWith("/agent-engine") ? engine : settings));
+    const next = await open(container);
+    await act(async () => finish(Response.json({ ...settings, document: { ...settings.document, config: { skills: true } } })));
+    expect(next.snapshot().skills).toBe(false);
   });
-
-  it("支持菜单受控入口；默认不挂载弹窗或发出设置请求", () => {
-    expect(renderToStaticMarkup(<AgentEngineSettings />)).toContain('aria-label="Agent 执行与插件"');
-    expect(renderToStaticMarkup(<AgentEngineSettings hideTrigger />)).toBe("");
-    const html = renderToStaticMarkup(<AgentEngineSettings hideTrigger open disabled />);
-    expect(html).toContain('aria-labelledby="agent-engine-settings-heading"');
-    expect(html).toContain("正在读取执行引擎状态…");
-    expect(html).not.toContain('aria-label="Agent 执行与插件"');
+  it("delegates model configuration without allowing dirty navigation or forged frame actions", async () => {
+    network(); const onModels = vi.fn(), { container } = mount(onModels), ui = await open(container);
+    ui.command({ type: "models" }); expect(onModels).toHaveBeenCalledOnce();
+    ui.command({ type: "skills", skills: true }, { source: window }); expect(ui.snapshot().skills).toBe(false);
+    ui.command({ type: "skills", skills: true }, { origin: "https://outside.invalid" }); expect(ui.snapshot().skills).toBe(false);
+    ui.command({ type: "skills", skills: true, unexpected: true }); expect(ui.snapshot().skills).toBe(false);
+    ui.command({ type: "skills", skills: true }); ui.command({ type: "models" }); expect(onModels).toHaveBeenCalledOnce();
   });
-
-  it("设置读取严格使用共享 DTO，拒绝坏响应且保留服务端冲突原因", async () => {
-    await expect(readAgentEngineSettingsResponse(Response.json(status))).resolves.toEqual(status);
-    await expect(readAgentEngineSettingsResponse(Response.json({ ...status, engine: "unknown" }))).rejects.toThrow("响应格式无效");
-    await expect(readAgentEngineSettingsResponse(new Response("<html>private internal page</html>"))).rejects.toThrow("响应格式无效");
-    await expect(readAgentEngineSettingsResponse(Response.json({ error: { message: "设置已变化，请刷新。" } }, { status: 409 }))).rejects.toThrow("设置已变化");
-    await expect(readAgentEngineSettingsResponse(Response.json({}, { status: 503 }))).rejects.toThrow("无法读取或更新");
+  it.each([{ activeTasks: 1 }, { persistence: "unconfigured" }])("enforces mutation locks in parent for %j", async override => {
+    const fetcher = network(); fetcher.mockImplementation(async url => Response.json(url.endsWith("/agent-engine") ? engine : { ...settings, ...override }));
+    const { container } = mount(), ui = await open(container);
+    expect(ui.snapshot()).toMatchObject({ locked: true, canConfigure: false });
+    ui.command({ type: "skills", skills: true }); ui.command({ type: "save" }); await settle();
+    expect(ui.snapshot().skills).toBe(false); expect(fetcher.mock.calls.every(([, init]) => init?.method !== "PATCH")).toBe(true);
+  });
+});
+describe("settings response validation", () => {
+  it.each([readAgentEngineSettingsResponse, readDshPluginSettingsResponse])("rejects invalid JSON/DTO and bounds errors", async read => {
+    await expect(read(new Response("not json"))).rejects.toThrow("格式");
+    await expect(read(Response.json({ invalid: true }))).rejects.toThrow("格式");
+    await expect(read(Response.json({ error: { message: "x".repeat(800) } }, { status: 503 }))).rejects.toThrow("x".repeat(500));
+    await expect(read(Response.json({ error: {} }, { status: 500 }))).rejects.toThrow("无法");
   });
 });

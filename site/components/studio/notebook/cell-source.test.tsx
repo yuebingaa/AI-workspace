@@ -81,4 +81,17 @@ describe("Notebook review diff", () => {
     expect(html).toContain("原文"); expect(html).toContain("新文");
     expect(document.revision).toBe(3);
   });
+  it.each([undefined, "预览尚未成功运行"])("keeps preview confirmation explicit and respects execution failure: %s", (blockedReason) => {
+    const document: NotebookDocument = { name: "原文档", revision: 2, cells: [{ id: "note", kind: "text", title: "说明", markdown: "原文" }] };
+    const before = structuredClone(document);
+    const artifact: NotebookArtifact = { id: "preview", version: 1, status: "draft", name: "预览文档", baseRevision: 2,
+      cells: [{ id: "note", kind: "text", title: "说明", markdown: "新文" }], executionOrder: ["note"], lineage: [{ cellId: "note", dependsOn: [] }],
+      sourceDataSourceIds: [], createdAt: "2026-09-24T00:00:00.000Z" };
+    const html = renderToStaticMarkup(<NotebookDraftReview document={document} draft={artifact} previewing disabled={false} blockedReason={blockedReason}
+      onAdopt={() => { throw Error("must not confirm during render"); }} onDismiss={() => { throw Error("must not dismiss during render"); }} />);
+    expect(html).toContain("正在预览 AI 更改 · 待确认");
+    expect(html).toContain("撤销预览"); expect(html).toContain("确认更改");
+    expect(/disabled=""[^>]*>确认更改/.test(html)).toBe(Boolean(blockedReason));
+    expect(document).toEqual(before);
+  });
 });

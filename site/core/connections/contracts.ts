@@ -20,3 +20,6 @@ export const connectionSchemaSchema = z.object({
   catalog: catalogSummarySchema.optional(),
 }).strict();
 export type ConnectionSchema = z.infer<typeof connectionSchemaSchema>;
+
+/** Credentials and connection access are bound by the server composition. */
+export type ConnectionSchemaInspector = (connectionId: string, signal?: AbortSignal) => Promise<ConnectionSchema>;

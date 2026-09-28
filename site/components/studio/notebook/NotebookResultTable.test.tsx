@@ -1,4 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { buttonMarkup } from "@/test-support/markup";
+import { renderToStaticMarkup } from "@/test-support/render-themed";
 import { describe, expect, it } from "vitest";
 import type { NotebookTable } from "@/core/notebook/contracts";
 import type { NotebookResultAvailability } from "@/core/notebook/result-availability";
@@ -22,7 +24,7 @@ describe("Notebook preview CSV affordance", () => {
     expect(html).toContain("不只是本页 20 行");
     expect(html).toContain("预览 1 / 3");
     expect(html.match(/<tr>/gu)).toHaveLength(21);
-    expect(html).toMatch(/<button type="button" title="[^"]*45[^"]*"[^>]*>导出当前预览 CSV/);
+    expect(buttonMarkup(html, "导出当前预览 CSV").title).toContain("45");
     expect(html).not.toContain("已发起当前预览 CSV 下载");
   });
   it("keeps the complete count distinct and never claims a 1324-row download from a 1000-row preview", () => {

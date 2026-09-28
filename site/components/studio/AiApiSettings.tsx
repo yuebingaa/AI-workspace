@@ -1,5 +1,7 @@
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { SelectField, SelectItem, TextInput } from "@/components/ui/fields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { containDialogFocus } from "./dialog-focus";
 
 interface AiApiStatus {
   configured: boolean;
@@ -19,7 +21,6 @@ async function readResponse(response: Response): Promise<AiApiStatus> {
 
 export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger = false }: { open?: boolean; onOpenChange?: (open: boolean) => void; hideTrigger?: boolean } = {}) {
   const [localOpen, setLocalOpen] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const open = controlledOpen ?? localOpen;
   const setOpen = onOpenChange ?? setLocalOpen;
@@ -32,8 +33,6 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
 
   useEffect(() => {
     if (!open) return;
-    const element = dialog.current;
-    element?.showModal();
     const controller = new AbortController();
     void fetch("/api/settings/ai", { cache: "no-store", signal: controller.signal })
       .then(readResponse)
@@ -41,7 +40,7 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
       .catch((caught) => {
         if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "无法读取 AI API 配置。");
       });
-    return () => { controller.abort(); element?.close(); };
+    return () => { controller.abort(); };
   }, [open]);
 
   function openSettings() {
@@ -50,7 +49,6 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
   }
 
   function closeSettings() {
-    dialog.current?.close();
     setApiKey("");
     setError("");
     setOpen(false);
@@ -136,7 +134,7 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
 
   return (
     <>
-      {!hideTrigger && <button
+      {!hideTrigger && <Button variant="secondary"
         ref={trigger}
         type="button"
         className="ai-api-settings-trigger"
@@ -145,19 +143,18 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
         onClick={openSettings}
       >
         <span aria-hidden="true">⚙</span> API
-      </button>}
+      </Button>}
       {open && (
-        <dialog ref={dialog} className="ai-api-settings-overlay" aria-labelledby="ai-api-settings-title" onKeyDown={containDialogFocus} onCancel={event => { event.preventDefault(); if (!busy) closeSettings(); }} onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !busy) closeSettings();
-        }}>
-          <section className="ai-api-settings-dialog">
+        <Dialog open onOpenChange={next => { if (!next && !busy) closeSettings(); }}>
+          <DialogContent maxWidth="520px" className="ai-api-settings-dialog" aria-labelledby="ai-api-settings-title" aria-describedby={undefined}
+            onEscapeKeyDown={event => { if (busy) event.preventDefault(); }} onPointerDownOutside={event => { if (busy) event.preventDefault(); }}>
             <header>
               <div>
                 <small>LOCAL AI CREDENTIAL</small>
-                <h2 id="ai-api-settings-title">AI 接口配置</h2>
+                <DialogTitle id="ai-api-settings-title">AI 接口配置</DialogTitle>
                 <p>配置 DeepSeek API Key，供本机 Harness 和 AI 规划器使用。</p>
               </div>
-              <button type="button" aria-label="关闭 AI API 配置" disabled={busy} onClick={closeSettings}>×</button>
+              <Button variant="secondary" type="button" aria-label="关闭 AI API 配置" disabled={busy} onClick={closeSettings}>×</Button>
             </header>
 
             {status?.configured && !editing ? (
@@ -172,7 +169,7 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
             ) : (
               <form onSubmit={save}>
                 <label htmlFor="deepseek-api-key">DeepSeek API Key</label>
-                <input
+                <TextInput
                   id="deepseek-api-key"
                   type="password"
                   value={apiKey}
@@ -187,7 +184,7 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
                   onChange={(event) => setApiKey(event.target.value)}
                 />
                 <p>仅发送到当前网站的本机服务端；页面不会保存或重新显示密钥。</p>
-                <button className="primary" type="submit" disabled={busy || apiKey.trim().length < 8}>{busy ? "正在识别…" : "验证密钥并识别模型"}</button>
+                <Button variant="primary" className="primary" type="submit" loading={busy} disabled={busy || apiKey.trim().length < 8}>{busy ? "正在识别…" : "验证密钥并识别模型"}</Button>
               </form>
             )}
 
@@ -200,14 +197,14 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
                 {status.availableModels.length > 0 && (
                   <label>
                     <span>选择模型</span>
-                    <select value={selectedModel} disabled={busy} onChange={(event) => setSelectedModel(event.target.value)}>
-                      {status.availableModels.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
-                    </select>
+                    <SelectField value={selectedModel} disabled={busy} onValueChange={(selectedValue) => setSelectedModel(selectedValue)}>
+                      {status.availableModels.map((model) => <SelectItem key={model.id} value={model.id}>{model.id}</SelectItem>)}
+                    </SelectField>
                   </label>
                 )}
                 <div className="ai-api-model-actions">
-                  <button type="button" disabled={busy} onClick={() => { void discoverModels(); }}>{busy ? "处理中…" : status.modelsDiscovered ? "重新识别" : "识别可用模型"}</button>
-                  {status.availableModels.length > 0 && <button className="primary" type="button" disabled={busy || !selectedModel || selectedModel === status.model} onClick={() => { void applyModel(); }}>应用模型</button>}
+                  <Button variant="secondary" type="button" disabled={busy} onClick={() => { void discoverModels(); }}>{busy ? "处理中…" : status.modelsDiscovered ? "重新识别" : "识别可用模型"}</Button>
+                  {status.availableModels.length > 0 && <Button variant="primary" className="primary" type="button" disabled={busy || !selectedModel || selectedModel === status.model} onClick={() => { void applyModel(); }}>应用模型</Button>}
                 </div>
                 <p>模型列表来自 DeepSeek 官方接口；选择结果仅保存在当前服务进程中。</p>
               </section>
@@ -215,13 +212,13 @@ export function AiApiSettings({ open: controlledOpen, onOpenChange, hideTrigger 
 
             {error && <p className="ai-api-settings-error" role="alert">{error}</p>}
             <footer>
-              {status?.configured && !editing && <button type="button" disabled={busy} onClick={() => setEditing(true)}>更换密钥</button>}
-              {status?.source === "runtime" && !editing && <button type="button" disabled={busy} onClick={() => { void clearRuntimeKey(); }}>清除临时密钥</button>}
-              {editing && status?.configured && <button type="button" disabled={busy} onClick={() => { setApiKey(""); setEditing(false); }}>取消更换</button>}
-              <button type="button" disabled={busy} onClick={closeSettings}>完成</button>
+              {status?.configured && !editing && <Button variant="secondary" type="button" disabled={busy} onClick={() => setEditing(true)}>更换密钥</Button>}
+              {status?.source === "runtime" && !editing && <Button variant="secondary" type="button" disabled={busy} onClick={() => { void clearRuntimeKey(); }}>清除临时密钥</Button>}
+              {editing && status?.configured && <Button variant="secondary" type="button" disabled={busy} onClick={() => { setApiKey(""); setEditing(false); }}>取消更换</Button>}
+              <Button variant="secondary" type="button" disabled={busy} onClick={closeSettings}>完成</Button>
             </footer>
-          </section>
-        </dialog>
+          </DialogContent>
+        </Dialog>
       )}
     </>
   );

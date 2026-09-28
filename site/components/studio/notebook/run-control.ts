@@ -1,4 +1,4 @@
-export type NotebookRunKind = "manual" | "auto";
+export type NotebookRunKind = "manual" | "auto" | "draft";
 export interface NotebookRunLease {
   readonly id: number;
   readonly kind: NotebookRunKind;

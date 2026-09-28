@@ -9,7 +9,8 @@ import {
   type HarnessState,
   type HarnessTaskSummary,
 } from "./contracts";
-import { sanitizeHarnessText } from "./security";
+import { redactHarnessSecrets } from "./security";
+import { isDshConversationTaskIdentity } from "./assistant-request-identity";
 
 export interface HarnessTaskClock {
   now(): Date;
@@ -88,7 +89,9 @@ export function settleHarnessConfirmation(
     state: accepted ? "completed" : "cancelled",
     message: notebookOnly ? accepted ? "用户采用了 Notebook 草稿，正式看板未修改。" : "用户未采用 Notebook 草稿。" : accepted ? "用户确认并应用了待确认 ChangeSet。" : "用户拒绝了待确认 ChangeSet，正式 AppSpec 未修改。",
   }, clock, {
-    resultMessage: sanitizeHarnessText(changeDetails ? `${changeDetails.slice(0, 1_700)}\n\n${confirmationResult}` : confirmationResult).slice(0, 2_000),
+    resultMessage: changeDetails
+      ? `${redactHarnessSecrets(changeDetails)}\n\n${confirmationResult}`
+      : confirmationResult,
     terminationCode: accepted ? "completed" : "cancelled",
     ...(task.executionTiming ? { executionTiming: executionTimingWithPhase(task, accepted ? "completed" : "cancelled") } : {}),
     ...(accepted ? {} : { pendingChangeSet: undefined }),
@@ -98,10 +101,15 @@ export function settleHarnessConfirmation(
 export function recoverHarnessTasksAfterRefresh(
   tasks: HarnessTaskSummary[],
   clock: HarnessTaskClock,
+  preserveConversationTaskIds?: ReadonlySet<string>,
 ): HarnessTaskSummary[] {
   const interrupted = new Set<HarnessState>(["planning", "executingTool", "observing"]);
   return tasks.map((task) => {
-    if (task.state === "completed" && task.counters.toolCallCount === 0 && /数据|销售|订单|字段|异常|复购/.test(task.instruction)) {
+    // The legacy migration guessed missing data execution from words in the prompt.
+    // A completed DSH conversation may legitimately answer without a business tool.
+    // These local identities preserve a settled receipt, never authorize execution.
+    const isConversationReceipt = preserveConversationTaskIds?.has(task.id) || isDshConversationTaskIdentity(task);
+    if (!isConversationReceipt && task.state === "completed" && task.counters.toolCallCount === 0 && /数据|销售|订单|字段|异常|复购/.test(task.instruction)) {
       return appendHarnessEvent(task, {
         type: "state",
         state: "blocked",

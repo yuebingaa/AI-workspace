@@ -16,6 +16,36 @@ function request() {
 }
 
 describe("Harness 客户端", () => {
+  it("DSH non-streaming requests have no default task deadline and remain cancellable", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = new AbortController();
+      let requestSignal: AbortSignal | null | undefined;
+      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+        requestSignal = init?.signal;
+        return new Promise((_resolve, reject) => requestSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+      });
+      const work = requestHarnessTask(request(), { experience: "dsh-conversation", signal: cancel.signal, fetchImpl });
+      const assertion = expect(work).rejects.toMatchObject({ code: "cancelled" });
+      await vi.advanceTimersByTimeAsync(1_000_000);
+      expect(requestSignal?.aborted).toBe(false);
+      cancel.abort(); await assertion;
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true])("uses a fixed independent DSH endpoint without adding public mode flags (stream=%s)", async (stream) => {
+    const task = createHarnessTask("request_client_test", "检查数据", "page_home", "editor", {
+      now: () => new Date("2026-01-01T00:00:00.000Z"), id: () => "event_client",
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ task }), { status: 200 }));
+    if (stream) {
+      // Endpoint choice is checked even when the deliberately non-SSE fixture is rejected.
+      await expect(requestHarnessTask(request(), { fetchImpl, stream, experience: "dsh-conversation" })).rejects.toBeInstanceOf(HarnessClientError);
+    } else await expect(requestHarnessTask(request(), { fetchImpl, experience: "dsh-conversation" })).resolves.toEqual({ task });
+    expect(fetchImpl.mock.calls[0][0]).toBe(`/api/ai/dsh/conversation${stream ? "/stream" : ""}`);
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]?.body))).not.toHaveProperty("experience");
+  });
   it("校验服务端任务响应", async () => {
     const task = createHarnessTask("request_client_test", "检查数据", "page_home", "editor", {
       now: () => new Date("2026-01-01T00:00:00.000Z"),

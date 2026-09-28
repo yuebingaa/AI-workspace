@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button";
+import { TextInput } from "@/components/ui/fields";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { connectionCatalogSchema, connectionSchemaSchema, type ConnectionDescriptor, type ConnectionSchema } from "@/core/connections/contracts";
@@ -47,28 +49,28 @@ export function ConnectionBrowser({ onConnections, onQuery, disabled }: {
   return <details className="notebook-connections"><summary>数据库连接 · {connections.length}</summary>
     <p>选择连接查询数据库，结果可直接接入 DataRecipe 和图表。</p>
     {!connections.length && <p>当前项目尚未配置数据库连接。配置只读连接后，刷新即可使用；也可以继续用导入数据分析。</p>}
-    <button type="button" disabled={busy} onClick={() => { setSchema(null); setRevision((value) => value + 1); }}>刷新连接</button>
+    <Button variant="secondary" type="button" disabled={busy} onClick={() => { setSchema(null); setRevision((value) => value + 1); }}>刷新连接</Button>
     {connections.map((connection) => <div className="notebook-connection" key={connection.id}>
       <b>{connection.name}</b><span>{connection.kind} · {connection.allowAi ? "已授权 Agent" : "仅手动查询"}</span>
-      <button type="button" disabled={busy} onClick={() => void inspect(connection.id, "test")}>测试连接</button>
-      <button type="button" disabled={busy} onClick={() => void inspect(connection.id, "schema")}>浏览字段</button>
-      <button type="button" disabled={disabled || busy} onClick={() => onQuery(connection.id)}>新建 SQL</button>
+      <Button variant="secondary" type="button" disabled={busy} onClick={() => void inspect(connection.id, "test")}>测试连接</Button>
+      <Button variant="secondary" type="button" disabled={busy} onClick={() => void inspect(connection.id, "schema")}>浏览字段</Button>
+      <Button variant="secondary" type="button" disabled={disabled || busy} onClick={() => onQuery(connection.id)}>新建 SQL</Button>
     </div>)}
     <p aria-live="polite">{busy ? "正在读取连接…" : message}</p>
     {schema && <section className="connection-catalog" aria-label="数据库字段目录">
       <div className="connection-catalog-toolbar"><div><b>数据目录{schema.data.catalog ? ` · v${schema.data.catalog.revision}` : ""}</b>
         <p>{schema.data.catalog ? `${schema.data.catalog.tableCount} 张表 / 视图 · ${schema.data.columns.length} 个字段 · ${schema.data.catalog.storage === "persistent" ? "已保存目录" : "本次运行目录"}` : `${schema.data.columns.length} 个字段`}</p></div>
-        <button type="button" disabled={busy} onClick={() => void inspect(schema.id, "schema", true)}>同步目录</button></div>
+        <Button variant="secondary" type="button" disabled={busy} onClick={() => void inspect(schema.id, "schema", true)}>同步目录</Button></div>
       {schema.data.catalog && <p>同步于 {new Date(schema.data.catalog.syncedAt).toLocaleString("zh-CN")} · 仅记录结构，业务数据以查询结果为准。</p>}
-      <label>搜索表与字段<input aria-label="搜索数据库表与字段" value={search} maxLength={160} placeholder="数据库、schema、表名或字段名…" onChange={(event) => setSearch(event.target.value)} /></label>
+      <label>搜索表与字段<TextInput aria-label="搜索数据库表与字段" value={search} maxLength={160} placeholder="数据库、schema、表名或字段名…" onChange={(event) => setSearch(event.target.value)} /></label>
       <p role="status">匹配 {columns.length} 个字段。{schema.data.truncated ? "当前目录不完整，仅同步前 500 列；未匹配不代表源库不存在该对象。" : ""}</p>
       <div className="notebook-table-scroll" tabIndex={0} aria-label="数据库字段目录表格，可横向滚动">
-      <table><thead><tr><th>数据库 / 表</th><th>字段</th><th>类型</th><th>操作</th></tr></thead><tbody>{columns.map((column, index) => <tr key={column.column_id ?? index}><td>{column.table_catalog && <small>{column.table_catalog}</small>}{column.table_schema}.{column.table_name}</td><td>{column.column_name}</td><td>{column.data_type}</td><td><button type="button" disabled={disabled || busy} onClick={() => {
+      <table><thead><tr><th>数据库 / 表</th><th>字段</th><th>类型</th><th>操作</th></tr></thead><tbody>{columns.map((column, index) => <tr key={column.column_id ?? index}><td>{column.table_catalog && <small>{column.table_catalog}</small>}{column.table_schema}.{column.table_name}</td><td>{column.column_name}</td><td>{column.data_type}</td><td><Button variant="secondary" type="button" disabled={disabled || busy} onClick={() => {
         const quote = connections.find((item) => item.id === schema.id)?.kind === "databricks" ? "`" : '"';
         const identifier = (value: string) => quote + value.replaceAll(quote, quote + quote) + quote;
         const parts = quote === "`" && column.table_catalog ? [column.table_catalog, column.table_schema, column.table_name] : [column.table_schema, column.table_name];
         onQuery(schema.id, `SELECT * FROM ${parts.map(identifier).join(".")} LIMIT 100`);
-      }}>查询表</button></td></tr>)}</tbody></table></div>
+      }}>查询表</Button></td></tr>)}</tbody></table></div>
       {!columns.length && <p>没有匹配的字段，可以调整搜索词或同步目录。</p>}
     </section>}
   </details>;

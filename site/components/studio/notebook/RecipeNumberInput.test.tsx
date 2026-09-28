@@ -1,4 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { markupRoot } from "@/test-support/markup";
+import { renderMountedMarkup as renderToStaticMarkup } from "@/test-support/render-dialog";
 import { describe, expect, it, vi } from "vitest";
 import { RecipeNumberInput, parseRecipeNumberInput } from "./RecipeNumberInput";
 import { RecipeStepsEditor } from "./RecipeStepsEditor";
@@ -90,8 +92,9 @@ describe("配方数字控件与接线", () => {
     const html = renderToStaticMarkup(<RecipeStepsEditor steps={steps} onChange={() => {}} />);
     expect(html).not.toContain("data-recipe-number");
     expect(html).not.toContain('type="number"');
-    expect(html).toContain('<option value="string" selected="">');
-    expect(html).toContain('<option selected="">false</option>');
+    const selections = [...markupRoot(html).querySelectorAll('[role="combobox"]')].map(select => select.textContent);
+    expect(selections).toContain("文本");
+    expect(selections).toContain("false");
     expect(html).toContain('value="amount"');
     expect(html).toContain('value="ratio"');
   });

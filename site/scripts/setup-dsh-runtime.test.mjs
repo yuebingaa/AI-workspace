@@ -76,6 +76,28 @@ test('failed installation preserves active selection and old files', async () =>
   assert.equal((await readdir(f.runtimeRoot)).includes('dsh-runtime-install.lock'), false);
 });
 
+test('a version upgrade reads the older pointer without executing or overwriting its tree', async () => {
+  const f = await fixture();
+  const oldSelection = { kind: 'slot', id: `0.0.1-rc.1-${'b'.repeat(64)}` };
+  const oldMarker = join(f.runtimeRoot, INSTALLS_DIRECTORY, oldSelection.id, 'preserved.txt');
+  await write(oldMarker, 'previous release');
+  const original = { schemaVersion: 1, active: oldSelection, previous: { kind: 'legacy' } };
+  await write(join(f.runtimeRoot, ACTIVE_FILE), original);
+  await assert.rejects(resolveDshInstallation(f.runtimeRoot), /Invalid isolated DSH installation selection/);
+  await assert.rejects(setupDshRuntime({ ...f, install: async () => { throw new Error('candidate failed'); } }), /candidate failed/);
+  assert.deepEqual(await readActivePointer(f.runtimeRoot), original);
+  const installed = await setupDshRuntime({ ...f, install: async (directory) => {
+    assert.deepEqual(await readActivePointer(f.runtimeRoot), original);
+    await fakeDependencies(directory);
+  } });
+  assert.deepEqual(installed.previous, oldSelection);
+  assert.equal((await resolveDshInstallation(f.runtimeRoot)).selection.id, installed.active.id);
+  assert.equal(await readFile(oldMarker, 'utf8'), 'previous release');
+  const current = await readActivePointer(f.runtimeRoot);
+  await assert.rejects(setupDshRuntime({ ...f, rollback: true }), /Invalid isolated DSH installation selection/);
+  assert.deepEqual(await readActivePointer(f.runtimeRoot), current, 'a different SDK version cannot be selected under current code');
+});
+
 test('installer rejects unpatched dependency and altered fixed lock before activation', async () => {
   for (const mode of ['vulnerable', 'changed-lock']) {
     const f = await fixture();

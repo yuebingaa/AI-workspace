@@ -563,28 +563,33 @@ describe("真实 Harness HTTP 入口的 DSH 分派", () => {
     expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
   });
 
-  it("DSH默认保护不继承旧Harness六次，八次真实工具后交付已验证草稿", async () => {
+  it.each(["json", "sse"])("DSH不继承旧Harness限制，134次真实工具后仍交付长回答且 %s 契约有效", async transport => {
     selected("dsh");
     const { payload } = await fixture();
     vi.stubEnv("HARNESS_MAX_TOOL_CALLS", "1"); vi.stubEnv("HARNESS_TOTAL_EXECUTION_TIMEOUT_MS", "1000");
     mock.driver.mockImplementation(async (input: DshDriverInput) => {
-      expect(input.context.executionBudget).toMatchObject({ maxToolCalls: 24, toolCallsRemaining: 24,
-        totalExecutionTimeoutMs: 180_000, toolCallTimeoutMs: 35_000 });
-      for (let index = 0; index < 4; index += 1) {
+      expect(input.context.executionBudget).toMatchObject({ maxToolCalls: null, toolCallsRemaining: null,
+        totalExecutionTimeoutMs: null, toolCallTimeoutMs: null });
+      for (let index = 0; index < 130; index += 1) {
         input.onModelCall();
         await input.tools.find(tool => tool.name === "cellSearch")!.execute({}, input.signal);
       }
-      return successfulDriver(input);
+      return { ...await successfulDriver(input), finalResponse: "按地区输出样本说明。".repeat(350) + "长回答末尾保留" };
     });
-    const result = harnessResponseSchema.parse(await (await POST(request(payload))).json());
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload));
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal)
+      : harnessResponseSchema.parse(await response.json());
     expect(result.task.state).toBe("awaitingConfirmation");
-    expect(result.task.counters.toolCallCount).toBe(8);
+    expect(result.task.resultMessage).toContain("长回答末尾保留");
+    expect(result.task.resultMessage!.length).toBeGreaterThan(3000);
+    expect(result.task.counters.toolCallCount).toBe(134);
+    expect(result.task.trace).toHaveLength(256);
     expect(result.task.notebookArtifact?.executionEvidence?.status).toBe("success");
-    expect(result.task.trace?.find(event => event.type === "task_started" && event.clientTimeoutMs)).toMatchObject({ clientTimeoutMs: 185_000 });
+    expect(result.task.trace?.at(-1)?.sequence).toBeGreaterThan(256);
     expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
   });
 
-  it("DSH环境仅可收紧可信保护，公共请求不接受提升预算", async () => {
+  it("DSH环境可显式配置预算，公共请求不接受修改预算", async () => {
     selected("dsh");
     const { payload } = await fixture();
     vi.stubEnv("DSH_MAX_TOOL_CALLS", "8"); vi.stubEnv("DSH_TOTAL_EXECUTION_TIMEOUT_MS", "60000"); vi.stubEnv("DSH_TOOL_CALL_TIMEOUT_MS", "15000");
@@ -625,7 +630,12 @@ describe("真实 Harness HTTP 入口的 DSH 分派", () => {
     expect(result.task.counters).toMatchObject({ modelCallCount: 5, toolCallCount: 4 });
     expect(result.task.pendingChangeSet).toBeUndefined();
     expect(result.task.verification?.status).toBe("passed");
-    expect(result.task.resultMessage).not.toContain("UNTRUSTED_MODEL_COMPLETION");
+    // Model prose may now be displayed, but never replaces the bridge receipt
+    // or the authoritative task/event state asserted above.
+    expect(result.task.resultMessage).toContain("AI 分析说明：\nUNTRUSTED_MODEL_COMPLETION");
+    expect(result.task.resultMessage).toContain("待你确认后才保存");
+    expect(JSON.stringify(result.task.events)).not.toContain("UNTRUSTED_MODEL_COMPLETION");
+    expect(JSON.stringify(result.task.notebookArtifact)).not.toContain("UNTRUSTED_MODEL_COMPLETION");
     expect(result.task.conversationStorage).toBe("memory");
     expect(payload).toEqual(before);
     expect(current().activeTasks).toBe(0);
@@ -637,6 +647,23 @@ describe("真实 Harness HTTP 入口的 DSH 分派", () => {
       expect(events.every(event => event.taskId === result.task.id)).toBe(true);
     }
     expectNoLegacyOrNetwork();
+  }, 20_000);
+
+  it.each(["json", "sse"])("%s 不展示与真实待确认状态冲突的模型保存声明", async transport => {
+    selected("dsh");
+    const { payload } = await fixture();
+    const before = structuredClone(payload);
+    mock.driver.mockImplementation(async (input: DshDriverInput) => ({ ...await successfulDriver(input),
+      finalResponse: "already published: MODEL_STATUS_CANNOT_CONFIRM_THE_DRAFT" }));
+    const response = await (transport === "sse" ? streamPOST : POST)(request(payload));
+    const result = transport === "sse" ? await readHarnessStream(response, new AbortController().signal)
+      : harnessResponseSchema.parse(await response.json());
+    expect(result.task.state).toBe("awaitingConfirmation");
+    expect(result.task.notebookArtifact?.executionEvidence?.status).toBe("success");
+    expect(result.task.resultMessage).not.toContain("MODEL_STATUS_CANNOT_CONFIRM_THE_DRAFT");
+    expect(result.task.resultMessage).toContain("待你确认后才保存");
+    expect(payload).toEqual(before);
+    expect(current().activeTasks).toBe(0); expectNoLegacyOrNetwork();
   }, 20_000);
 
   it("同会话显式采用后的第二轮得到服务端历史和当前定义，重新计算 300/160", async () => {

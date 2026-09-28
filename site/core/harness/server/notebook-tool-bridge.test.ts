@@ -41,8 +41,7 @@ async function fixture() {
     request, dataRuntime: { rowsByDataSourceId: { [source.id]: parsed.rows } }, authorizeCurrentAccess,
     notebookRunner: async (artifact, context) => {
       const run = await runNotebook({ document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
-        sources: [{ source: context.request.appSpec.dataSources.find((item) => item.id === source.id)!,
-          rows: context.dataRuntime.rowsByDataSourceId[source.id] }], forAi: true, signal: context.signal, log: () => {} });
+        sources: context.sources, forAi: true, signal: context.signal, log: () => {} });
       runs.push(run);
       return run;
     },
@@ -632,11 +631,10 @@ describe("网站 Notebook 工具桥的授权能力配置", () => {
     options.dataRuntime.rowsByDataSourceId.outside = [{ private: "must not reach runner" }];
     const original = structuredClone(options.request);
     const runner = vi.fn<NotebookToolBridgeOptions["notebookRunner"]>(async (artifact, context) => {
-      expect(Object.keys(context.dataRuntime.rowsByDataSourceId).sort()).toEqual([source.id, second.id].sort());
-      expect(context.notebookCapabilities).toEqual({ python: { enabled: true } });
+      expect(context.sources.map(item => item.source.id).sort()).toEqual([source.id, second.id].sort());
+      expect(Object.keys(context).sort()).toEqual(["revision", "semanticModels", "signal", "sources", "taskId"]);
       return runNotebook({ document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
-        sources: artifact.sourceDataSourceIds.map((id) => ({ source: context.request.appSpec.dataSources.find((item) => item.id === id)!,
-          rows: context.dataRuntime.rowsByDataSourceId[id] })), forAi: true, signal: context.signal, log: () => {} });
+        sources: context.sources, forAi: true, signal: context.signal, log: () => {} });
     });
     const bridge = createNotebookToolBridge({ ...options, notebookRunner: runner });
     try {

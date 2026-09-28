@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button";
+import { TextInput } from "@/components/ui/fields";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal, flushSync } from "react-dom";
 // Share the browser-safe selection limit; the menu never imports Notebook execution.
@@ -10,6 +12,7 @@ type MenuSection = "data" | "results" | "connections" | "semantic" | "notebook";
 
 interface ComposerContextMenuProps {
   anchor: HTMLElement;
+  placement?: "above" | "below";
   workspaces: ComposerDataOption[];
   activeWorkspaceId: string;
   dataSources: ComposerDataOption[];
@@ -32,16 +35,24 @@ interface ComposerContextMenuProps {
   onOpenNotebook?: () => void;
 }
 
-function menuPosition(anchor: HTMLElement) {
+function menuPosition(anchor: HTMLElement, placement: "above" | "below") {
   const box = anchor.getBoundingClientRect();
   const width = Math.min(264, window.innerWidth - 24);
   const left = Math.max(12, Math.min(box.left, window.innerWidth - width - 12));
+  const submenuWidth = Math.min(296, window.innerWidth - 24);
+  // Preserve the composer menu's bottom alignment; header actions instead
+  // align both menus below the button. Short viewports scroll within the inset.
+  const inset = placement === "below"
+    ? Math.max(12, Math.min(box.bottom + 8, window.innerHeight - 230))
+    : Math.max(12, Math.min(window.innerHeight - box.top + 16, window.innerHeight - 230));
   return {
     left,
-    bottom: Math.max(12, Math.min(window.innerHeight - box.top + 16, window.innerHeight - 230)),
+    top: placement === "below" ? inset : undefined,
+    bottom: placement === "above" ? inset : undefined,
+    maxHeight: Math.max(0, window.innerHeight - inset - 12),
     width,
-    submenuLeft: left + width + 300 < window.innerWidth - 12 ? left + width + 4 : Math.max(12, left - 300),
-    submenuWidth: Math.min(296, window.innerWidth - 24),
+    submenuLeft: left + width + 4 + submenuWidth < window.innerWidth - 12 ? left + width + 4 : Math.max(12, left - submenuWidth - 4),
+    submenuWidth,
   };
 }
 
@@ -54,8 +65,8 @@ function ContextIcon({ kind }: { kind: "file" | "data" | "results" | "connection
   </svg>;
 }
 
-export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dataSources, activeDataSourceId, results, semanticModels = [], activeSemanticModelId, onSelectSemanticModel, onManageSemanticModels, onClose, onChooseFiles, onImportData, onSelectWorkspace, onSelectDataSource, onSelectResult, notebookOptions = [], selectedNotebookCellIds = [], notebookContextDisabled = false, onToggleNotebookCell, onOpenNotebook }: ComposerContextMenuProps) {
-  const [position, setPosition] = useState(() => menuPosition(anchor));
+export function ComposerContextMenu({ anchor, placement = "above", workspaces, activeWorkspaceId, dataSources, activeDataSourceId, results, semanticModels = [], activeSemanticModelId, onSelectSemanticModel, onManageSemanticModels, onClose, onChooseFiles, onImportData, onSelectWorkspace, onSelectDataSource, onSelectResult, notebookOptions = [], selectedNotebookCellIds = [], notebookContextDisabled = false, onToggleNotebookCell, onOpenNotebook }: ComposerContextMenuProps) {
+  const [position, setPosition] = useState(() => menuPosition(anchor, placement));
   const [section, setSection] = useState<MenuSection | null>(null);
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
@@ -69,7 +80,7 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
   const filteredModels = semanticModels.filter(matches);
 
   useEffect(() => {
-    const updatePosition = () => setPosition(menuPosition(anchor));
+    const updatePosition = () => setPosition(menuPosition(anchor, placement));
     const outside = (event: PointerEvent) => {
       const target = event.target as Node;
       if (!anchor.contains(target) && !rootRef.current?.contains(target) && !submenuRef.current?.contains(target)) onClose();
@@ -80,7 +91,7 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
       window.removeEventListener("resize", updatePosition);
       document.removeEventListener("pointerdown", outside);
     };
-  }, [anchor, onClose]);
+  }, [anchor, placement, onClose]);
 
   useEffect(() => {
     rootRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
@@ -148,51 +159,51 @@ export function ComposerContextMenu({ anchor, workspaces, activeWorkspaceId, dat
       role="menu"
       aria-label="添加上下文菜单"
       ref={rootRef}
-      style={{ left: position.left, bottom: position.bottom, width: position.width }}
+      style={{ left: position.left, top: position.top, bottom: position.bottom, width: position.width, maxHeight: position.maxHeight, overflowY: "auto", boxSizing: "border-box" }}
       onKeyDown={handleKeys}
       onBlur={handleBlur}
     >
-      <button type="button" role="menuitem" onPointerEnter={() => setSection(null)} onClick={() => pick(onChooseFiles)}><ContextIcon kind="file" /><span>添加文件或图片</span></button>
+      <Button variant="secondary" type="button" role="menuitem" onPointerEnter={() => setSection(null)} onClick={() => pick(onChooseFiles)}><ContextIcon kind="file" /><span>添加文件或图片</span></Button>
       {([
         ["data", "选择工作界面与数据表"],
         ["results", "添加处理配方或结果"],
         ["notebook", "选择 Notebook 参数与单元"],
         ["semantic", "选择语义模型"],
         ["connections", "选择数据连接"],
-      ] as const).map(([id, label]) => <button
+      ] as const).map(([id, label]) => <Button variant="secondary"
         key={id} data-section={id} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={section === id}
         onPointerEnter={(event) => { if (event.pointerType === "mouse") openSection(id); }}
         onClick={() => openSection(id, true)}
-      ><ContextIcon kind={id} /><span>{label}</span><span className="context-menu-chevron" aria-hidden="true">›</span></button>)}
+      ><ContextIcon kind={id} /><span>{label}</span><span className="context-menu-chevron" aria-hidden="true">›</span></Button>)}
     </div>
     {section && <div
       className="composer-context-submenu"
       ref={submenuRef} role="menu" aria-label={title}
-      style={{ left: position.submenuLeft, bottom: position.bottom, width: position.submenuWidth, maxHeight: Math.min(340, window.innerHeight - position.bottom - 12) }}
+      style={{ left: position.submenuLeft, top: position.top, bottom: position.bottom, width: position.submenuWidth, maxHeight: Math.min(340, position.maxHeight), overflowY: "auto", boxSizing: "border-box" }}
       onKeyDown={handleKeys} onBlur={handleBlur}
     >
       <div className="context-submenu-heading"><span>{title}</span></div>
-      <label className="context-menu-search"><ContextIcon kind="search" /><input ref={searchRef} aria-label={`搜索${title}`} placeholder={section === "connections" ? "筛选数据连接…" : "搜索…"} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+      <label className="context-menu-search"><ContextIcon kind="search" /><TextInput ref={searchRef} aria-label={`搜索${title}`} placeholder={section === "connections" ? "筛选数据连接…" : "搜索…"} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
       <div className="context-menu-options">
         {section === "data" && <>
-          {filteredSources.length > 0 && <><p>当前工作界面的数据表</p>{filteredSources.map((source) => <button key={source.id} type="button" role="menuitemradio" aria-checked={source.id === activeDataSourceId} onClick={() => pick(() => onSelectDataSource(source.id))}><span className="context-option-symbol">▦</span><span><b>{source.name}</b><small>{source.detail ?? "导入的数据表"}</small></span>{source.id === activeDataSourceId && <i>✓</i>}</button>)}</>}
-          {filteredWorkspaces.length > 0 && <><p>工作界面</p>{filteredWorkspaces.map((workspace) => <button key={workspace.id} type="button" role="menuitemradio" aria-checked={workspace.id === activeWorkspaceId} onClick={() => pick(() => onSelectWorkspace(workspace.id))}><span className="context-option-symbol">▣</span><span><b>{workspace.name}</b><small>{workspace.detail ?? "切换界面及其数据上下文"}</small></span>{workspace.id === activeWorkspaceId && <i>✓</i>}</button>)}</>}
+          {filteredSources.length > 0 && <><p>当前工作界面的数据表</p>{filteredSources.map((source) => <Button variant="secondary" key={source.id} type="button" role="menuitemradio" aria-checked={source.id === activeDataSourceId} onClick={() => pick(() => onSelectDataSource(source.id))}><span className="context-option-symbol">▦</span><span><b>{source.name}</b><small>{source.detail ?? "导入的数据表"}</small></span>{source.id === activeDataSourceId && <i>✓</i>}</Button>)}</>}
+          {filteredWorkspaces.length > 0 && <><p>工作界面</p>{filteredWorkspaces.map((workspace) => <Button variant="secondary" key={workspace.id} type="button" role="menuitemradio" aria-checked={workspace.id === activeWorkspaceId} onClick={() => pick(() => onSelectWorkspace(workspace.id))}><span className="context-option-symbol">▣</span><span><b>{workspace.name}</b><small>{workspace.detail ?? "切换界面及其数据上下文"}</small></span>{workspace.id === activeWorkspaceId && <i>✓</i>}</Button>)}</>}
           {!filteredSources.length && !filteredWorkspaces.length && <div className="context-menu-empty">没有匹配的工作界面或数据表</div>}
-          {!dataSources.length && !query && <div className="context-menu-empty">当前界面还没有数据表<button type="button" onClick={() => pick(onImportData)}>导入本地表格</button></div>}
+          {!dataSources.length && !query && <div className="context-menu-empty">当前界面还没有数据表<Button variant="secondary" type="button" onClick={() => pick(onImportData)}>导入本地表格</Button></div>}
         </>}
         {section === "results" && <>
-          {filteredResults.map((result) => <button key={`${result.kind}:${result.id}`} type="button" role="menuitem" onClick={() => pick(() => onSelectResult(result))}><span className="context-option-symbol">▤</span><span><b>{result.name}</b><small>{result.detail}</small></span><em>{result.kind === "recipe" ? "引用" : "查看"}</em></button>)}
+          {filteredResults.map((result) => <Button variant="secondary" key={`${result.kind}:${result.id}`} type="button" role="menuitem" onClick={() => pick(() => onSelectResult(result))}><span className="context-option-symbol">▤</span><span><b>{result.name}</b><small>{result.detail}</small></span><em>{result.kind === "recipe" ? "引用" : "查看"}</em></Button>)}
           {!filteredResults.length && <div className="context-menu-empty">{query ? "没有匹配的配方或结果" : "暂无处理配方或结果"}<small>导入表格或完成 AI 数据处理后，会显示在这里。</small></div>}
         </>}
         {section === "notebook" && <NotebookContextOptions options={notebookOptions} selectedIds={selectedNotebookCellIds}
           limit={MAX_NOTEBOOK_CONTEXT_SELECTION} disabled={notebookContextDisabled || !onToggleNotebookCell} query={query} onToggle={(id) => onToggleNotebookCell?.(id)} />}
         {section === "semantic" && <>
-          {filteredModels.map((model) => <button key={model.id} type="button" role="menuitemradio" aria-checked={model.id === activeSemanticModelId} onClick={() => pick(() => onSelectSemanticModel?.(model.id))}><span className="context-option-symbol">◇</span><span><b>{model.name}</b><small>{model.detail}</small></span>{model.id === activeSemanticModelId && <i>✓</i>}</button>)}
+          {filteredModels.map((model) => <Button variant="secondary" key={model.id} type="button" role="menuitemradio" aria-checked={model.id === activeSemanticModelId} onClick={() => pick(() => onSelectSemanticModel?.(model.id))}><span className="context-option-symbol">◇</span><span><b>{model.name}</b><small>{model.detail}</small></span>{model.id === activeSemanticModelId && <i>✓</i>}</Button>)}
           {!filteredModels.length && <div className="context-menu-empty">{query ? "没有匹配的语义模型" : "当前工作界面暂无语义模型"}<small>先导入数据，再定义业务维度和指标口径。</small></div>}
-          {activeSemanticModelId && <button type="button" role="menuitem" onClick={() => pick(() => onSelectSemanticModel?.(null))}>不使用语义模型</button>}
-          {onManageSemanticModels && <button type="button" role="menuitem" onClick={() => pick(onManageSemanticModels)}>创建 / 管理语义模型</button>}
+          {activeSemanticModelId && <Button variant="secondary" type="button" role="menuitem" onClick={() => pick(() => onSelectSemanticModel?.(null))}>不使用语义模型</Button>}
+          {onManageSemanticModels && <Button variant="secondary" type="button" role="menuitem" onClick={() => pick(onManageSemanticModels)}>创建 / 管理语义模型</Button>}
         </>}
-        {section === "connections" && <div className="context-menu-empty context-connections-empty"><ContextIcon kind="connections" /><b>在 Notebook 中查看数据连接</b><small>此菜单暂不列出连接；已有连接请从 Notebook 的连接目录查看，选择上下文不会授予数据库权限。</small>{onOpenNotebook && <button type="button" onClick={() => pick(onOpenNotebook)}>打开 Notebook</button>}</div>}
+        {section === "connections" && <div className="context-menu-empty context-connections-empty"><ContextIcon kind="connections" /><b>在 Notebook 中查看数据连接</b><small>此菜单暂不列出连接；已有连接请从 Notebook 的连接目录查看，选择上下文不会授予数据库权限。</small>{onOpenNotebook && <Button variant="secondary" type="button" onClick={() => pick(onOpenNotebook)}>打开 Notebook</Button>}</div>}
       </div>
       <p className="context-menu-footnote">{section === "data" ? "选择数据表会更新分析对象；选择界面会同步切换看板。" : section === "results" ? "引用配方会填入分析问题；AI 处理结果可在看板中查看。" : section === "semantic" ? "选择模型会同步分析数据表；指标遵循已保存的计算口径。" : section === "notebook" ? `已选 ${selectedNotebookCellIds.length}/${MAX_NOTEBOOK_CONTEXT_SELECTION}；仅指定关注对象，不自动读取、运行或改变权限。切换工作界面或会话后清除。` : "连接目录与权限沿用 Notebook 现有入口。"}</p>
     </div>}

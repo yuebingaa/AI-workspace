@@ -16,6 +16,13 @@ export interface EdsWorkbookSheet {
   data: EdsSheetData;
 }
 
+/** Parsed task-scoped workbook; original bytes and filesystem access stay server-side. */
+export interface EdsRawWorkbook {
+  fileName: string;
+  contentHash: string;
+  sheets: EdsWorkbookSheet[];
+}
+
 export interface EdsIssueDefinition {
   raw: string;
   display: string;

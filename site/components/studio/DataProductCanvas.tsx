@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useRef, type ReactNode } from "react";
 import type { AppSpec, DataRecipe, DataRow, DataSourceDefinition, LocalDataRuntime, QueryExecutionRecord } from "@/core/models";
 import type { HarnessTableArtifact } from "@/core/harness/contracts";
@@ -123,18 +124,16 @@ export function DataProductCanvas({
   return (
     <section className="canvas-area" hidden={hidden}>
       <div className="canvas-toolbar">
-        <div><button type="button" disabled={!canUndo} onClick={onUndo}>↶</button><button type="button" disabled>↷</button><span>100%</span></div>
+        <div><Button variant="secondary" type="button" disabled={!canUndo} onClick={onUndo}>↶</Button></div>
         <div className="canvas-mode-switch" aria-label="画布模式">
-          <button type="button" className={mode === "edit" ? "active" : ""} disabled={!canEdit} title={canEdit ? "进入可视化编辑" : "查看者只能预览"} onClick={() => onModeChange("edit")}>编辑</button>
-          <button type="button" className={mode === "preview" ? "active" : ""} onClick={() => onModeChange("preview")}>预览</button>
+          <Button variant="secondary" type="button" className={mode === "edit" ? "active" : ""} disabled={!canEdit} title={canEdit ? "进入可视化编辑" : "查看者只能预览"} onClick={() => onModeChange("edit")}>编辑</Button>
+          <Button variant="secondary" type="button" className={mode === "preview" ? "active" : ""} onClick={() => onModeChange("preview")}>预览</Button>
         </div>
         <div>
           {isPreviewing && <span className="preview-badge">变更预览</span>}
-          {mode === "edit" && puckData && <button type="button" className="canvas-primary" onClick={() => onRequestPuckPreview(puckData)}>生成变更预览</button>}
-          {mode === "preview" && hasPuckPreview && <button type="button" onClick={onCancelPuckPreview}>{previewCancelLabel ?? (puckData ? "继续编辑" : "取消预览")}</button>}
-          {mode === "preview" && hasPuckPreview && <button type="button" className="canvas-primary" disabled={!canEdit} onClick={onApplyPuckPreview}>{previewApplyLabel}</button>}
-          {!hasPuckPreview && mode === "preview" && <button type="button">分享</button>}
-          <button type="button">•••</button>
+          {mode === "edit" && puckData && <Button variant="primary" type="button" className="canvas-primary" onClick={() => onRequestPuckPreview(puckData)}>生成变更预览</Button>}
+          {mode === "preview" && hasPuckPreview && <Button variant="secondary" type="button" onClick={onCancelPuckPreview}>{previewCancelLabel ?? (puckData ? "继续编辑" : "取消预览")}</Button>}
+          {mode === "preview" && hasPuckPreview && <Button variant="primary" type="button" className="canvas-primary" disabled={!canEdit} onClick={onApplyPuckPreview}>{previewApplyLabel}</Button>}
         </div>
       </div>
       {edsReportOptions && edsReportOptions.length > 0 && (
@@ -142,21 +141,21 @@ export function DataProductCanvas({
           <div><b>EDS 报告</b><small>{edsReportOptions.length > 1 ? "白班、夜班汇总已同时载入；切换后看板和 AI 当前数据同步更新。" : "当前派生汇总已载入，可交给 AI 进行只读诊断。"}</small></div>
           <div role="tablist" aria-label="EDS 看板班次">
             {edsReportOptions.map((option, index) => (
-              <button
+              <Button variant="secondary"
                 type="button"
                 role="tab"
                 aria-selected={option.selected}
                 key={`${option.date}-${option.shift}`}
                 onClick={() => onEdsReportChange?.(index)}
-              ><b>{option.shift}</b><small>{option.date}</small></button>
+              ><b>{option.shift}</b><small>{option.date}</small></Button>
             ))}
           </div>
-          <button
+          <Button variant="secondary"
             type="button"
             className="eds-canvas-ai-action"
             disabled={edsAnalysisRunning}
             onClick={onAnalyzeEdsReports}
-          >{edsAnalysisRunning ? "AI 正在分析…" : "AI 分析全部班次"}</button>
+          >{edsAnalysisRunning ? "AI 正在分析…" : "AI 分析全部班次"}</Button>
         </div>
       )}
       <div ref={viewportRef} className={`canvas-design-viewport${isBlankPreview ? " is-blank" : ""}`} tabIndex={0} aria-label="看板滚动区域">

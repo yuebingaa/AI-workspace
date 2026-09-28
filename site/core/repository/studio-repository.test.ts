@@ -3,6 +3,9 @@ import { applyChangeSet, createExecutionState } from "@/core/changesets";
 import { createChangeSetAuditRecord } from "@/core/audit";
 import { executeRecordedBinding } from "@/core/data";
 import { appendHarnessEvent, createHarnessTask, taskWithPendingChangeSet } from "@/core/harness/task-state";
+import { assistantConversationFromHarnessTasks } from "@/core/harness/conversation";
+import { createAssistantSessions, newAssistantSession } from "@/core/harness/assistant-sessions";
+import { newAssistantRequestIdempotencyKey } from "@/core/harness/assistant-request-identity";
 import type { AppNode } from "@/core/models";
 import { demoFixtureResult } from "@/fixtures/demo-product";
 import { EDS_RULE_VERSION, EDS_TEMPLATE_VERSION, type EdsWorkspaceSnapshot } from "@/core/eds";
@@ -227,6 +230,45 @@ describe("StudioRepository 本地持久化", () => {
     expect(recoveryNow).toHaveBeenCalledTimes(1);
     expect(loaded.execution.preview).toBeNull();
     expect(loaded.execution.present).toEqual(dataProduct.appSpec);
+  });
+
+  it("恢复所有 DSH 会话的已完成普通回复，包括非活动页和完成但尚未追加聊天的任务", () => {
+    const { dataProduct } = fixtures();
+    const clock = { now: () => new Date("2026-09-26T10:00:00.000Z"), id: () => "conversation_recovery_event" };
+    const done = (key: string) => appendHarnessEvent(createHarnessTask(key, "先不要分析数据", "page_home", "editor", clock),
+      { type: "state", state: "completed", message: "已回答" }, clock, { resultMessage: "可以先聊聊。" });
+    const classic = done("request_classic_data"), nonactive = done("request_pre_tag_dsh"), pending = done("request_pre_tag_pending");
+    const sessions = createAssistantSessions(assistantConversationFromHarnessTasks([classic]), "page_home");
+    const dsh = newAssistantSession(assistantConversationFromHarnessTasks([nonactive]), "page_home", "dsh-conversation");
+    dsh.pendingTaskId = pending.id;
+    sessions.items.push(dsh);
+    const repository = new LocalStorageStudioRepository(new MemoryStorage());
+    repository.save(createStudioSnapshot(dataProduct, createExecutionState(dataProduct.appSpec), [], [],
+      [classic, nonactive, pending], null, sessions.items[0].turns, sessions));
+    const loaded = loadStudioStateSafely(repository, dataProduct);
+    expect(loaded.harnessTasks.find(task => task.id === classic.id)?.state).toBe("blocked");
+    expect(loaded.harnessTasks.find(task => task.id === nonactive.id)).toEqual(nonactive);
+    expect(loaded.harnessTasks.find(task => task.id === pending.id)).toEqual(pending);
+    expect(loaded.assistantSessions?.items.find(session => session.id === dsh.id)?.turns).toHaveLength(2);
+  });
+
+  it("DSH 聊天超过可见二十轮后，被裁剪轮次的带标识任务仍保持已完成", () => {
+    const { dataProduct } = fixtures();
+    const clock = { now: () => new Date("2026-09-26T10:00:00.000Z"), id: () => "trimmed_recovery_event" };
+    const tasks = Array.from({ length: 21 }, () => appendHarnessEvent(createHarnessTask(
+      newAssistantRequestIdempotencyKey("dsh-conversation"), "先不要分析数据", "page_home", "editor", clock),
+    { type: "state", state: "completed", message: "已回答" }, clock, { resultMessage: "可以先聊聊。" }));
+    const turns = assistantConversationFromHarnessTasks(tasks.slice(1));
+    expect(turns).toHaveLength(20);
+    // The independently bounded task summary list can still contain a receipt
+    // no longer referenced by a visible turn (for example after clearing a thread).
+    const retainedTasks = tasks.slice(0, 20);
+    const sessions = createAssistantSessions(turns, "page_home", "dsh-conversation");
+    const repository = new LocalStorageStudioRepository(new MemoryStorage());
+    repository.save(createStudioSnapshot(dataProduct, createExecutionState(dataProduct.appSpec), [], [], retainedTasks, null, turns, sessions));
+    const loaded = loadStudioStateSafely(repository, dataProduct);
+    expect(loaded.harnessTasks).toEqual(retainedTasks);
+    expect(loaded.assistantSessions?.items[0].turns).toHaveLength(20);
   });
 
   it("持久化对话轮次，并从旧版 Harness 任务兼容生成可见聊天上下文", () => {

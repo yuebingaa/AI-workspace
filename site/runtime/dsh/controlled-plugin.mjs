@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
-import { DISABLED_ROWS, assertBrokerAddress, catalogToolNames } from './policy.mjs';
+import { createChatAdapter } from './chat-adapter.mjs';
+import { controlledDisabledRows, assertBrokerAddress, catalogToolNames } from './policy.mjs';
 import { createWireFetch } from './wire-policy.mjs';
 import { notebookToolFailureMessage, toolArgumentFailureMessage } from './tool-diagnostics.mjs';
 
@@ -11,6 +11,7 @@ export const inject = ['llm', 'tools', 'loader'];
 export async function apply(ctx) {
   const broker = assertBrokerAddress(process.env.AGENTCANVAS_DSH_BROKER);
   const token = process.env.AGENTCANVAS_DSH_TOKEN;
+  const profile = process.env.AGENTCANVAS_DSH_PROFILE ?? 'notebook';
   if (!token || token.length < 32) throw new Error('Missing task-owned broker credential.');
   const model = JSON.parse(process.env.AGENTCANVAS_DSH_MODEL ?? 'null');
   if (!model || !['deepseek', 'fixture'].includes(model.mode)) throw new Error('Explicit DSH model mode required.');
@@ -36,10 +37,28 @@ export async function apply(ctx) {
     return response.json();
   };
   const catalog = await request('/catalog', undefined, AbortSignal.timeout(10_000));
-  const taskToolNames = catalogToolNames(catalog.tools);
-  for (const id of DISABLED_ROWS) {
+  // Both independently assembled ends must agree; a notebook broker cannot be
+  // silently widened to conversation (or another profile) by the child.
+  if ((catalog.profile ?? 'notebook') !== profile) throw new Error('Task broker profile mismatch.');
+  const taskToolNames = catalogToolNames(catalog.tools, profile);
+  const skillsEnabled = process.env.AGENTCANVAS_DSH_SKILLS === '1';
+  const allowedTools = skillsEnabled ? [...taskToolNames, 'skill'] : taskToolNames;
+  if (skillsEnabled) {
+    for (const id of ['agentcanvas-skill-registry', 'agentcanvas-builtin-skills', 'agentcanvas-tool-skill']) {
+      const row = [...ctx.loader.entries()].find(entry => entry.options.id === id);
+      if (!row || row.disabled) throw new Error(`Missing configured Skill entry: ${id}`);
+    }
+  }
+  const nativeSession = process.env.AGENTCANVAS_DSH_NATIVE_SESSION !== undefined;
+  for (const id of controlledDisabledRows(nativeSession)) {
     const row = [...ctx.loader.entries()].find((entry) => entry.options.id === id);
     if (!row || !row.disabled) throw new Error(`Unsafe DSH profile entry: ${id}`);
+  }
+  if (nativeSession) {
+    for (const id of ['sessions', 'agentcanvas-session-server']) {
+      const row = [...ctx.loader.entries()].find((entry) => entry.options.id === id);
+      if (!row || row.disabled) throw new Error(`Missing controlled DSH session entry: ${id}`);
+    }
   }
   for (const tool of catalog.tools) {
     ctx.tools.register({
@@ -53,31 +72,16 @@ export async function apply(ctx) {
       }, execution.signal, tool.parameters),
     });
   }
-  ctx.tools.guard((execution) => taskToolNames.includes(execution.name)
+  ctx.tools.guard((execution) => allowedTools.includes(execution.name)
     ? undefined : 'Tool is not in the task-owned Notebook allowlist.');
   const activeNames = ctx.tools.schemas().map((tool) => tool.name).sort();
-  if (JSON.stringify(activeNames) !== JSON.stringify([...taskToolNames].sort())) {
+  if (JSON.stringify(activeNames) !== JSON.stringify([...allowedTools].sort())) {
     throw new Error('Unexpected DSH tool capability.');
   }
   let adapter;
   if (model.mode === 'deepseek') {
     if (!model.apiKey || !model.model) throw new Error('Explicit DeepSeek credentials/model required.');
-    const implementation = await import(pathToFileURL(resolver.resolve('@deepseek-ai/dsh-llm-deepseek')).href);
-    const options = implementation.resolveAdapterOptions({
-      protocol: 'chat-completions', baseURL: model.baseURL,
-      thinking: 'disabled', reasoningEffort: 'off',
-      models: [{ id: model.model, inputModalities: ['text'] }],
-      ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
-      ...(model.contextWindow === undefined ? {} : { defaultContextWindow: model.contextWindow }),
-      ...(model.timeoutMs === undefined ? {} : { streamIdleTimeoutMs: model.timeoutMs }),
-    });
-    const anonymousId = randomUUID();
-    adapter = new implementation.DeepSeekAdapter({
-      options: () => options,
-      resolveApiKey: async () => model.apiKey,
-      resolveUserId: () => anonymousId,
-      prepareExtensions: async () => ({ fields: {}, accept: async () => {} }),
-    });
+    adapter = await createChatAdapter(process.env.AGENTCANVAS_DSH_MANIFEST, model);
   }
   let fixtureIndex = 0;
   class AuthorizedAdapter extends llm.LlmAdapter {

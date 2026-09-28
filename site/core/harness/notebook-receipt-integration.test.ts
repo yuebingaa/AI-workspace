@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { semanticFixture } from "@/core/semantic/test-fixture";
 import type { NotebookRun } from "@/core/notebook/contracts";
 import type { NotebookArtifact, NotebookCell } from "@/core/notebook/definition";
+import type { NotebookDraftRunner } from "@/core/notebook/execution-contracts";
 import { cellsToRun } from "@/core/notebook/graph";
 import { executeHarnessTool, type HarnessToolContext } from "./tool-registry";
 import { NotebookDiagnosticSession } from "./notebook-diagnostics";
@@ -56,6 +57,39 @@ function corrupt(run: NotebookRun, fault: Fault): NotebookRun {
 }
 
 describe("Harness Notebook receipt consumers", () => {
+  it.each(["full", "incremental"] as const)("%s runners receive isolated execution data without conversation or tool state", async (path) => {
+    const { context, draft, sql } = fixture();
+    const { model, source } = semanticFixture();
+    const controller = new AbortController();
+    context.signal = controller.signal;
+    context.request.semanticModel = model;
+    context.request.instruction = "CONVERSATION_ONLY_SYNTHETIC_MARKER";
+    context.request.appSpec.dataSources.push({ ...structuredClone(source), id: "unselected_source" });
+    context.dataRuntime.rowsByDataSourceId.unselected_source = [{ private: "OUTSIDE_DRAFT_SYNTHETIC_MARKER" }];
+    const original = structuredClone({ request: context.request, runtime: context.dataRuntime });
+    // This implementation depends only on the domain contract, not HarnessToolContext.
+    const runner = vi.fn<NotebookDraftRunner>(async (artifact, input) => {
+      expect(input).toMatchObject({ revision: 7, taskId: "harness_receipt_contract_test", semanticModels: [model] });
+      expect(input.signal).toBe(controller.signal);
+      expect(input.sources).toEqual([{ source, rows: original.runtime.rowsByDataSourceId[source.id] }]);
+      expect(input).not.toHaveProperty("request");
+      expect(input).not.toHaveProperty("notebookCellSession");
+      expect(JSON.stringify(input)).not.toContain("SYNTHETIC_MARKER");
+      input.sources[0].source.name = "Adapter-local rename";
+      input.sources[0].rows[0].amount = -999;
+      input.semanticModels[0].name = "Adapter-local semantic model";
+      return receipt(artifact);
+    });
+    context.notebookRunner = runner;
+    if (path === "incremental") await executeHarnessTool("editNotebookCells", { editVersion: 0, cells: [sql] }, context);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await executeHarnessTool(path === "full" ? "createNotebookDraft" : "runNotebookCells",
+        path === "full" ? draft : { editVersion: 1 }, context);
+      expect({ request: context.request, runtime: context.dataRuntime }).toEqual(original);
+    }
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
   it.each(faults)("full drafts reject %s receipts before publishing execution evidence", async (fault) => {
     const { context, draft } = fixture();
     const before = structuredClone(context.request);

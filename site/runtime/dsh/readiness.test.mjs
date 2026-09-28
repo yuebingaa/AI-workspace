@@ -1,6 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { inspectDshRuntime } from './driver.mjs';
+
+test('native carrier revisions reload version policy and installation while retaining the previous graph', async () => {
+  const evidence = new URL('../../.runtime/', import.meta.url);
+  await mkdir(evidence, { recursive: true });
+  const temporary = await mkdtemp(new URL('dsh-revision-test-', evidence));
+  for (const name of ['driver.mjs', 'installation.mjs', 'policy.mjs']) {
+    await cp(new URL(name, import.meta.url), join(temporary, name));
+  }
+  const moduleUrl = (name, revision) => `${pathToFileURL(join(temporary, name)).href}?carrier=${revision}`;
+  const before = await import(moduleUrl('driver.mjs', 'before'));
+  const oldInstallation = await import(moduleUrl('installation.mjs', 'before'));
+  const policyPath = join(temporary, 'policy.mjs');
+  const policy = await readFile(policyPath, 'utf8');
+  const oldVersion = /VERSION = '([^']+)'/.exec(policy)[1];
+  await writeFile(policyPath, policy.replace(`VERSION = '${oldVersion}'`, "VERSION = '9.9.9-rc.1'"));
+  const after = await import(moduleUrl('driver.mjs', 'after'));
+  const newInstallation = await import(moduleUrl('installation.mjs', 'after'));
+  const readiness = { resolveInstallation: async () => ({}), importSdk: async () => ({ DeepSeekHarness: class {} }) };
+  assert.equal((await before.inspectDshRuntime(readiness)).version, oldVersion);
+  assert.equal((await after.inspectDshRuntime(readiness)).version, '9.9.9-rc.1');
+  const newer = { kind: 'slot', id: `9.9.9-rc.1-${'a'.repeat(64)}` };
+  assert.deepEqual(newInstallation.validateSelection(newer), newer);
+  assert.throws(() => oldInstallation.validateSelection(newer), /Invalid isolated DSH installation selection/);
+});
 
 test('readiness resolves then imports the SDK but never constructs it', async () => {
   const calls = [];

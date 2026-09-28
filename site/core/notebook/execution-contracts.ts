@@ -1,11 +1,28 @@
 import type { DataRow, DataSourceDefinition } from "@/core/models";
 import type { SemanticModel } from "@/core/semantic/contracts";
-import type { NotebookDocument, NotebookSqlTable, NotebookTable } from "./contracts";
+import type { NotebookDocument, NotebookRun, NotebookSqlTable, NotebookTable } from "./contracts";
+import type { NotebookArtifact } from "./definition";
 import type { CatalogReference } from "@/core/metadata/contracts";
 import type { NotebookResultPublisher } from "./result-access";
 import type { NotebookCapabilities } from "./capabilities";
 
 export interface NotebookSource { source: DataSourceDefinition; rows: DataRow[] }
+
+/** Task-local execution input; no conversation, tool state, credentials or UI state. */
+export interface NotebookDraftExecutionContext {
+  revision: number;
+  sources: NotebookSource[];
+  semanticModels: SemanticModel[];
+  taskId: string;
+  signal?: AbortSignal;
+}
+
+/** A caller validates the receipt and owns whether a successful draft is adopted. */
+export type NotebookDraftRunner = (
+  artifact: NotebookArtifact, context: NotebookDraftExecutionContext,
+) => Promise<NotebookRun>;
+
+export type NotebookRuntimeInfoReader = () => Promise<Record<string, unknown>>;
 
 export interface NotebookPythonFile { name: string; bytes: Uint8Array }
 export interface NotebookPythonResult { table: NotebookTable; stdout: string; stderr: string }

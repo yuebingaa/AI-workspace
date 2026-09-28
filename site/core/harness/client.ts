@@ -1,5 +1,6 @@
 import {
   HARNESS_CLIENT_TIMEOUT_MS,
+  HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS,
   MAX_HARNESS_IMAGE_ATTACHMENTS,
   MAX_HARNESS_IMAGE_BYTES,
   MAX_HARNESS_TOTAL_IMAGE_BYTES,
@@ -27,6 +28,7 @@ export class HarnessClientError extends Error {
 }
 
 export interface HarnessClientOptions {
+  experience?: "classic" | "dsh-conversation";
   stream?: boolean;
   onEvent?: (event: HarnessTraceEvent) => void;
   fetchImpl?: typeof fetch;
@@ -43,8 +45,9 @@ export async function requestHarnessTask(
   if (options.signal?.aborted) {
     throw new HarnessClientError("cancelled", "Harness 任务已取消。", true);
   }
-  const timeoutMs = options.timeoutMs ?? HARNESS_CLIENT_TIMEOUT_MS;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > HARNESS_CLIENT_TIMEOUT_MS) {
+  const timeoutMs = options.timeoutMs ?? (options.experience === "dsh-conversation" ? null : HARNESS_CLIENT_TIMEOUT_MS);
+  const maximumTimeout = options.experience === "dsh-conversation" ? HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS : HARNESS_CLIENT_TIMEOUT_MS;
+  if (timeoutMs !== null && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > maximumTimeout)) {
     throw new HarnessClientError("service_error", "Harness 请求超时配置无效。", false);
   }
   const controller = new AbortController();
@@ -54,7 +57,7 @@ export async function requestHarnessTask(
   const abortOuter = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", abortOuter, { once: true });
   const expire = () => { timedOut = true; controller.abort(); };
-  let timer = setTimeout(expire, timeoutMs);
+  let timer = timeoutMs === null ? undefined : setTimeout(expire, timeoutMs);
   try {
     const rawWorkbook = options.rawWorkbook;
     const imageAttachments = options.imageAttachments ?? [];
@@ -76,7 +79,8 @@ export async function requestHarnessTask(
     const requestBody = body ?? JSON.stringify(payload);
     const headers = projectHeaders(body ? {} : { "content-type": "application/json" });
     for (let responseAttempt = 0; responseAttempt <= MAX_HARNESS_INVALID_RESPONSE_RETRIES; responseAttempt += 1) {
-      const response = await fetchImpl(options.stream ? "/api/ai/harness/stream" : "/api/ai/harness", {
+      const endpoint = options.experience === "dsh-conversation" ? "/api/ai/dsh/conversation" : "/api/ai/harness";
+      const response = await fetchImpl(options.stream ? `${endpoint}/stream` : endpoint, {
         method: "POST",
         headers: Object.keys(headers).length ? headers : undefined,
         body: requestBody,
@@ -94,9 +98,12 @@ export async function requestHarnessTask(
               && !executionDeadlineReceived && options.timeoutMs === undefined) {
               executionDeadlineReceived = true;
               clearTimeout(timer);
-              const remaining = event.clientTimeoutMs - (Date.now() - startedAt);
-              if (remaining <= 0) expire();
-              else timer = setTimeout(expire, remaining);
+              timer = undefined;
+              if (event.clientTimeoutMs !== null) {
+                const remaining = event.clientTimeoutMs - (Date.now() - startedAt);
+                if (remaining <= 0) expire();
+                else timer = setTimeout(expire, remaining);
+              }
             }
             options.onEvent?.(event);
           });

@@ -1,6 +1,6 @@
 import type { HarnessRequest } from "@/core/harness/contracts";
 import { isNotebookInspection } from "@/core/harness/notebook-cell-tools";
-import { sanitizeHarnessText } from "@/core/harness/security";
+import { redactHarnessSecrets } from "@/core/harness/security";
 import { dataTableSchema } from "@/core/datasets/table-contracts";
 import { notebookResultReferenceSchema } from "@/core/notebook/contracts";
 import { hasCompleteParameterSources, resolveDshParameterInspection,
@@ -205,6 +205,41 @@ function matchedRunResults(run: Record<string, unknown>, definitionVersion: numb
   return valid && [...cells].some(cellId => !parameterCellIds.has(cellId));
 }
 
+/** A conversation with no edit attempts already owns the original document
+ * revision and editVersion=0. A real run of that document need not manufacture
+ * a preceding definition lookup. Classic readonly intent validation below is
+ * intentionally unchanged; this validates actual bridge receipts only.
+ */
+export function verifyDshCurrentRunEvidence(input: {
+  observations: readonly DshReadonlyObservation[];
+  baseRevision: number | undefined;
+  parameterCellIds: readonly string[];
+}): { valid: boolean; evidenceIds: string[]; issue: string } {
+  const fail = (issue: string) => ({ valid: false, evidenceIds: [], issue });
+  if (!nonnegative(input.baseRevision)) return fail("没有本轮正式 Notebook 修订基线，无法核对计算回执。");
+  const ids = new Set<string>();
+  const parameters = new Set(input.parameterCellIds);
+  let latestRun: Record<string, unknown> | undefined;
+  let hasOutput = false;
+  for (const observation of input.observations) {
+    if (!identifier(observation.toolCallId) || ids.has(observation.toolCallId) || !record(observation.data)) {
+      return fail("本轮工具证据无效或重复。");
+    }
+    ids.add(observation.toolCallId);
+    const data = observation.data;
+    if (observation.toolName === "runNotebookCells") {
+      if (!validRun(data) || data.editVersion !== 0) return fail("本轮未取得未修改文档的成功运行回执。");
+      latestRun = data;
+      hasOutput = matchedRunResults(data, 0, input.baseRevision, parameters);
+    } else if (observation.toolName === "cellSearch") {
+      if (matchedOutput(data, latestRun, parameters) && record(data.output) && record(data.output.resultRef)
+        && data.output.resultRef.revision === input.baseRevision) hasOutput = true;
+    } else return fail("本轮结果证据包含不允许的工具类型。");
+  }
+  if (!latestRun || !hasOutput) return fail("尚未取得本轮成功运行的有效业务结果，不能宣告数值分析完成。");
+  return { valid: true, evidenceIds: [...ids].slice(-15), issue: "" };
+}
+
 /** Verifies task-owned evidence and output boundaries, not every natural-language claim. */
 export function verifyDshReadonlyAnswer(input: {
   mode: DshReadonlyMode;
@@ -220,10 +255,10 @@ export function verifyDshReadonlyAnswer(input: {
   if (!input.formalUnchanged) return fail("正式 Notebook 或看板已变化，不能作为只读回答交付。");
   if (!input.mode.allowRun && input.mode.requireOutput) return fail("只读回答的执行范围不一致。");
   if (input.mode.parameterInspection && (input.mode.allowRun || input.mode.requireOutput)) return fail("参数定义问答不能授权运行或宣称业务结果。");
-  if (typeof input.finalResponse !== "string" || !input.finalResponse.trim() || input.finalResponse.length > 1_800) {
-    return fail("缺少有效的只读回答，或回答超过显示上限。");
+  if (typeof input.finalResponse !== "string" || !input.finalResponse.trim()) {
+    return fail("缺少有效的只读回答。");
   }
-  const answer = sanitizeHarnessText(input.finalResponse.trim(), "").trim();
+  const answer = redactHarnessSecrets(input.finalResponse.trim()).trim();
   if (!answer || genericAnswer.test(answer)) return fail("只读回答过于笼统，尚未说明当前 Notebook。");
   if (input.failedTools.some(name => name !== "cellSearch")) return fail("本次存在运行失败或不允许的工具调用，不能宣告只读分析完成。");
   const ids = new Set<string>();
@@ -261,7 +296,6 @@ export function verifyDshReadonlyAnswer(input: {
     : input.mode.requireOutput
     ? "只读回答：依据本轮成功运行返回或检索读取的结果，范围以实际返回数据为准；未修改步骤或看板。"
     : "只读说明：依据本轮读取的单元定义；不代表数值结果已经验证，未修改步骤或看板。";
-  const notice = input.finalResponse.trim().length > 1_000 && answer.length === 1_000 ? "\n（回答已按显示上限截取。）" : "";
-  return { valid: true, message: `${scope}\n${answer}${notice}`,
+  return { valid: true, message: `${scope}\n${answer}`,
     evidenceIds: [...ids].slice(-15), issue: "" };
 }

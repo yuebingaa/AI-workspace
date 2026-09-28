@@ -1,4 +1,6 @@
-import { useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useState } from "react";
+import { CodeEditor, type CodeLanguage } from "@/components/ui/code-editor";
 import type { SourceLine } from "./cell-source";
 
 // Highlighting is decorative; React escapes every token and code is never HTML.
@@ -12,7 +14,7 @@ export function NotebookSource({ value, language, label, lines }: { value: strin
   const rows = lines ?? value.split("\n").map((text, i): SourceLine => ({ text, kind: "same", newLine: i + 1 }));
   return <div className="notebook-source">
     <div className="notebook-source-toolbar"><span>{language}</span><span>{lines ? "− 原有内容　+ 建议内容" : `${rows.length} 行`}</span>
-      {!lines && <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(value); setCopyState("已复制"); } catch { setCopyState("复制失败，请选中代码复制"); } }}>复制代码</button>}
+      {!lines && <Button size="small" variant="ghost" type="button" onClick={async () => { try { await navigator.clipboard.writeText(value); setCopyState("已复制"); } catch { setCopyState("复制失败，请选中代码复制"); } }}>复制代码</Button>}
       {copyState && <small role="status">{copyState}</small>}
     </div>
     <div className="notebook-source-scroll" tabIndex={0} role="region" aria-label={label}>
@@ -25,12 +27,7 @@ export function NotebookSource({ value, language, label, lines }: { value: strin
   </div>;
 }
 
-export function NotebookCodeEditor({ value, onChange, label, maxLength = 10000 }: { value: string; onChange: (value: string) => void; label: string; maxLength?: number }) {
-  const gutter = useRef<HTMLDivElement | null>(null);
-  const lines = value.split("\n").length;
-  return <div className="notebook-code-input">
-    <div className="notebook-code-gutter" aria-hidden="true" ref={gutter}>{Array.from({ length: lines }, (_, i) => <span key={i}>{i + 1}</span>)}</div>
-    <textarea aria-label={label} className="notebook-code" value={value} required maxLength={maxLength} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" rows={Math.min(14, Math.max(7, lines))}
-      onChange={(event) => onChange(event.target.value)} onScroll={(event) => { if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }} />
-  </div>;
+export function NotebookCodeEditor(props: { value: string; onChange: (value: string) => void; label: string; maxLength?: number;
+  disabled?: boolean; language?: CodeLanguage; schema?: Record<string, string[]> }) {
+  return <CodeEditor {...props} language={props.language ?? (props.label === "Python" ? "python" : props.label.includes("JSON") || props.label.includes("规则") ? "json" : "sql")} />;
 }

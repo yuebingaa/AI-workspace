@@ -40,7 +40,7 @@ async function fixture() {
     dataRuntime: { rowsByDataSourceId: { [source.id]: parsed.rows } }, authorizeCurrentAccess: () => {},
     notebookRunner: (artifact, context) => runNotebook({
       document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
-      sources: [{ source, rows: context.dataRuntime.rowsByDataSourceId[source.id] }],
+      sources: context.sources,
       signal: context.signal, forAi: true, log: () => {},
     }),
   };
@@ -66,6 +66,40 @@ async function successfulDriver(input: DshDriverInput) {
   return { finalResponse: "untrusted model claim: already published", model: "synthetic-driver-model",
     usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 } };
 }
+
+describe("DSH independent context and verified analysis explanation", () => {
+  it("keeps full bounded conversation and publishes findings only after real draft verification", async () => {
+    const { request, options } = await fixture();
+    const priorInstruction = "背景".repeat(300) + "请保留金额单位元";
+    const priorResponse = "历史说明".repeat(300) + "不把三行数据说成全年结果";
+    request.conversationContext = { recentMessages: [{ instruction: priorInstruction, response: priorResponse }] };
+    const before = structuredClone(request);
+    const task = await runDshEngine(request, { ...options, driver: async input => {
+      expect(input.context.recentConversation).toMatchObject({ recentMessages: [{ instruction: priorInstruction, response: priorResponse }] });
+      expect(input.context).not.toHaveProperty("workingMemory");
+      const result = await successfulDriver(input);
+      return { ...result, finalResponse: "本轮按地区汇总：East 为150元，South为80元。只反映当前三行数据，不代表全年表现。" };
+    } });
+    expect(task).toMatchObject({ state: "awaitingConfirmation", verification: { status: "passed" } });
+    expect(task.resultMessage).toContain("East 为150元");
+    expect(task.resultMessage).toContain("不代表全年表现");
+    expect(task.resultMessage).toContain("待你确认后才保存");
+    expect(task.events.at(-1)?.message).not.toContain("East 为150元");
+    expect(task.notebookArtifact?.executionEvidence?.status).toBe("success");
+    expect(request).toEqual(before);
+  }, 20_000);
+
+  it("does not display fluent analysis as a substitute for a submitted draft", async () => {
+    const { request, options } = await fixture();
+    const task = await runDshEngine(request, { ...options, driver: async input => {
+      await call(input, "cellSearch", {});
+      return { finalResponse: "MODEL_ONLY_FINDING 必须有真实回执才能展示这份草稿结论。" };
+    } });
+    expect(task.state).toBe("failed");
+    expect(task.notebookArtifact).toBeUndefined();
+    expect(task.resultMessage).not.toContain("MODEL_ONLY_FINDING");
+  });
+});
 
 describe("DSH simple file-analysis terminal delivery", () => {
   async function existingFixture(instruction = "分析input文件") {
@@ -432,7 +466,8 @@ describe("DSH 任务与事件适配", () => {
     expect(task.notebookArtifact?.executionEvidence?.status).toBe("success");
     expect(driver).toHaveBeenCalledOnce();
     expect(runner).toHaveBeenCalledOnce();
-    expect(runner.mock.calls[0][1].request.notebookContext?.connections).toBeUndefined();
+    expect(runner.mock.calls[0][1]).not.toHaveProperty("request");
+    expect(JSON.stringify(runner.mock.calls[0][1])).not.toContain("private_available_connection");
     expect(authorizeCurrentAccess).toHaveBeenCalled();
     expect(request).toEqual(before);
   }, 20_000);
@@ -593,10 +628,12 @@ describe("DSH 任务与事件适配", () => {
     expect(task.notebookArtifact).toBeUndefined();
   });
 
-  it("工具次数上限保留，不恢复模型输入或 token 配额", async () => {
+  it("显式配置的工具次数预算仍生效，失败调用也计数", async () => {
     const { request, options } = await fixture();
-    const task = await runDshEngine(request, { ...options, driver: async (input) => {
-      for (let index = 0; index < 25; index += 1) await call(input, "cellSearch", {});
+    const task = await runDshEngine(request, { ...options, maxToolCalls: 24, driver: async (input) => {
+      for (let index = 0; index < 25; index += 1) {
+        try { await call(input, "cellSearch", { invalid: true }); } catch { /* SDK may retry a rejected argument. */ }
+      }
       return {};
     } });
     expect(task.state).toBe("failed");
@@ -609,28 +646,28 @@ describe("DSH 任务与事件适配", () => {
     const { request, options } = await fixture();
     const before = structuredClone(request);
     const task = await runDshEngine(request, { ...options, driver: async input => {
-      expect(input.context.executionBudget).toMatchObject({ maxToolCalls: 24, toolCallsRemaining: 24,
-        totalExecutionTimeoutMs: 180_000, toolCallTimeoutMs: 35_000 });
+      expect(input.context.executionBudget).toMatchObject({ maxToolCalls: null, toolCallsRemaining: null,
+        totalExecutionTimeoutMs: null, toolCallTimeoutMs: null, remainingMs: null });
       const initial = await call(input, "cellSearch", {});
-      expect(initial.data).toMatchObject({ executionBudget: { toolCallsUsed: 1, toolCallsRemaining: 23 } });
+      expect(initial.data).toMatchObject({ executionBudget: { toolCallsUsed: 1, toolCallsRemaining: null } });
       const broken = structuredClone(additions);
       if (broken[0].kind !== "sql") throw new Error("Missing SQL fixture");
       broken[0].sql = "SELECT missing_column FROM sales_data";
       await call(input, "editNotebookCells", { editVersion: 0, cells: broken });
       const failed = await call(input, "runNotebookCells", { editVersion: 1 });
-      expect(failed.data).toMatchObject({ status: "failure", executionBudget: { toolCallsUsed: 3, toolCallsRemaining: 21 } });
+      expect(failed.data).toMatchObject({ status: "failure", executionBudget: { toolCallsUsed: 3, toolCallsRemaining: null } });
       await call(input, "editNotebookCells", { editVersion: 1, cells: additions });
       const repaired = await call(input, "runNotebookCells", { editVersion: 2 });
-      expect(repaired.data).toMatchObject({ status: "success", executionBudget: { toolCallsUsed: 5, toolCallsRemaining: 19 } });
+      expect(repaired.data).toMatchObject({ status: "success", executionBudget: { toolCallsUsed: 5, toolCallsRemaining: null } });
       await call(input, "cellSearch", { cellId: "totals", view: "output", editVersion: 2 });
       await call(input, "cellSearch", { cellId: "chart", view: "lineage", editVersion: 2 });
       const submitted = await call(input, "submitNotebookDraft", { editVersion: 2 });
-      expect(submitted.data).toMatchObject({ executionBudget: { toolCallsUsed: 8, toolCallsRemaining: 16 } });
+      expect(submitted.data).toMatchObject({ executionBudget: { toolCallsUsed: 8, toolCallsRemaining: null } });
       return {};
     } });
     expect(task.state).toBe("awaitingConfirmation"); expect(task.counters.toolCallCount).toBe(8);
     expect(task.notebookArtifact?.executionEvidence?.status).toBe("success"); expect(task.verification?.status).toBe("passed");
-    expect(task.trace?.find(event => event.type === "task_started")).toMatchObject({ clientTimeoutMs: 185_000 });
+    expect(task.trace?.find(event => event.type === "task_started")).toMatchObject({ clientTimeoutMs: null });
     expect(request).toEqual(before);
   });
 
@@ -662,25 +699,68 @@ describe("DSH 任务与事件适配", () => {
     expect(request).toEqual(before);
   });
 
-  it("DSH 默认总时限为180秒，90秒时不提前终止", async () => {
+  it("exceeds 24 calls and 256 trace events without losing final delivery or SSE order", async () => {
+    const { request, options } = await fixture();
+    const controller = new AbortController(), events: HarnessTraceEvent[] = [];
+    const response = createHarnessStreamResponse(controller.signal, (signal, emit) => runDshEngine(request, {
+      ...options, signal, onEvent: emit, driver: async input => {
+        for (let index = 0; index < 130; index += 1) await call(input, "cellSearch", {});
+        return successfulDriver(input);
+      },
+    }));
+    const { task } = await readHarnessStream(response, controller.signal, event => events.push(event));
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.counters.toolCallCount).toBe(134);
+    expect(task.trace).toHaveLength(256);
+    expect(task.trace![0].sequence).toBeGreaterThan(1);
+    expect(events.filter(event => event.type === "tool_completed")).toHaveLength(134);
+    expect(events.map(event => event.sequence)).toEqual(events.map((_, index) => index + 1));
+    expect(task.notebookArtifact?.executionEvidence?.status).toBe("success");
+    expect(task.verification?.evidenceToolCallIds).toHaveLength(15);
+  }, 20_000);
+
+  it("a tool can exceed the old 35s wrapper timeout and cancellation still reaches the runner", async () => {
+    const { request, options } = await fixture();
+    vi.useFakeTimers();
+    const entered = Promise.withResolvers<AbortSignal | undefined>(), cancel = new AbortController();
+    let settled = false;
+    const work = runDshEngine(request, { ...options, signal: cancel.signal,
+      notebookRunner: (_artifact, context) => { entered.resolve(context.signal); return new Promise(() => {}); },
+      driver: async input => {
+        await call(input, "editNotebookCells", { editVersion: 0, cells: additions });
+        await call(input, "runNotebookCells", { editVersion: 1 });
+        return {};
+      },
+    }).then(task => { settled = true; return task; });
+    const signal = await entered.promise;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(settled).toBe(false); expect(signal?.aborted).toBe(false);
+    cancel.abort();
+    expect((await work).state).toBe("cancelled"); expect(signal?.aborted).toBe(true);
+  });
+
+  it("DSH 默认超过旧180秒时限仍等待，用户取消后终止", async () => {
     const { request, options } = await fixture();
     vi.useFakeTimers();
     const entered = Promise.withResolvers<void>();
+    const cancel = new AbortController();
     let settled = false;
-    const work = runDshEngine(request, { ...options, driver: async () => {
+    const work = runDshEngine(request, { ...options, signal: cancel.signal, driver: async () => {
       entered.resolve(); return new Promise(() => {});
     } }).then(task => { settled = true; return task; });
     await entered.promise;
     await vi.advanceTimersByTimeAsync(90_001); expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(89_999);
-    expect((await work).resultMessage).toContain("超过执行时间保护");
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(settled).toBe(false);
+    cancel.abort();
+    expect((await work).state).toBe("cancelled");
   });
 
   it("拒绝非法服务器保护配置且模型不能通过request修改上限", async () => {
     const { request, options } = await fixture();
     const driver = vi.fn(successfulDriver);
-    await expect(runDshEngine(request, { ...options, driver, maxToolCalls: 25 })).rejects.toThrow("配置无效");
-    await expect(runDshEngine(request, { ...options, driver, totalExecutionTimeoutMs: 180_001 })).rejects.toThrow("配置无效");
+    await expect(runDshEngine(request, { ...options, driver, maxToolCalls: -1 })).rejects.toThrow("配置无效");
+    await expect(runDshEngine(request, { ...options, driver, totalExecutionTimeoutMs: NaN })).rejects.toThrow("配置无效");
     const forged = { ...request, executionBudget: { maxToolCalls: 1000 } };
     await expect(runDshEngine(forged, { ...options, driver })).rejects.toThrow();
     expect(driver).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { useEffect, useRef } from "react";
 import type { NotebookOutputRename } from "@/core/notebook/output-renames";
 import { notebookCellPresentation } from "./cell-presentation";
@@ -31,6 +32,6 @@ export function NotebookOutputRenameConfirmation({ renames, disabled, stale, onC
   return <section className="notebook-output-rename-confirmation" aria-label="确认输出变量改名" tabIndex={-1} ref={region}>
     <NotebookOutputRenameReview renames={renames} />
     {stale && <p className="notebook-draft-warning" role="alert">文档已变化，本次待保存内容已过期，不会覆盖当前文档。请关闭后重新编辑。</p>}
-    <footer><button type="button" onClick={onBack}>{stale ? "关闭过期编辑" : "返回编辑"}</button><button type="button" className="notebook-primary" disabled={disabled || stale} onClick={onConfirm}>确认改名并保存</button></footer>
+    <footer><Button variant="secondary" type="button" onClick={onBack}>{stale ? "关闭过期编辑" : "返回编辑"}</Button><Button variant="primary" type="button" className="notebook-primary" disabled={disabled || stale} onClick={onConfirm}>确认改名并保存</Button></footer>
   </section>;
 }

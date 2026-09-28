@@ -1,4 +1,6 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { markupRoot, buttonMarkup } from "@/test-support/markup";
+import { renderMountedMarkup as renderToStaticMarkup, withMountedTheme } from "@/test-support/render-dialog";
 import { describe, expect, it } from "vitest";
 import type { NotebookCell } from "@/core/notebook/definition";
 import { notebookDependencyCandidates } from "@/core/notebook/graph";
@@ -28,14 +30,17 @@ describe("Notebook text editor", () => {
   });
   it("retains Chinese field names and the selected stable ID even for a visually later input", () => {
     const html = render();
-    expect(html).toContain('<option value="query" selected="">汇总结果 · totals</option>');
+    expect(markupRoot(html).querySelector('[aria-label="引用单元 1"]')?.textContent).toBe("汇总结果 · totals");
+    expect(withMountedTheme(<NotebookTextEditor cell={note} availableInputs={[parameter, query]} disabled={false} onSave={() => {}} onCancel={() => {}} />,
+      root => root.querySelector("select")?.value)).toBe(JSON.stringify("query"));
     expect(html).toContain('value="总额"');
     expect(html).toContain("{{amount}}");
     expect(html).toContain("实际字段名，而非显示标签");
   });
   it("shows a missing reference explicitly instead of silently selecting another source", () => {
     const html = render(note, [parameter]);
-    expect(html).toContain('<option value="query" selected="">原引用不可用，请重新选择</option>');
+    expect(markupRoot(html).querySelector('[aria-label="引用单元 1"]')?.textContent).toBe("原引用不可用，请重新选择");
+    expect(markupRoot(html).querySelector("select")?.value).toBe(JSON.stringify("query"));
     expect(html).toContain('value="总额"');
   });
   it("keeps old static placeholders unchanged and can save text without any data input", () => {
@@ -49,7 +54,7 @@ describe("Notebook text editor", () => {
     const html = render(note, [parameter, query], true);
     expect(html).toContain('<fieldset disabled="">');
     expect(html).toMatch(/disabled=""[^>]*>保存单元/);
-    expect(html).toContain('<button type="button">取消编辑</button>');
+    expect(buttonMarkup(html, "取消编辑").disabled).toBe(false);
   });
   it("shows bounded literal-only behavior and manual execution requirements", () => {
     const html = render();

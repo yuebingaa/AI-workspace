@@ -29,16 +29,43 @@ function fixture() {
 }
 
 describe("服务端执行器截止时间协商", () => {
+  it.each([undefined, "dsh-conversation"] as const)("null deadline leaves a long stream alive and cancellable (%s)", async experience => {
+    vi.useFakeTimers();
+    const f = fixture(), cancel = new AbortController();
+    const pending = requestHarnessTask(f.input, { experience, fetchImpl: f.fetchImpl, stream: true, signal: cancel.signal });
+    const cancelled = expect(pending).rejects.toMatchObject({ code: "cancelled" });
+    await vi.advanceTimersByTimeAsync(1);
+    f.send({ clientTimeoutMs: null });
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    expect(f.aborted()).toBe(false);
+    f.send({ clientTimeoutMs: 1 }); // Replayed metadata cannot change the original decision.
+    await vi.advanceTimersByTimeAsync(10);
+    expect(f.aborted()).toBe(false);
+    cancel.abort(); await cancelled;
+    expect(f.fetchImpl).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("an explicit DSH caller timeout survives a null server deadline", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const pending = requestHarnessTask(f.input, { experience: "dsh-conversation", fetchImpl: f.fetchImpl, stream: true, timeoutMs: 600_000 });
+    const assertion = expect(pending).rejects.toMatchObject({ code: "timeout" });
+    await vi.advanceTimersByTimeAsync(1); f.send({ clientTimeoutMs: null });
+    await vi.advanceTimersByTimeAsync(599_998); expect(f.aborted()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1); await assertion;
+  });
+
   it("有效开始事件将默认SSE等待扩到185秒，重复事件不延后原请求截止点", async () => {
     vi.useFakeTimers();
     const f = fixture();
     const pending = requestHarnessTask(f.input, { fetchImpl: f.fetchImpl, stream: true });
     const assertion = expect(pending).rejects.toMatchObject({ code: "timeout" });
     await vi.advanceTimersByTimeAsync(5000);
-    f.send({ clientTimeoutMs: HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS });
+    f.send({ clientTimeoutMs: 185_000 });
     await vi.advanceTimersByTimeAsync(90_001);
     expect(f.aborted()).toBe(false);
-    f.send({ clientTimeoutMs: HARNESS_MAX_STREAM_CLIENT_TIMEOUT_MS });
+    f.send({ clientTimeoutMs: null });
     await vi.advanceTimersByTimeAsync(89_999);
     await assertion;
     expect(f.aborted()).toBe(true);

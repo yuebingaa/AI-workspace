@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/fields";
 import { useMemo, useState } from "react";
 import {
   analyzeDataSourceFields,
@@ -153,14 +155,14 @@ export function DataSourceDetailsPanel({
       >
         <header className="data-source-panel-head">
           <div><span className="db">◉</span><div><small>数据源工作区</small><h2>{source.name}</h2></div></div>
-          <div className="data-source-head-actions">{source.sourceType === "csv" && onDelete && <button type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>{source.ephemeral ? "删除数据集" : "移入回收站"}</button>}<button type="button" aria-label="关闭数据源详情" disabled={datasetActionBusy} onClick={onClose}>×</button></div>
+          <div className="data-source-head-actions">{source.sourceType === "csv" && onDelete && <Button variant="danger" type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>{source.ephemeral ? "删除数据集" : "移入回收站"}</Button>}<Button variant="secondary" type="button" aria-label="关闭数据源详情" disabled={datasetActionBusy} onClick={onClose}>×</Button></div>
         </header>
         <nav className="data-source-tabs" aria-label="数据源详情标签">
           {tabs.map((item) => (
-            <button key={item.id} type="button" className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>
+            <Button variant="secondary" key={item.id} type="button" className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>
               {item.label}
               {item.id === "recipe" && recipe && <span>{recipe.steps.length}</span>}
-            </button>
+            </Button>
           ))}
         </nav>
         <div className="data-source-panel-body">
@@ -182,7 +184,7 @@ export function DataSourceDetailsPanel({
               <div className={`dataset-sensitive-card ${source.aiAccessPolicy === "pending" ? "pending" : "confirmed"}`}>
                 <b>敏感字段风险标记</b>
                 <p>{source.fields.filter((field) => field.sensitiveCategories?.length).map((field) => `${field.label}（${field.sensitiveCategories?.join("/")}）`).join("、")}</p>
-                {source.aiAccessPolicy === "pending" ? <><small>确认处理方式之前，Harness 不会向 AI 提供此数据集的任何摘要。</small><div><button type="button" disabled={datasetActionBusy} onClick={() => { void confirmAiAccess("masked"); }}>允许脱敏样本</button><button type="button" disabled={datasetActionBusy} onClick={() => { void confirmAiAccess("exclude-sensitive-samples"); }}>排除敏感样本</button></div></> : <small>已确认：{source.aiAccessPolicy === "masked" ? "仅提供脱敏样本" : "不提供敏感字段样本"}</small>}
+                {source.aiAccessPolicy === "pending" ? <><small>确认处理方式之前，Harness 不会向 AI 提供此数据集的任何摘要。</small><div><Button variant="secondary" type="button" disabled={datasetActionBusy} onClick={() => { void confirmAiAccess("masked"); }}>允许脱敏样本</Button><Button variant="secondary" type="button" disabled={datasetActionBusy} onClick={() => { void confirmAiAccess("exclude-sensitive-samples"); }}>排除敏感样本</Button></div></> : <small>已确认：{source.aiAccessPolicy === "masked" ? "仅提供脱敏样本" : "不提供敏感字段样本"}</small>}
               </div>
             )}
             {datasetActionError && <div className="recipe-error" role="alert">{datasetActionError}</div>}
@@ -206,8 +208,8 @@ export function DataSourceDetailsPanel({
           )}
           {tab === "preview" && (
             <div className="source-preview-layout">
-              <aside><b>显示字段</b><button type="button" onClick={() => setVisibleFields(source.fields.map((field) => field.name))}>全部显示</button>{source.fields.map((field) => (
-                <label key={field.name}><input type="checkbox" checked={visibleFields.includes(field.name)} onChange={() => toggleField(field.name)} />{field.label}<small>{field.name}</small></label>
+              <aside><b>显示字段</b><Button variant="secondary" type="button" onClick={() => setVisibleFields(source.fields.map((field) => field.name))}>全部显示</Button>{source.fields.map((field) => (
+                <label key={field.name}><Checkbox  checked={visibleFields.includes(field.name)} onCheckedChange={() => toggleField(field.name)} />{field.label}<small>{field.name}</small></label>
               ))}</aside>
               <div className="source-table-scroll"><div className="preview-caption">前 {preview.rows.length} 行 · 显示 {preview.fields.length}/{source.fields.length} 个字段</div><table>
                 <thead><tr>{preview.fields.map((field) => <th key={field}>{source.fields.find((item) => item.name === field)?.label ?? field}<small>{field}</small></th>)}</tr></thead>
@@ -223,9 +225,9 @@ export function DataSourceDetailsPanel({
                 <div className="recipe-toolbar">
                   <div><small>本地可执行配方</small><h3>{recipe.name}</h3><p>{activeStepCount}/{recipe.steps.length} 个步骤 · 输出 {recipe.outputDatasetId}</p></div>
                   <div>
-                    <button type="button" disabled={activeStepCount <= 1} onClick={() => { setActiveStepCount((count) => Math.max(1, count - 1)); setBindingError(null); }}>撤销最近一步</button>
-                    <button type="button" disabled={activeStepCount === recipe.steps.length} onClick={() => { setActiveStepCount(recipe.steps.length); setBindingError(null); }}>恢复全部步骤</button>
-                    <button type="button" className="primary" disabled={!recipeResult.success} onClick={previewRecipeBinding}>生成绑定变更预览</button>
+                    <Button variant="secondary" type="button" disabled={activeStepCount <= 1} onClick={() => { setActiveStepCount((count) => Math.max(1, count - 1)); setBindingError(null); }}>撤销最近一步</Button>
+                    <Button variant="secondary" type="button" disabled={activeStepCount === recipe.steps.length} onClick={() => { setActiveStepCount(recipe.steps.length); setBindingError(null); }}>恢复全部步骤</Button>
+                    <Button variant="primary" type="button" className="primary" disabled={!recipeResult.success} onClick={previewRecipeBinding}>生成绑定变更预览</Button>
                   </div>
                 </div>
                 {bindingError && <div className="recipe-error" role="alert">{bindingError}</div>}

@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { DshDriverTool } from "./dsh-engine";
 import { HarnessToolArgumentsError } from "@/core/harness/tools/errors";
 import { sanitizeToolArgumentIssues } from "../../../runtime/dsh/tool-diagnostics.mjs";
-import { catalogToolNames } from "../../../runtime/dsh/policy.mjs";
+import { catalogToolNames, type DshToolProfile } from "../../../runtime/dsh/policy.mjs";
 import { trustedNotebookToolFailure } from "./tool-error-message";
 
 const inputSchema = z.object({ name: z.string().min(1).max(100), args: z.unknown(), callId: z.string().min(1).max(200) }).strict();
@@ -32,6 +32,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 /** One short-lived, token-bound loopback capability per DSH task; never a website route. */
 export async function createDshToolBroker(input: {
   tools: DshDriverTool[];
+  profile?: DshToolProfile;
   authorizeCurrentAccess(): void;
   onModelCall(): void;
   signal: AbortSignal;
@@ -40,7 +41,7 @@ export async function createDshToolBroker(input: {
   const tools = new Map(input.tools.map((tool) => [tool.name, { name: tool.name, description: tool.description,
     parameters: structuredClone(tool.parameters), execute: tool.execute.bind(tool) }]));
   // The website broker and SDK child share the same closed capability sets.
-  try { catalogToolNames(input.tools); }
+  try { catalogToolNames(input.tools, input.profile); }
   catch { throw new Error("DSH tool catalog mismatch"); }
   const token = randomBytes(32).toString("hex");
   const authorization = Buffer.from(`Bearer ${token}`);
@@ -70,7 +71,8 @@ export async function createDshToolBroker(input: {
       signal.throwIfAborted();
       input.authorizeCurrentAccess();
       if (request.method === "GET" && request.url === "/catalog") {
-        respond(response, 200, { tools: [...tools.values()].map(({ name, description, parameters }) => ({ name, description, parameters })) });
+        respond(response, 200, { ...(input.profile ? { profile: input.profile } : {}),
+          tools: [...tools.values()].map(({ name, description, parameters }) => ({ name, description, parameters })) });
       } else if (request.method === "POST" && request.url === "/authorize") {
         const body = await readJson(request);
         if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length) throw new BrokerError(400, "Empty object required");

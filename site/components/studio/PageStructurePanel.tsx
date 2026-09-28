@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import type { AppSpec } from "@/core/models";
 import { LEGACY_DEMO_PAGE_IDS } from "@/core/workspaces";
 import { StudioIcon } from "./StudioIcon";
@@ -17,7 +18,7 @@ export function PageStructurePanel({ appSpec, activePageId, onPageChange }: Page
       {visibleNavigation.length > 0 ? (
         <nav className="interface-selection-list" aria-label="工作界面列表">
           {visibleNavigation.map((item) => (
-            <button
+            <Button variant="secondary"
               key={item.id}
               type="button"
               aria-current={activePageId === item.pageId ? "page" : undefined}
@@ -27,7 +28,7 @@ export function PageStructurePanel({ appSpec, activePageId, onPageChange }: Page
               <StudioIcon name="pages" />
               <span className="interface-selection-name">{item.title}</span>
               {activePageId === item.pageId && <span className="interface-selection-check" aria-hidden="true">✓</span>}
-            </button>
+            </Button>
           ))}
         </nav>
       ) : <p className="interface-selection-empty">暂无工作界面</p>}

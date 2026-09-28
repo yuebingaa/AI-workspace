@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HarnessExecutionPhase, HarnessTaskSummary } from "@/core/harness/contracts";
 import type { ChangeSetAuditRecord } from "@/core/models";
@@ -130,12 +131,12 @@ function TaskList({ tasks, selectedId, onSelect }: { tasks: HarnessTaskSummary[]
   return (
     <div className="history-list" aria-label="数据任务列表">
       {tasks.map((task) => (
-        <button key={task.id} type="button" className={selectedId === task.id ? "selected" : ""} onClick={() => onSelect(task.id)}>
+        <Button variant="secondary" key={task.id} type="button" className={selectedId === task.id ? "selected" : ""} onClick={() => onSelect(task.id)}>
           <span className="history-list-top"><StateBadge state={task.state} /><time dateTime={task.updatedAt}>{formatDate(task.updatedAt)}</time></span>
           <b>{task.instruction}</b>
           <small>{task.counters.toolCallCount} 次工具调用 · {formatDuration(taskDuration(task))}</small>
           {(task.error || task.state === "blocked") && <em>{task.error ?? task.resultMessage ?? "任务已阻塞"}</em>}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -288,11 +289,11 @@ export function ActivityHistoryPanel({ open, harnessTasks, auditRecords, loading
       <section ref={dialogRef} className="history-panel" role="dialog" aria-modal="true" aria-labelledby="history-panel-title">
         <header className="history-panel-head">
           <div><span className="history-head-icon" aria-hidden="true">↺</span><div><h2 id="history-panel-title">任务与变更历史</h2><p>检查 Harness 执行过程和 ChangeSet 审计轨迹</p></div></div>
-          <button ref={closeButtonRef} type="button" aria-label="关闭任务历史" onClick={onClose}>×</button>
+          <Button variant="secondary" ref={closeButtonRef} type="button" aria-label="关闭任务历史" onClick={onClose}>×</Button>
         </header>
         <nav className="history-tabs" aria-label="历史类型">
-          <button type="button" className={tab === "tasks" ? "active" : ""} aria-pressed={tab === "tasks"} onClick={() => setTab("tasks")}>数据任务 <span>{harnessTasks.length}</span></button>
-          <button type="button" className={tab === "changesets" ? "active" : ""} aria-pressed={tab === "changesets"} onClick={() => setTab("changesets")}>ChangeSet <span>{auditRecords.length}</span></button>
+          <Button variant="secondary" type="button" className={tab === "tasks" ? "active" : ""} aria-pressed={tab === "tasks"} onClick={() => setTab("tasks")}>数据任务 <span>{harnessTasks.length}</span></Button>
+          <Button variant="secondary" type="button" className={tab === "changesets" ? "active" : ""} aria-pressed={tab === "changesets"} onClick={() => setTab("changesets")}>ChangeSet <span>{auditRecords.length}</span></Button>
         </nav>
         <div className={`history-panel-body ${tab}`}>
           {loading ? <LoadingHistory /> : tab === "tasks" ? (

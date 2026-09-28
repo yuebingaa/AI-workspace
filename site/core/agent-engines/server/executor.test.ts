@@ -27,7 +27,7 @@ it("取消后保持执行租约直至可信驱动完成回收，不接纳迟到�
     return {};
   });
   let settled = false;
-  const running = execute("dsh", request, { signal: abort.signal, authorizeModelCall: () => {},
+  const running = execute("dsh", request, { signal: abort.signal, authorizeCurrentAccess: () => {},
     dataRuntime: { rowsByDataSourceId: { [parsed.dataset.datasetId]: parsed.rows } }, notebookRunner: vi.fn(),
   }).then((task) => { settled = true; return task; });
   await started.promise;

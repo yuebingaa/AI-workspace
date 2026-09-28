@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+// @vitest-environment happy-dom
+import { renderDialogMarkup as renderToStaticMarkup } from "@/test-support/render-dialog";
 import { describe, expect, it } from "vitest";
 import { CsvUploadDialog } from "./CsvUploadDialog";
 

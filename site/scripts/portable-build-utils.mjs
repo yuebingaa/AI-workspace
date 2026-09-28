@@ -10,8 +10,8 @@ export const MAX_ARCHIVE_PATH = 210;
 export const MAX_UNCOMPRESSED_BYTES = 1536 * 1024 * 1024;
 export const MAX_ZIP_BYTES = 2 * 1024 * 1024 * 1024 - 1;
 export const DSH_CARRIER_FILES = Object.freeze([
-  "controlled-plugin.mjs", "driver.mjs", "installation.mjs", "policy.mjs",
-  "tool-diagnostics.mjs", "wire-policy.mjs",
+  "chat-adapter.mjs", "controlled-plugin.mjs", "driver.mjs", "installation.mjs", "native-loader.cjs", "policy.mjs",
+  "tool-diagnostics.mjs", "wire-policy.mjs", "session-server.mjs", "web-assets.mjs", "web-client.mjs", "web-settings.mjs", "builtin-skills.mjs", "package-inventory.mjs",
 ]);
 export const COMPLETE_REQUIRED_FILES = Object.freeze([
   "Start-AgentCanvas.cmd", "launcher.mjs", "launcher-config.mjs", "portable-manifest.json", "runtime/node.exe", "app/server.js",

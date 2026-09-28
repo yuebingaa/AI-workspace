@@ -15,7 +15,7 @@ AgentCanvas Portable for Windows x64
 说明
 ----
 - 目标电脑无需安装 Node、npm、pnpm、Python 或开发工具；已内置 DSH 和 Python 分析所需的无头浏览器。
-- 本完整包每次启动默认使用 DSH；可在设置中切回原执行器，切换只保留到本次进程结束。
+- 当前网页对话使用 DSH，聊天与插件设置复用随包附带的官方 Web 组件；旧 Harness 保留在源码中，不提供网页切换入口。
 - DSH 使用网站受控数据分析工具，不能任意安装插件或执行系统命令。草稿仍需你确认采用。
 - 本包未包含网站未开放的 DSH Office 转换 / 原生附件图片插件依赖；它不是通用全插件 DSH CLI 包，网站 Excel、Python、SQL 能力不靠这些插件执行。
 - 网站和数据服务只监听 127.0.0.1，不会主动开放到局域网。
@@ -32,7 +32,7 @@ AgentCanvas Portable for Windows x64
 ----
 app\       AgentCanvas 独立生产构建
 runtime\   内置 Node.js 24 和 Notebook 无头浏览器
-app\.runtime\dsh-bundled\  锁定版本的 DSH 完整依赖（请勿单独修改）
+app\.runtime\dsh-bundled\  锁定版本的网站 DSH 运行依赖（不含上述未开放的四个包，请勿单独修改）
 data\      首次运行时自动创建的本地状态目录
 launcher.mjs  本地启动与浏览器打开程序
 THIRD-PARTY-NOTICES / 各组件许可证  第三方软件分发声明（以实际文件为准）

@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/fields";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { containDialogFocus } from "./dialog-focus";
 import "./wecom-settings.css";
@@ -57,18 +59,18 @@ export function WecomSettings({ onSuggestion, open: controlledOpen, onOpenChange
     finally { setBusy(false); }
   }
   return <>
-    {!hideTrigger && <button ref={trigger} type="button" className="ai-api-settings-trigger wecom-trigger" aria-label="配置企业微信连接" onClick={() => { setError(""); setOpen(true); }}>
+    {!hideTrigger && <Button variant="secondary" ref={trigger} type="button" className="ai-api-settings-trigger wecom-trigger" aria-label="配置企业微信连接" onClick={() => { setError(""); setOpen(true); }}>
       <span className={`wecom-status-dot${status?.connected ? " connected" : ""}`} aria-hidden="true" />企业微信
-    </button>}
+    </Button>}
     {open && <dialog ref={dialog} className="wecom-dialog" aria-labelledby="wecom-heading" onKeyDown={containDialogFocus} onCancel={close} onClick={(event) => { if (event.target === dialog.current) close(); }}>
       <div className="wecom-dialog-content">
-        <header><div><h2 id="wecom-heading">连接企业微信</h2><p>让网页智能体读取你授权的企业数据</p></div><button type="button" aria-label="关闭企业微信设置" onClick={close}>×</button></header>
+        <header><div><h2 id="wecom-heading">连接企业微信</h2><p>让网页智能体读取你授权的企业数据</p></div><Button variant="secondary" type="button" aria-label="关闭企业微信设置" onClick={close}>×</Button></header>
         <div className={`wecom-connection-card${status?.connected ? " connected" : ""}`} role="status">
           <strong>{status?.connected ? "已连接 · 只读模式" : status?.pending ? "等待扫码授权" : "企业微信连接"}</strong>
           <p>{status?.message ?? "正在检查本机组件…"}</p>
         </div>
         <section><h3>本版开放的能力</h3><ul><li>按关键词搜索你有权限的企业微信文档</li><li>读取在线表格指定区域（每次最多 1000 个单元格）</li><li>分页读取智能表格记录（每页最多 20 行）</li></ul><p className="wecom-muted">暂不发送消息、不写入或删除企业数据，不读取普通文档正文。部分数据不能替代全表统计。</p></section>
-        {!status?.connected && <label className="wecom-consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} disabled={busy || status?.pending} /><span>我同意将对话请求所需的企业微信搜索结果、表格内容交给当前配置的 AI 服务分析，并保存在本网页的对话记录中。</span></label>}
+        {!status?.connected && <label className="wecom-consent"><Checkbox  checked={consent} onCheckedChange={(checked) => setConsent(checked)} disabled={busy || status?.pending} /><span>我同意将对话请求所需的企业微信搜索结果、表格内容交给当前配置的 AI 服务分析，并保存在本网页的对话记录中。</span></label>}
         {status?.pending && <div className="wecom-qr">
           {status.qrReady
             // This endpoint serves only the CLI-generated, session-bound PNG.
@@ -79,11 +81,11 @@ export function WecomSettings({ onSuggestion, open: controlledOpen, onOpenChange
         </div>}
         {error && <p className="wecom-error" role="alert">{error}</p>}
         <div className="wecom-actions">
-          {!status?.connected && !status?.pending && <button type="button" className="wecom-primary" disabled={!status?.available || !consent || busy} onClick={() => void mutate("POST")}>{busy ? "正在连接…" : "扫码连接企业微信"}</button>}
-          {(status?.connected || status?.pending || status?.failed) && <button type="button" disabled={busy} onClick={() => void mutate("DELETE")}>{status?.pending ? "取消授权" : "断开并移除本机凭据"}</button>}
-          <button type="button" disabled={busy} onClick={() => { setError(""); void refresh(); }}>刷新状态</button>
+          {!status?.connected && !status?.pending && <Button variant="primary" type="button" className="wecom-primary" disabled={!status?.available || !consent || busy} onClick={() => void mutate("POST")}>{busy ? "正在连接…" : "扫码连接企业微信"}</Button>}
+          {(status?.connected || status?.pending || status?.failed) && <Button variant="secondary" type="button" disabled={busy} onClick={() => void mutate("DELETE")}>{status?.pending ? "取消授权" : "断开并移除本机凭据"}</Button>}
+          <Button variant="secondary" type="button" disabled={busy} onClick={() => { setError(""); void refresh(); }}>刷新状态</Button>
         </div>
-        {status?.connected && onSuggestion && <section className="wecom-examples"><h3>现在可以这样问</h3>{["帮我在企业微信搜索销售报表，先列出候选文档让我选择", "读取这份企业微信表格的结构，再让我选择要分析的区域："].map((text) => <button type="button" key={text} onClick={() => { onSuggestion(text); close(); }}>{text}</button>)}</section>}
+        {status?.connected && onSuggestion && <section className="wecom-examples"><h3>现在可以这样问</h3>{["帮我在企业微信搜索销售报表，先列出候选文档让我选择", "读取这份企业微信表格的结构，再让我选择要分析的区域："].map((text) => <Button variant="secondary" type="button" key={text} onClick={() => { onSuggestion(text); close(); }}>{text}</Button>)}</section>}
         <p className="wecom-muted wecom-footer">凭据仅保存在本机服务端，不写入浏览器存储或发给 AI。3000 与 3001 分别连接。断开会删除本机连接凭据，不删除已有对话；如需撤销企业微信侧授权，请在企业微信中操作。本功能目前仅支持本机使用。</p>
       </div>
     </dialog>}

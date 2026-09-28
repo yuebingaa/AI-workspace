@@ -7,6 +7,23 @@ import { TOOL_NAMES, OPTIONAL_TOOL_NAMES, catalogToolNames } from './policy.mjs'
 import { createWireFetch } from './wire-policy.mjs';
 import { notebookSearchFailureMessage, notebookToolFailureMessage } from './tool-diagnostics.mjs';
 
+test('configured official Skill loads only embedded instructions; disabled profile exposes no Skill', { timeout: 30_000 }, async () => {
+  const fixture = await broker(undefined, undefined, [], { profile: 'conversation' });
+  try {
+    const options = { brokerUrl: fixture.url, brokerToken: fixture.token, profile: 'conversation',
+      instruction: 'Load the data-inspection skill.', sessionId: 'sdk-builtin-skills' };
+    const result = await runDshSession({ ...options, plugins: { skills: true },
+      modelConfig: { mode: 'fixture', actions: [{ name: 'skill', args: { name: 'data-inspection' } }] } });
+    const header = result.events.find(event => event.type === 'request/header');
+    assert.deepEqual(header.data.header.tools.map(tool => tool.name), ['skill']);
+    assert.ok(JSON.stringify(result.events).includes('不得从文件名推断内容'));
+    assert.equal(fixture.calls.every(call => call === 'authorize'), true);
+    const disabled = await runDshSession({ ...options, plugins: { skills: false }, modelConfig: { mode: 'fixture', actions: [] } });
+    assert.deepEqual(disabled.events.find(event => event.type === 'request/header').data.header.tools ?? [], []);
+    assert.equal(disabled.reaped, true);
+  } finally { await fixture.close(); }
+});
+
 async function broker(execute = async () => ({ summary: 'ok', data: { ok: true } }), authorize = () => true,
   names = TOOL_NAMES, options = {}) {
   const token = randomBytes(32).toString('hex');
@@ -15,7 +32,8 @@ async function broker(execute = async () => ({ summary: 'ok', data: { ok: true }
     if (request.headers.authorization !== `Bearer ${token}`) { response.writeHead(401).end(); return; }
     response.setHeader('content-type', 'application/json');
     if (request.url === '/catalog') {
-      response.end(JSON.stringify({ tools: names.map((name) => ({ name, description: name, parameters: options.parameters ?? { type: 'object' } })) }));
+      response.end(JSON.stringify({ ...(options.profile ? { profile: options.profile } : {}),
+        tools: names.map((name) => ({ name, description: name, parameters: options.parameters ?? { type: 'object' } })) }));
     } else if (request.url === '/authorize') {
       calls.push('authorize'); response.end(JSON.stringify({ authorized: authorize() }));
     } else if (request.url === '/execute') {
@@ -57,6 +75,58 @@ test('official SDK subprocess runs exact four-tool profile and is reaped', { tim
   } finally { await fixture.close(); }
 });
 
+test('official SDK exceeds 24 tool calls and preserves a long final answer with null website budgets', { timeout: 30_000 }, async () => {
+  const fixture = await broker(async () => ({ summary: 'read completed', data: { executionBudget: {
+    maxToolCalls: null, totalExecutionTimeoutMs: null, toolCallTimeoutMs: null, toolCallsRemaining: null, remainingMs: null,
+  } } }));
+  const finalText = 'Synthetic explanation. '.repeat(200) + 'FULL_RESPONSE_END';
+  try {
+    const result = await runDshSession({ brokerUrl: fixture.url, brokerToken: fixture.token,
+      modelConfig: { mode: 'fixture', actions: Array.from({ length: 30 }, () => ({ name: 'cellSearch', args: {} })), finalText },
+      instruction: 'Synthetic long execution, no real provider.', sessionId: 'sdk-no-default-budget',
+    });
+    assert.equal(result.reaped, true);
+    assert.equal(result.finalResponse, finalText);
+    assert.equal(result.events.filter(event => event.type === 'tool/call').length, 30);
+    assert.equal(fixture.calls.filter(name => name === 'cellSearch').length, 30);
+    assert.equal(result.events.find(event => event.type === 'turn/end').data.reason.kind, 'completed');
+  } finally { await fixture.close(); }
+});
+
+test('explicit conversation profile answers through official SDK with no data tools and is reaped', { timeout: 30_000 }, async () => {
+  const fixture = await broker(undefined, undefined, [], { profile: 'conversation' });
+  try {
+    const result = await runDshSession({ brokerUrl: fixture.url, brokerToken: fixture.token, profile: 'conversation',
+      modelConfig: { mode: 'fixture', actions: [], finalText: 'I can answer ordinary questions or ask for clarification.' },
+      instruction: 'Who are you?', sessionId: 'sdk-driver-conversation',
+    });
+    assert.equal(result.reaped, true);
+    assert.equal(result.finalResponse, 'I can answer ordinary questions or ask for clarification.');
+    assert.equal(result.events.filter(event => event.type === 'tool/call').length, 0);
+    assert.deepEqual(fixture.calls, ['authorize']);
+    assert.equal(result.events.find(event => event.type === 'turn/end').data.reason.kind, 'completed');
+  } finally { await fixture.close(); }
+});
+
+test('conversation catalog/profile mismatch is rejected before a model request', { timeout: 30_000 }, async () => {
+  const fixture = await broker(undefined, undefined, []);
+  try {
+    await assert.rejects(runDshSession({ brokerUrl: fixture.url, brokerToken: fixture.token, profile: 'conversation',
+      modelConfig: { mode: 'fixture', actions: [] }, instruction: 'Never starts', sessionId: 'sdk-profile-mismatch',
+    }));
+    assert.deepEqual(fixture.calls, []);
+  } finally { await fixture.close(); }
+});
+
+test('conversation catalog only adds an explicitly empty tool set, not unknown or partial-write capability', () => {
+  assert.deepEqual(catalogToolNames([], 'conversation'), []);
+  assert.throws(() => catalogToolNames([]), /catalog/);
+  assert.throws(() => catalogToolNames([], 'unknown'), /profile/);
+  for (const names of [['bash'], ['cellSearch', 'editNotebookCells'], ['cellSearch', 'cellSearch']]) {
+    assert.throws(() => catalogToolNames(names.map(name => ({ name })), 'conversation'), /catalog/);
+  }
+});
+
 test('official SDK registers and executes only the advertised optional business tools', { timeout: 30_000 }, async () => {
   const names = [...TOOL_NAMES, ...OPTIONAL_TOOL_NAMES];
   const fixture = await broker(undefined, undefined, names);
@@ -74,7 +144,7 @@ test('official SDK registers and executes only the advertised optional business 
       assert.deepEqual(event.data.header.tools.map((tool) => tool.name).sort(), [...names].sort());
     }
     assert.equal(result.events.filter((event) => event.type === 'tool/result'
-      && event.data.message.content.some((block) => block.isError)).length, 0);
+      && (event.data.message.isError === true)).length, 0);
   } finally { await fixture.close(); }
 });
 
@@ -95,7 +165,7 @@ for (const names of [['cellSearch'], ['runNotebookCells', 'cellSearch']]) {
         assert.deepEqual(event.data.header.tools.map(tool => tool.name).sort(), [...names].sort());
       }
       assert.equal(result.events.filter(event => event.type === 'tool/result'
-        && event.data.message.content.some(block => block.isError)).length, 2);
+        && (event.data.message.isError === true)).length, 2);
       assert.equal(result.events.find(event => event.type === 'turn/end').data.reason.kind, 'completed');
     } finally { await fixture.close(); }
   });
@@ -148,7 +218,7 @@ test('official SDK denies shell and unadvertised optional calls before reaching 
     assert.equal(result.reaped, true);
     assert.deepEqual(fixture.calls.filter((name) => name !== 'authorize'), []);
     assert.equal(result.events.filter((event) => event.type === 'tool/result'
-      && event.data.message.content.some((block) => block.isError)).length, 1 + OPTIONAL_TOOL_NAMES.length);
+      && (event.data.message.isError === true)).length, 1 + OPTIONAL_TOOL_NAMES.length);
   } finally { await fixture.close(); }
 });
 
@@ -162,7 +232,7 @@ test('tool broker failure remains real DSH error evidence', { timeout: 30_000 },
     });
     assert.equal(result.reaped, true);
     assert.equal(result.events.filter((event) => event.type === 'tool/result'
-      && event.data.message.content.some((block) => block.isError)).length, 1);
+      && (event.data.message.isError === true)).length, 1);
   } finally { await fixture.close(); }
 });
 
@@ -176,7 +246,7 @@ test('official SDK exposes only the same fixed search business diagnostic as the
       instruction: 'Controlled search diagnostic fixture.', sessionId: 'sdk-search-business-diagnostic',
     });
     const failures = result.events.filter(event => event.type === 'tool/result'
-      && event.data.message.content.some(block => block.isError));
+      && (event.data.message.isError === true));
     assert.equal(failures.length, 1);
     const serialized = JSON.stringify(failures);
     assert.ok(serialized.includes(notebookSearchFailureMessage(body, 'cellSearch')));
@@ -234,9 +304,9 @@ test('official SDK receives safe argument feedback and a local model fixture cor
     assert.deepEqual(attempts, [{ view: 'invalid-synthetic-view' }, { view: 'source' }]);
     const observations = result.events.filter((event) => event.type === 'tool/result');
     assert.equal(observations.length, 2);
-    assert.equal(observations[0].data.message.content.some((block) => block.isError), true);
+    assert.equal((observations[0].data.message.isError === true), true);
     assert.match(JSON.stringify(observations[0]), /invalid_tool_arguments/);
-    assert.equal(observations[1].data.message.content.some((block) => block.isError), false);
+    assert.equal((observations[1].data.message.isError === true), false);
     assert.equal(result.finalResponse, 'Corrected using safe tool feedback.');
     assert.equal(result.reaped, true);
   } finally {
@@ -258,7 +328,7 @@ test('official SDK keeps submission rejection as an error with the same finite U
       instruction: 'Controlled submission diagnostic fixture.', sessionId: 'sdk-submit-business-diagnostic',
     });
     const failures = result.events.filter(event => event.type === 'tool/result'
-      && event.data.message.content.some(block => block.isError));
+      && (event.data.message.isError === true));
     assert.equal(failures.length, 2);
     assert.ok(JSON.stringify(failures[0]).includes(notebookToolFailureMessage(body, 'submitNotebookDraft')));
     assert.doesNotMatch(JSON.stringify(failures[1]), /notebook_submit_no_changes/);
@@ -302,7 +372,7 @@ test('a failed final model dispatch cannot deliver a previously submitted draft'
       .map((entry) => entry.params.event);
     assert.equal(events.filter((event) => event.type === 'tool/result').length, 4);
     assert.equal(events.filter((event) => event.type === 'tool/result'
-      && event.data.message.content.some((block) => block.isError)).length, 0);
+      && (event.data.message.isError === true)).length, 0);
     assert.equal(events.findLast((event) => event.type === 'turn/end').data.reason.kind, 'error');
   } finally { await fixture.close(); }
 });
@@ -329,12 +399,12 @@ test('wire policy preserves omitted model output quota and refuses external fetc
   await wire('https://api.deepseek.com/chat/completions', {
     method: 'POST', body: JSON.stringify({ model: 'existing-model', max_tokens: 256000, reasoning_effort: 'high', stream: true }),
   });
-  assert.deepEqual(await sent.json(), { model: 'existing-model', stream: true });
+  assert.deepEqual(await sent.json(), { model: 'existing-model', stream: true, thinking: { type: 'disabled' } });
   assert.equal(sent.redirect, 'error');
   await assert.rejects(wire('https://example.invalid/'), /allowlist/);
 });
 
-test('official DeepSeek adapter uses local mocked SSE without imposing max_tokens or effort', { timeout: 30_000 }, async () => {
+test('official Chat Completions adapter uses local mocked SSE without imposing max_tokens or effort', { timeout: 30_000 }, async () => {
   const fixture = await broker();
   const requests = [];
   const provider = createServer(async (request, response) => {

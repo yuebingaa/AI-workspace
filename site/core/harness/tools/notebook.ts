@@ -10,6 +10,7 @@ import { captureNotebookRunExpectation, parseNotebookRunReceipt } from "@/core/n
 import type { NotebookRun } from "@/core/notebook/contracts";
 import { requiresSuccessfulNotebookTrial } from "@/core/notebook/cell-catalog";
 import { notebookTextResults } from "../notebook-text-results";
+import { notebookDraftExecutionContext } from "../notebook-runner";
 import { cellSearchSchema, cellSearch, editNotebookCellsSchema, editNotebookCells, createPythonCellSchema, createPythonCell, notebookSessionVersionSchema, runNotebookCells, submitNotebookDraft } from "../notebook-cell-tools";
 
 export const createAnalysisPlan = defineTool({
@@ -86,7 +87,7 @@ export const createNotebookDraft = defineTool({
     const diagnosticGeneration = context.notebookDiagnostics?.begin(artifact);
     // An adapter receives its own copy; its mutations cannot replace the reviewed draft.
     const runner = context.notebookRunner;
-    const rawRun = runner ? await runner(structuredClone(artifact), context) : undefined;
+    const rawRun = runner ? await runner(structuredClone(artifact), notebookDraftExecutionContext(artifact, context)) : undefined;
     context.signal?.throwIfAborted();
     let run: NotebookRun | undefined;
     if (runner) {

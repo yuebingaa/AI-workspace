@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "@/test-support/render-themed";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExcelExportArtifact } from "@/core/exports/contracts";
 import { canApplyExcelDownloadResult, canStartExcelExportDownload, ExcelDownloadButton, isServerConfirmedExcelExportExpiry, remainingExcelExportLifetimeMs, triggerBrowserDownload } from "./ExcelDownloadButton";

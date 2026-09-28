@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { VERSION as DSH_VERSION } from '../runtime/dsh/policy.mjs';
 
 // Explicit, offline-only experiment. Not imported by a route or the website.
 const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -14,7 +15,7 @@ const environmentNames = new Set(['systemroot', 'windir', 'path', 'temp', 'tmp',
 process.env = Object.fromEntries(Object.entries(previousEnvironment).filter(([key]) => environmentNames.has(key.toLowerCase())));
 process.env.STUDIO_LOCAL_STATE_DIR = join(directory, 'state');
 let server, fixture, networkAttempts = 0;
-const report = { version: 1, runtime: 'official-dsh-in-process-test-composition', dshVersion: '0.1.6-alpha.2',
+const report = { version: 1, runtime: 'official-dsh-in-process-test-composition', dshVersion: DSH_VERSION,
   model: 'scripted-offline-fixture', startedAt: new Date().toISOString(), passed: false,
   websiteEngineChanged: false, sdkSubprocessVerified: false, modelQualityVerified: false };
 globalThis.fetch = async () => { networkAttempts++; throw new Error('Network fetch is prohibited in the offline DSH pilot'); };

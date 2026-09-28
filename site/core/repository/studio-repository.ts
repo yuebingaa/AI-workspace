@@ -24,7 +24,7 @@ import type {
 } from "@/core/models";
 import { appSpecSchema, dataProductSchema, formatSchemaIssues, StudioValidationError } from "@/core/schemas";
 import { toProjectIsoDateTime } from "@/core/time/project-iso";
-import { activeAssistantSession, assistantSessionsSchema, recoverAssistantSessions, rotateAssistantSessionContexts, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
+import { activeAssistantSession, assistantSessionExperience, assistantSessionsSchema, recoverAssistantSessions, rotateAssistantSessionContexts, updateActiveAssistantSession, type AssistantSessions } from "@/core/harness/assistant-sessions";
 
 export const STUDIO_STORAGE_VERSION = 7 as const;
 export const STUDIO_STORAGE_KEY = "datacanvas-ai:studio:v1";
@@ -362,7 +362,11 @@ export function loadStudioStateSafely(
         return `harness_recovery_${recoveryTimestamp}_${++recoverySequence}`;
       },
     };
-    const recoveredHarnessTasks = recoverHarnessTasksAfterRefresh(saved.harnessTasks, recoveryClock);
+    const conversationTaskIds = new Set(saved.assistantSessions?.items
+      .filter(session => assistantSessionExperience(session) === "dsh-conversation")
+      .flatMap(session => [...session.turns.flatMap(turn => turn.taskId ? [turn.taskId] : []),
+        ...(session.pendingTaskId ? [session.pendingTaskId] : [])]) ?? []);
+    const recoveredHarnessTasks = recoverHarnessTasksAfterRefresh(saved.harnessTasks, recoveryClock, conversationTaskIds);
     const recoveredSessions = recoverAssistantSessions(saved.assistantSessions, recoveredHarnessTasks);
     return {
       dataProduct: { ...saved.dataProduct, appSpec: execution.present },

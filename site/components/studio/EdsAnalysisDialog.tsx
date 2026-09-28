@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { analyzeEdsFiles, EdsClientError, EdsSelectionRequiredClientError } from "@/core/eds/client";
 import {
@@ -68,7 +69,7 @@ export function EdsWorkbookPicker({
   const input = useRef<HTMLInputElement>(null);
   return (
     <>
-      <button
+      <Button variant="secondary"
       type="button"
       className={`eds-file-picker${file ? " selected" : ""}`}
       disabled={disabled}
@@ -78,7 +79,7 @@ export function EdsWorkbookPicker({
       <span className="eds-file-icon">XLSX</span>
       <span><b>{label}</b><small>{file ? `${file.name} · ${(file.size / 1024).toFixed(1)} KiB` : description}</small></span>
         <i>{file ? "已选择" : "选择文件"}</i>
-      </button>
+      </Button>
       <input
         ref={input}
         type="file"
@@ -325,7 +326,7 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
           }
         }}
       >
-        <header className="eds-dialog-head"><div><small>EDS WORKBOOK</small><h2 id="eds-dialog-title">飞达异常自动分析</h2><p id="eds-dialog-description">只需导入原始明细，服务端使用内置模板与固定规则完成统计、图表汇总和 Excel 导出。</p></div><button type="button" aria-label={running ? "取消分析" : "关闭"} onClick={closeOrCancel}>×</button></header>
+        <header className="eds-dialog-head"><div><small>EDS WORKBOOK</small><h2 id="eds-dialog-title">飞达异常自动分析</h2><p id="eds-dialog-description">只需导入原始明细，服务端使用内置模板与固定规则完成统计、图表汇总和 Excel 导出。</p></div><Button variant="secondary" type="button" aria-label={running ? "取消分析" : "关闭"} onClick={closeOrCancel}>×</Button></header>
         {!result ? (
           <div className="eds-setup">
             <div className={`eds-file-grid${advancedComparison ? "" : " single"}`}>
@@ -339,7 +340,7 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
             <div className="eds-version-strip" aria-label="当前 EDS 处理版本">
               <span><small>内置报表模板</small><b>{EDS_TEMPLATE_VERSION}</b></span>
               <span><small>固定统计规则</small><b>{EDS_RULE_VERSION}</b></span>
-              <button
+              <Button variant="secondary"
                 type="button"
                 aria-expanded={advancedComparison}
                 aria-controls="eds-advanced-comparison"
@@ -350,7 +351,7 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
                   setAdvancedComparison(!advancedComparison);
                   setError(null);
                 }}
-              >{advancedComparison ? "关闭高级验收" : "高级验收"}</button>
+              >{advancedComparison ? "关闭高级验收" : "高级验收"}</Button>
             </div>
             <div className="eds-privacy-note"><b>原始数据分析</b><span>导入后可直接分析完整工作簿，相关提问会按需查询全部数据行并返回统计和可溯源结果。原件保留在当前浏览器会话，分析回答按普通对话规则保存。</span></div>
             {selectionOptions.length > 0 && (
@@ -386,7 +387,7 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
               </section>
             )}
             {error && <EdsErrorMessage message={error} />}
-            <button type="button" className="eds-run-button" disabled={!source || running || (selectionOptions.length > 0 && selectionChoice === null)} onClick={() => { void runAnalysis(); }}>{runLabel}</button>
+            <Button variant="secondary" type="button" className="eds-run-button" disabled={!source || running || (selectionOptions.length > 0 && selectionChoice === null)} onClick={() => { void runAnalysis(); }}>{runLabel}</Button>
           </div>
         ) : (
           <>
@@ -395,13 +396,13 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
                 <div><b>已分别生成 {results.length} 份报告</b><small>切换班次可查看统计并下载对应的独立 Excel。</small></div>
                 <div role="tablist" aria-label="已生成的 EDS 报告">
                   {results.map((item, index) => (
-                    <button
+                    <Button variant="secondary"
                       type="button"
                       role="tab"
                       aria-selected={activeResultIndex === index}
                       key={`${item.summary.date}-${item.summary.shift}`}
                       onClick={() => { setActiveResultIndex(index); setError(null); }}
-                    >{item.summary.date} · {item.summary.shift}</button>
+                    >{item.summary.date} · {item.summary.shift}</Button>
                   ))}
                 </div>
               </div>
@@ -410,16 +411,16 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
             {error && <EdsErrorMessage message={error} />}
             <div className="eds-workspace-actions">
               <div><b>在主界面继续分析</b><small>{results.length > 1 ? `把 ${results.length} 份报告一起生成到主看板，并可切换日期和班次；` : "为当前报告生成真实数据绑定看板；"}AI 可按需分析完整原始数据。</small></div>
-              <button type="button" onClick={() => {
+              <Button variant="secondary" type="button" onClick={() => {
                 try {
                   if (!source) throw new Error("原始工作簿已不可用，请重新选择。");
                   onCreateWorkspace(results, activeResultIndex, source);
                 } catch (caught) {
                   setError(caught instanceof Error ? caught.message : "EDS 分析看板生成失败。");
                 }
-              }}>{results.length > 1 ? `生成可切换的 EDS 看板（${results.length} 份）` : "生成 EDS 分析看板"}</button>
+              }}>{results.length > 1 ? `生成可切换的 EDS 看板（${results.length} 份）` : "生成 EDS 分析看板"}</Button>
             </div>
-            <button type="button" className="eds-reset-button" onClick={() => {
+            <Button variant="secondary" type="button" className="eds-reset-button" onClick={() => {
               setSource(null);
               setTemplate(null);
               setAdvancedComparison(false);
@@ -428,7 +429,7 @@ export function EdsAnalysisDialog({ onClose, onCreateWorkspace }: EdsAnalysisDia
               setSelectionOptions([]);
               setSelectionChoice(null);
               setError(null);
-            }}>重新选择工作簿</button>
+            }}>重新选择工作簿</Button>
           </>
         )}
       </section>
