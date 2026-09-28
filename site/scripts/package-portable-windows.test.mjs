@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
 import { packagePortableWindows, validateArchiveName } from "./package-portable-windows.mjs";
 import {
-  assertBuildRuntime, COMPLETE_REQUIRED_FILES, copyControlledDshDependencies, copyPlainDirectoryContents, copyPlainTree, directoryFingerprint,
+  assertBuildRuntime, COMPLETE_REQUIRED_FILES, copyControlledDshDependencies, copyPlainDirectoryContents, copyPlainTree, copyWebsiteRuntimeTree, directoryFingerprint,
   DSH_CARRIER_FILES, fetchLicenseText, inspectDistributionTree, MAX_ARCHIVE_PATH, MAX_UNCOMPRESSED_BYTES, verifyPinnedBrowser,
 } from "./portable-build-utils.mjs";
 
@@ -167,6 +167,28 @@ test("目录指纹仅使用相对路径并检测文件变化", async (t) => {
   assert.notEqual((await directoryFingerprint(second, "AgentCanvas/app/example")).sha256, digest.sha256);
   assert.equal(digest.bytes, 9);
   assert.equal(digest.files, 1);
+});
+
+test("网站依赖仅排除安装器生成的 .bin 启动脚本，保留真正的入口与许可证且不修改源目录", async (t) => {
+  const { root } = await fixture(t);
+  const source = join(root, "website"), target = join(root, "website-copy");
+  const files = {
+    "node_modules/.bin/tool.cmd": "synthetic build-machine launcher",
+    "node_modules/tool/node_modules/.bin/tool.ps1": "synthetic nested launcher",
+    "node_modules/tool/bin/tool.js": "real CLI entry point",
+    "node_modules/tool/LICENSE": "license text",
+    "assets/.bin/keep.txt": "not a dependency launcher",
+  };
+  for (const [name, content] of Object.entries(files)) {
+    await mkdir(dirname(join(source, name)), { recursive: true });
+    await writeFile(join(source, name), content);
+  }
+  await copyWebsiteRuntimeTree(source, target, "AgentCanvas/app");
+  for (const [name, content] of Object.entries(files)) {
+    assert.equal(await readFile(join(source, name), "utf8"), content);
+    if (name.includes("node_modules/.bin/")) await assert.rejects(readFile(join(target, name)), { code: "ENOENT" });
+    else assert.equal(await readFile(join(target, name), "utf8"), content);
+  }
 });
 
 test("模板逐项合并到已有目录，保留 app 并在同名项存在时拒绝覆盖", async (t) => {

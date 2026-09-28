@@ -96,6 +96,17 @@ export async function copyPlainTree(source, target, archivePrefix) {
   await cp(source, target, { recursive: true, force: false, errorOnExist: true });
 }
 
+/** npm/pnpm's generated launchers may embed build-machine paths. The website
+ * loads actual package entry points directly, never these installation shims.
+ * Keep package bin/ sources, notices and all SDK files unchanged. */
+export async function copyWebsiteRuntimeTree(source, target, archivePrefix) {
+  await inspectDistributionTree(source, archivePrefix);
+  await cp(source, target, {
+    recursive: true, force: false, errorOnExist: true,
+    filter: (path) => !/(?:^|\/)node_modules\/\.bin(?:\/|$)/u.test(relative(source, path).replaceAll("\\", "/")),
+  });
+}
+
 export async function copyControlledDshDependencies(source, target) {
   // Audit the complete source before applying the exact, reviewed omissions.
   // No generic pruning (tests/maps/platforms/nested versions) is permitted.

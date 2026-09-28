@@ -8,7 +8,7 @@ import {
 } from "../runtime/dsh/installation.mjs";
 import { VERSION as DSH_VERSION } from "../runtime/dsh/policy.mjs";
 import {
-  assertBuildRuntime, assertCompleteContents, copyControlledDshDependencies, copyPlainDirectoryContents, copyPlainTree, dependencyLicenseIndex,
+  assertBuildRuntime, assertCompleteContents, copyControlledDshDependencies, copyPlainDirectoryContents, copyPlainTree, copyWebsiteRuntimeTree, dependencyLicenseIndex,
   directoryFingerprint, DSH_CARRIER_FILES, fetchLicenseText, fileSha256, inspectDistributionTree,
   MAX_ARCHIVE_PATH, MAX_UNCOMPRESSED_BYTES, verifyPinnedBrowser,
 } from "./portable-build-utils.mjs";
@@ -71,12 +71,12 @@ export async function buildPortableWindows(output = defaultOutput, browser) {
 
   await mkdir(dirname(outputRoot), { recursive: true });
   await mkdir(outputRoot);
-  await copyPlainTree(standaloneRoot, join(outputRoot, "app"), "AgentCanvas/app");
+  await copyWebsiteRuntimeTree(standaloneRoot, join(outputRoot, "app"), "AgentCanvas/app");
   // vinext omits these React peers. Resolve only each declared package root;
   // reject all nested links, then copy ordinary files without dereferencing.
   for (const packageName of ["react", "react-dom", "react-server-dom-webpack"]) {
     const source = await realpath(join(projectRoot, "node_modules", packageName));
-    await copyPlainTree(source, join(outputRoot, "app/node_modules", packageName), `AgentCanvas/app/node_modules/${packageName}`);
+    await copyWebsiteRuntimeTree(source, join(outputRoot, "app/node_modules", packageName), `AgentCanvas/app/node_modules/${packageName}`);
   }
   await mkdir(join(outputRoot, "runtime"));
   await cp(process.execPath, join(outputRoot, "runtime/node.exe"), { force: false, errorOnExist: true });
