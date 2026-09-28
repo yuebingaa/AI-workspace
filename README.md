@@ -4,6 +4,8 @@
 
 ## 本机使用
 
+Windows 试用可直接下载 [完整运行包（2026-09-28）](https://github.com/yuebingaa/AI-workspace/releases/tag/v0.1.0-windows-preview.20260928) 的 `AC-Win64.zip`，解压到新短目录后双击 `Start-AgentCanvas.cmd`。已含 Node、网站、DSH、Python / SQL 与浏览器运行资源；无需 npm，AI 仍需自己的密钥和网络。不要把 GitHub 自动生成的 Source code ZIP 当成运行包。[验收与边界](site/docs/verification/windows-portable-dsh-2026-09-28.md)。
+
 先阅读 [运行与安装约定](site/STABLE-RUNTIME.md)，所有 npm 命令在 `site/` 执行。已有环境先用 `npm run site:status` 检查，勿另外启动同端口服务。
 
 - 当前开发成果：`http://127.0.0.1:3001`；稳定站 `http://127.0.0.1:3000` 是独立旧发布，不随源码修改更新。

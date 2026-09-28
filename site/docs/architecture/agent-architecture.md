@@ -6,6 +6,8 @@
 
 ## 当前实现与启用状态
 
+发行状态补充（2026-09-28）：下列已实现源码已推送独立功能分支，并以 Windows 预览完整包发布到 GitHub；未合并 main、未发布本机稳定站 3000。DSH 0.1.7-rc.2 的官方聊天 / 设置、Notebook Python / SQL / 图表已做隔离便携验证，详见[本次发行记录](../verification/windows-portable-dsh-2026-09-28.md)。下文各历史批次的“仅源码 / 3001”是当时状态，不再表示本次便携包尚未分发。
+
 | 项目 | 状态 |
 | --- | --- |
 | DSH 网站执行约束清理（2026-09-28） | 默认移除 24 次工具 / 180 秒整轮 / 35 秒通用工具预算，浏览器支持无任务截止时间；最终回答不再按 1000 / 1600 / 2000 字符裁切。保留取消、授权、实际证据及工具自身保护；源码 / 3001 验收与限制见[本批报告](../verification/dsh-execution-cleanup-2026-09-28.md)，未发布 3000 |
@@ -89,6 +91,8 @@
 
 ## Windows 完整便携部署（2026-09-24）
 
+2026-09-28 更新：当前 Release 为 `v0.1.0-windows-preview.20260928`，构建源码 `39acdc9566caff937f5841c5fac125f3a582ea24`，携带 Node 24.19.0、DSH 0.1.7-rc.2、官方 Web 聊天与设置载体。32 项便携测试通过；Windows/.NET 实际解压的 28,910 个文件与发行目录全树摘要一致。一次真实 DSH 任务（6 次模型请求 / 5 次工具调用）生成有效草稿，断点后未重复调用模型，原草稿确认、5 单元真实运行和保存重开通过。网站运行依赖仅排除安装器生成的 `.bin` 启动脚本，修正本机路径泄漏；ZIP 改用 Node zlib 压缩，保留 fflate 目录 / CRC、普通 ZIP 与有限流式内存。精确四包省略 profile 不变，不增加开放插件、权限或模型能力。详细验证、脚本误判及未验证项见[本次发行记录](../verification/windows-portable-dsh-2026-09-28.md)，下段 2026-09-24 数据保留作历史。
+
 `scripts/build-portable-windows.mjs` 的完整发行目标是 Windows x64 / Node 24：网站独立构建、固定 DSH SDK 安装树及生产载体、Notebook 的 Pyodide / DuckDB 资源和固定 Playwright Headless Shell 一起分发；构建不复制本机整个 `.runtime`、用户项目、会话、凭据或历史安装。完整包以 GitHub Release 附件分发，仓库自动生成的源码 ZIP 仍不是运行包。
 
 `runtime/dsh/installation.mjs` 新增严格的 `{kind:"bundled",id}` 选择，仅解析固定 `.runtime/dsh-bundled` 短目录。保留原 manifest / lock 身份与 override 声明，校验 SDK 版本、根 ZIP 依赖及受管路径；无任意路径或缺件 fallback。`bundle-profile.json` 必须严格匹配 `controlled-notebook-v1` 与四个精确省略包：`@deepseek-ai/libreoffice-kit`、`@deepseek-ai/libreoffice-kit-win32-x64`、`sharp`、`@img/sharp-win32-x64`，且这些目录必须不存在。实际受控 SDK 加载图不使用这些 Office 转换 / 原生附件图像能力，网站也未开放；因对应源码分发未落实而不随包提供，不表示任意插件可用。slot / legacy 的原 Office ZIP 补丁验证和安装树完全保留。这里验证的是安装契约与关键依赖，并不是逐文件签名或操作系统隔离。
@@ -115,7 +119,7 @@
 
 开发热更新会刷新进程选择对象的实现原型，但不替换对象、engine、revision 或 activeTasks；旧租约的 release 仍作用于同一对象，避免目录停留旧版本或任务丢锁。本批验收发现用户已选择 DSH，截图结束恢复该初始选择，不将源码默认误写为当前已启用状态。
 
-`core/agent-engines/server/dsh-driver.ts` 为可替换驱动端口组装官方 SDK；`runtime/dsh/driver.mjs` 以独占 SDK 子进程执行任务，结束 / 取消关闭该进程。固定官方候选版 `0.1.7-rc.2` 安装在独立 `.runtime` 依赖目录，Cordis 4.0.4、Schemastery 3.18.4、pi-ai 0.85.1 也固定版本。源码部署需显式运行 `node scripts/setup-dsh-runtime.mjs`，主依赖不变。当前支持本地 Node 24+；新版本便携整包 / 云部署 / 稳定站发布未验证。不可用时设置说明原因，不回退执行旧引擎。
+`core/agent-engines/server/dsh-driver.ts` 为可替换驱动端口组装官方 SDK；`runtime/dsh/driver.mjs` 以独占 SDK 子进程执行任务，结束 / 取消关闭该进程。固定官方候选版 `0.1.7-rc.2` 安装在独立 `.runtime` 依赖目录，Cordis 4.0.4、Schemastery 3.18.4、pi-ai 0.85.1 也固定版本。源码部署需显式运行 `node scripts/setup-dsh-runtime.mjs`，主依赖不变。当前支持本地 Node 24+；2026-09-28 Windows 便携整包已单独验收并分发，云部署 / 本机稳定站新版发布未验证。不可用时设置说明原因，不回退执行旧引擎。
 
 第三批增加 `runtime/dsh/installation.mjs`：安装身份由独立 manifest / lock 摘要确定，活动指针只允许受管版本槽位或旧安装，不接受任意路径。每个任务在启动前固定依赖树，SDK 导入与子插件解析使用同一 manifest；切换指针不重定向在途任务。升级允许解析旧版本指针用于迁移，但执行和回退仍严格要求当前版本。当前载体修订 `?carrier=10` 经 `native-loader.cjs` 原生动态导入，修订传入 policy / installation 依赖，避免热更新混用旧常量；不替换进程选择 / 租约。安装修补与回退均是显式操作，不在用户请求中安装依赖。清除旧树后 previous 置空，不保留失效回退入口；历史安装验收见[真实链报告](../verification/dsh-live-2026-09-22.md)，本次迁移与清理以[升级记录](../verification/dsh-upgrade-2026-09-26.md)为准。
 
@@ -1176,6 +1180,10 @@ npm run build
 - 稳定站发布：尚未执行。
 
 ## 变更记录
+
+### 2026-09-28 · 独立分支推送与完整依赖发行
+
+同步当前源码、原版 DSH Web / 插件设置、Notebook 与基础控件到功能分支，不合并 main。完整运行包改进仅涉及分发与验收：排除网站依赖安装器的本机路径脚本，修复 DSH 字体的 DEFLATE 解压兼容，更新 Radix 字段 / 官方聊天 / 插件目录 / 草稿确认的便携验收入口。未修改 Agent 策略、授权或预算默认值，32 项便携测试及一任务真实 DSH 的分段闭环证据见[发行记录](../verification/windows-portable-dsh-2026-09-28.md)；3000 / 3001 / 截图服务未启停或发布。
 
 ### 2026-09-28 · 清理 DSH 网站默认预算与回答裁切
 

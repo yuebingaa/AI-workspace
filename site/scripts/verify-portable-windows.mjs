@@ -58,7 +58,7 @@ export function validatePortableReady(message) {
   return { base: url.origin, serverPid: message.serverPid };
 }
 
-async function startPortable(root, environment) {
+export async function startPortable(root, environment) {
   const child = spawn(join(root, 'runtime', 'node.exe'), [join(root, 'launcher.mjs'), '--no-browser'], {
     cwd: root, env: environment, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -79,7 +79,7 @@ async function startPortable(root, environment) {
   } catch (error) { await stopChild(child); throw error; }
 }
 
-async function stopPortable(child) {
+export async function stopPortable(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   if (child.connected) child.send({ type: 'shutdown' }, () => {});
   for (let count = 0; count < 30 && child.exitCode === null && child.signalCode === null; count++) await sleep(100);
@@ -259,6 +259,19 @@ export async function verifyPortableWindows(options) {
     await page.getByRole('dialog', { name: 'AI 接口配置', exact: true }).getByLabel('DeepSeek API Key', { exact: true }).waitFor();
     await shot('01-no-credentials.png', 'Fresh portable installation requests the user key; no credentials bundled.');
     await page.getByRole('button', { name: '关闭 AI API 配置', exact: true }).click();
+    stage = 'official-plugin-settings';
+    const pluginsBefore = await json('/api/settings/dsh-plugins');
+    await navigation('DSH 执行与插件');
+    const settings = page.frameLocator('iframe[title="官方 DSH 设置"]');
+    await settings.getByRole('button', { name: '内置插件', exact: true }).click();
+    await settings.getByRole('searchbox').fill('ui-settings');
+    await settings.getByText('client-ui-settings-plugins', { exact: true }).first().waitFor();
+    await shot('01b-official-plugin-settings.png', 'Actual official DSH settings and plugin catalog load from the portable bundle; no settings changed.');
+    await settings.getByRole('searchbox').focus();
+    await page.keyboard.press('Escape');
+    await page.locator('iframe[title="官方 DSH 设置"]').waitFor({ state: 'detached' });
+    assert.deepEqual(await json('/api/settings/dsh-plugins'), pluginsBefore);
+    report.checks.push('Bundled official settings UI and plugin inventory load; browsing preserves configuration.');
     stage = 'synthetic-project'; await projectDialog();
     await dataBrowser().getByLabel('项目名称', { exact: true }).fill('便携完整包合成验收');
     const creation = page.waitForResponse(response => response.url() === `${runtime.base}/api/projects` && response.request().method() === 'POST');
@@ -334,14 +347,15 @@ export async function verifyPortableWindows(options) {
       report.task = { state: task.state, counters: task.counters, modelUsage: task.modelUsage };
       report.usage = task.modelUsage ?? 'Task counters observed; provider token totals and invoice amount were not independently captured.';
       await writeFile(join(output, 'synthetic-paid-task.json'), JSON.stringify({ task, frames }, null, 2), { flag: 'wx' });
-      await page.waitForFunction(() => document.querySelector('iframe[title="官方 DSH 聊天"]')?.contentDocument?.querySelector('[data-composer-input="true"]')?.getAttribute('contenteditable') === 'true');
+      // A pending draft intentionally disables the composer until confirmation.
+      // The terminal task and the actual Notebook preview are the completion evidence.
       await shot('03-real-dsh-task.png', 'Single actual paid DSH task; no response replay or automatic paid retry.');
       assert.equal(task.state, 'awaitingConfirmation'); assert.ok(task.notebookArtifact);
       assert.deepEqual(book(await saved()).cells, book(before).cells, 'Unadopted AI draft must not replace formal Notebook.');
       stage = 'adopt-paid-draft'; await page.getByRole('tab', { name: 'Notebook', exact: true }).click();
       const draft = page.getByLabel('AI Notebook 草稿', { exact: true }); await draft.waitFor();
       await shot('04-ai-draft-before-adoption.png', 'Real DSH-produced draft awaiting explicit confirmation.', draft);
-      await draft.getByRole('button', { name: '采用草稿', exact: true }).click(); await draft.waitFor({ state: 'hidden' });
+      await draft.getByRole('button', { name: /^(采用草稿|确认更改)$/u }).click(); await draft.waitFor({ state: 'hidden' });
       await saved(value => book(value).lastDraftId === task.notebookArtifact.id);
       await runAll(); await shot('05-adopted-ai-table.png', 'AI draft explicitly adopted; real downstream result values independently checked.', page.getByRole('article', { name: '表格单元 AI汇总表', exact: true }));
       assert.equal(report.modelTaskAttempts, 1);
