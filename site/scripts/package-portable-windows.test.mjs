@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 import { unzipSync } from "fflate";
 import { packagePortableWindows, validateArchiveName } from "./package-portable-windows.mjs";
 import {
@@ -60,8 +61,10 @@ function centralEntries(zip) {
     const name = zip.subarray(offset + 46, offset + 46 + length).toString("utf8");
     assert.equal(zip.readUInt32LE(localOffset), 0x04034b50);
     assert.equal(zip.subarray(localOffset + 30, localOffset + 30 + zip.readUInt16LE(localOffset + 26)).toString("utf8"), name);
+    const start = localOffset + 30 + zip.readUInt16LE(localOffset + 26) + zip.readUInt16LE(localOffset + 28);
     entries.push({ name, host: zip[offset + 5], flags: zip.readUInt16LE(offset + 8),
-      method: zip.readUInt16LE(offset + 10), attrs: zip.readUInt32LE(offset + 38) });
+      method: zip.readUInt16LE(offset + 10), attrs: zip.readUInt32LE(offset + 38),
+      compressed: zip.subarray(start, start + zip.readUInt32LE(offset + 20)) });
     offset += 46 + length + zip.readUInt16LE(offset + 30) + zip.readUInt16LE(offset + 32);
   }
   assert.equal(offset, end);
@@ -87,7 +90,26 @@ test("ZIP 使用正斜杠、真实目录标记和正确 UTF-8，文件内容保�
   const extracted = unzipSync(zip);
   for (const [name, text] of Object.entries(contents)) {
     assert.equal(Buffer.from(extracted[`AgentCanvas/${name}`]).toString("utf8"), text);
+    assert.equal(inflateRawSync(entries.find(entry => entry.name === `AgentCanvas/${name}`).compressed).toString("utf8"), text);
   }
+});
+
+test("多块二进制与空文件可被独立 zlib 解压，原始字节与哈希完全一致", async (t) => {
+  const { source, output } = await fixture(t);
+  const binary = Buffer.alloc(3 * 1024 * 1024 + 24504);
+  let state = 17;
+  for (let index = 0; index < binary.length; index++) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    binary[index] = index % 500 < 320 ? index % 37 : state >>> 24;
+  }
+  await writeFile(join(source, "app/payload.bin"), binary);
+  await writeFile(join(source, "app/empty.txt"), "");
+  const before = createHash("sha256").update(binary).digest("hex");
+  await packagePortableWindows(source, output);
+  const entries = centralEntries(await readFile(output));
+  assert.deepEqual(inflateRawSync(entries.find(entry => entry.name === "AgentCanvas/app/payload.bin").compressed), binary);
+  assert.equal(inflateRawSync(entries.find(entry => entry.name === "AgentCanvas/app/empty.txt").compressed).length, 0);
+  assert.equal(createHash("sha256").update(await readFile(join(source, "app/payload.bin"))).digest("hex"), before);
 });
 
 test("不会覆盖原包，也不能把输出放进源目录", async (t) => {

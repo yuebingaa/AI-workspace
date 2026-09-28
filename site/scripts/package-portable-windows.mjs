@@ -3,7 +3,10 @@ import { createReadStream, writeSync } from "node:fs";
 import { access, open, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Zip, ZipDeflate, ZipPassThrough } from "fflate";
+import { Transform, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createDeflateRaw } from "node:zlib";
+import { Zip, ZipPassThrough } from "fflate";
 import { assertCompleteContents, inspectDistributionTree, MAX_ZIP_BYTES } from "./portable-build-utils.mjs";
 export { validateArchiveName } from "./portable-build-utils.mjs";
 
@@ -49,19 +52,44 @@ export async function packagePortableWindows(source = defaultSource, output = de
   });
   try {
     for (const entry of tree.entries) {
-      const file = entry.directory ? new ZipPassThrough(entry.name) : new ZipDeflate(entry.name, { level: 6 });
+      const file = new ZipPassThrough(entry.name);
+      if (!entry.directory) {
+        file.compression = 8;
+        // Keep fflate's ZIP framing and CRC over raw bytes, but compress using
+        // Node zlib. fflate's streaming Deflate produced invalid back-references
+        // for a bundled KaTeX font (Windows/.NET and zlib both rejected it).
+        file.process = () => {};
+      }
       Object.assign(file, { os: 0, attrs: entry.directory ? 0x10 : 0x20, mtime: entry.mtime });
       zip.add(file);
       if (!entry.directory) {
         let readBytes = 0;
-        for await (const chunk of createReadStream(entry.diskPath, { highWaterMark: 256 * 1024 })) {
-          readBytes += chunk.length;
-          if (readBytes > entry.size) throw new Error(`压缩期间文件发生变化：${entry.name}`);
-          file.push(chunk, false);
-        }
-        if (readBytes !== entry.size) throw new Error(`压缩期间文件发生变化：${entry.name}`);
-      }
-      file.push(new Uint8Array(), true);
+        await pipeline(
+          createReadStream(entry.diskPath, { highWaterMark: 256 * 1024 }),
+          new Transform({
+            transform(chunk, encoding, done) {
+              readBytes += chunk.length;
+              if (readBytes > entry.size) return done(new Error(`压缩期间文件发生变化：${entry.name}`));
+              file.push(chunk, false);
+              done(null, chunk);
+            },
+            flush(done) {
+              if (readBytes !== entry.size) return done(new Error(`压缩期间文件发生变化：${entry.name}`));
+              file.push(new Uint8Array(), true);
+              done();
+            },
+          }),
+          createDeflateRaw({ level: 6 }),
+          new Writable({
+            write(chunk, encoding, done) {
+              try { file.ondata(null, chunk, false); done(); } catch (error) { done(error); }
+            },
+            final(done) {
+              try { file.ondata(null, new Uint8Array(), true); done(); } catch (error) { done(error); }
+            },
+          }),
+        );
+      } else file.push(new Uint8Array(), true);
     }
     zip.end();
     if (!finished) throw new Error("ZIP 流未正常结束。");
