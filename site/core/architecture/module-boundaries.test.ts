@@ -82,6 +82,14 @@ function cycles(): string[][] {
 }
 
 describe("runtime module boundaries", () => {
+  it("V2 visualization computation stays independent of Notebook, agents and renderers", () => {
+    for (const entry of ["core/visualization/definition.ts", "core/visualization/plan.ts", "core/visualization/result.ts", "core/visualization/server/execute.ts"]) {
+      expect(sources.has(entry)).toBe(true);
+      const dependencies = [...reachable(entry, declaredGraph)];
+      expect(dependencies.filter(name => /^(?:components|app|runtime)\//u.test(name) || /^core\/(?:notebook|harness|chart-editor|agent-engines)\//u.test(name))).toEqual([]);
+      for (const name of dependencies) expect(imports(sources.get(name)!, name, true).filter(spec => /^(?:node:|react(?:\/|$)|@kanaries\/|@duckdb\/)/u.test(spec))).toEqual([]);
+    }
+  });
   it("tool implementations do not depend on their registry, catalog or execution coordinator", () => {
     const coordinators = new Set([
       "core/harness/tool-registry.ts", "core/harness/tools/registry.ts",
@@ -225,12 +233,15 @@ describe("runtime module boundaries", () => {
     expect([...reachable(entry)]).toEqual([entry]);
     expect(direct.get(entry)).toEqual([]);
   });
-  it("Cell catalog and table/chart projection have no runtime dependencies", () => {
-    for (const entry of ["core/notebook/cell-catalog.ts", "core/notebook/presentation-table.ts"]) {
-      expect(sources.has(entry), entry).toBe(true);
-      expect([...reachable(entry)], entry).toEqual([entry]);
-      expect(direct.get(entry), entry).toEqual([]);
-    }
+  it("Cell catalog stays standalone; chart projection only loads pure configuration validation", () => {
+    const catalog = "core/notebook/cell-catalog.ts";
+    expect([...reachable(catalog)]).toEqual([catalog]);
+    expect(direct.get(catalog)).toEqual([]);
+    const projection = "core/notebook/presentation-table.ts";
+    const dependencies = [...reachable(projection)];
+    expect(dependencies).toEqual([projection, "core/notebook/graphic-walker.ts", "core/chart-editor/config.ts"]);
+    // No React, Graphic Walker computation, browser, model or server runtime.
+    expect(dependencies.flatMap(name => direct.get(name) ?? []).filter(ref => !ref.startsWith(".") && !ref.startsWith("@/"))).toEqual(["zod"]);
   });
   it("Cell presentation and default creation cannot load React, Harness or server effects", () => {
     for (const entry of ["components/studio/notebook/cell-presentation.ts", "components/studio/notebook/cell-creation.ts"]) {

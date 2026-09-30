@@ -18,6 +18,10 @@ export interface NotebookTextTemplate {
   readonly references?: readonly NotebookTextReference[];
 }
 type Segment = { kind: "text"; value: string } | { kind: "reference"; key: string };
+export const notebookTextPartsSchema = z.array(z.object({
+  kind: z.enum(["markdown", "literal"]), value: z.string().max(MAX_NOTEBOOK_TEXT_OUTPUT_CHARS),
+}).strict()).max(2001).refine(parts => parts.reduce((length, part) => length + part.value.length, 0) <= MAX_NOTEBOOK_TEXT_OUTPUT_CHARS);
+export type NotebookTextPart = z.infer<typeof notebookTextPartsSchema>[number];
 
 /** Only exact {{key}} tokens are recognized. There is no expression evaluator. */
 function templateSegments(input: NotebookTextTemplate): Segment[] {
@@ -54,8 +58,13 @@ export function validateNotebookTextTemplate(input: NotebookTextTemplate): void 
 
 /** The caller owns current-run success/authorization; this module reads only supplied complete scalar tables. */
 export function renderNotebookText(input: NotebookTextTemplate, outputs: ReadonlyMap<string, DataTable>): string {
+  return renderNotebookTextParts(input, outputs).map(part => part.value).join("");
+}
+
+/** Preserve data/template boundaries for safe Markdown display; the plain result remains unchanged. */
+export function renderNotebookTextParts(input: NotebookTextTemplate, outputs: ReadonlyMap<string, DataTable>): NotebookTextPart[] {
   const segments = templateSegments(input);
-  if (!input.references?.length) return input.markdown;
+  if (!input.references?.length) return [{ kind: "markdown", value: input.markdown }];
   const values = new Map<string, string>();
   for (const reference of input.references) {
     const table = outputs.get(reference.cellId);
@@ -74,7 +83,7 @@ export function renderNotebookText(input: NotebookTextTemplate, outputs: Readonl
     const value = segment.kind === "text" ? segment.value : values.get(segment.key)!;
     length += value.length;
     if (length > MAX_NOTEBOOK_TEXT_OUTPUT_CHARS) throw new Error("文本引用结果超过 8000 字符，请缩小上游文本或减少重复引用。");
-    return value;
+    return { kind: segment.kind === "text" ? "markdown" as const : "literal" as const, value };
   });
-  return rendered.join("");
+  return rendered;
 }

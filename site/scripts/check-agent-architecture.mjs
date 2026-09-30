@@ -9,14 +9,16 @@ const scopes = ["core/harness", "core/ai/server", "app/api/ai/harness", "app/api
 const marker = /<!-- agent-architecture-source-sha256: [a-f0-9]{64} -->/;
 // Runtime dependencies are an explicit source contract, never a recursive scan
 // of the isolated install, generated sessions or third-party node_modules.
-const runtimeFiles = ["scripts/python-runtime-lock.json", "scripts/setup-python-runtime.mjs", "scripts/copy-notebook-runtime.mjs", "scripts/runtime/site-runtime.mjs",
+const runtimeFiles = ["scripts/notebook-query-worker.cjs", "scripts/python-runtime-lock.json", "scripts/setup-python-runtime.mjs", "scripts/copy-notebook-runtime.mjs", "scripts/runtime/site-runtime.mjs",
   "scripts/setup-dsh-runtime.mjs", "runtime/dsh/driver.mjs", "runtime/dsh/driver.d.mts", "runtime/dsh/controlled-plugin.mjs",
   "runtime/dsh/chat-adapter.mjs", "runtime/dsh/native-loader.cjs", "runtime/dsh/session-server.mjs", "runtime/dsh/builtin-skills.mjs", "runtime/dsh/package-inventory.mjs", "runtime/dsh/package-inventory.d.mts",
   "runtime/dsh/web-assets.mjs", "runtime/dsh/web-assets.d.mts", "runtime/dsh/web-client.mjs", "runtime/dsh/web-settings.mjs",
   "runtime/dsh/wire-policy.mjs", "runtime/dsh/policy.mjs", "runtime/dsh/policy.d.mts", "runtime/dsh/installation.mjs", "runtime/dsh/tool-diagnostics.mjs",
-  "runtime/dsh/tool-diagnostics.d.mts", "runtime/dsh/package.json", "runtime/dsh/package-lock.json"];
+  "runtime/dsh/tool-diagnostics.d.mts", "runtime/dsh/package.json", "runtime/dsh/package-lock.json",
+  "runtime/dsh/notebook-plugin/index.mjs", "runtime/dsh/notebook-plugin/index.d.mts", "runtime/dsh/notebook-plugin/package.json",
+  "patches/@kanaries__graphic-walker@0.5.2.patch"];
 
-scopes.push("core/dsh-web", "components/studio/dsh-web", "app/api/settings/dsh-plugins", "components/studio/dsh-settings");
+scopes.push("core/dsh-web", "components/studio/dsh-web", "app/api/settings/dsh-plugins", "components/studio/dsh-settings", "core/chart-editor", "core/visualization");
 
 async function sourceFiles(directory) {
   const files = [];

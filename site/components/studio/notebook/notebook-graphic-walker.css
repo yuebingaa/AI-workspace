@@ -1,0 +1,24 @@
+.notebook-gw-editor { display: block; min-width: 0; container-type: inline-size; }
+.notebook-native-gw-host { display: block; border: 0; margin: 0; padding: 0; min-width: 0; width: 100%; }
+.notebook-gw-source { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 10px 0; }
+.notebook-gw-source > label { display: grid; gap: 6px; min-width: 230px; max-width: 500px; }
+.notebook-gw-host { display: block; border: 0; margin: 0; padding: 0; min-width: 0; width: 100%; height: 720px; overflow: auto; }
+.notebook-gw-host > .gw-editor { min-width: 820px; }
+.notebook-inline-chart-workspace { display: block; min-width: 0; width: 100%; }
+.notebook-chart-layout { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--gray-a4); }
+.notebook-chart-layout > span { margin-left: auto; color: var(--gray-11); font-size: 11px; }
+.notebook-inline-chart-workspace .notebook-editor { padding: 0; }
+.notebook-chart-saved-result { border-top: 1px solid var(--gray-a4); margin-top: 10px; }
+.notebook-chart-saved-result > summary { padding: 10px; font-size: 12px; color: var(--gray-11); cursor: pointer; }
+.notebook-gw-editor .gw-toolbar { padding: 10px; gap: 8px; }
+.notebook-gw-editor .gw-toolbar > div { gap: 6px; }
+.notebook-gw-editor .gw-toolbar > div:first-child { display: none; }
+.notebook-gw-editor .gw-body { grid-template-columns: 142px 218px minmax(0, 1fr); }
+.notebook-gw-editor .gw-body[data-library="collapsed"] { grid-template-columns: 218px minmax(0, 1fr); }
+.notebook-gw-editor .gw-canvas { padding: 18px 12px 12px; }
+.notebook-gw-editor .gw-canvas h2 { font-size: 18px; }
+.notebook-gw-output { min-width: 0; height: 590px; border: 1px solid var(--gray-a5, #e5e3e8); border-radius: 6px; }
+.notebook-gw-output > .gw-canvas { height: 100%; box-sizing: border-box; }
+/* Never automatically remove the field library in a narrow Notebook. Only the
+ * user's explicit Collapse action hides it; the editor itself scrolls. */
+.notebook-gw-editor .gw-library:not([hidden]), .notebook-gw-editor .gw-library-toggle { display: block; }

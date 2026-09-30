@@ -1,10 +1,8 @@
+import { NOTEBOOK_TOOL_NAMES, SOURCE_TOOL_NAMES } from './notebook-plugin/index.mjs';
+
 export const VERSION = '0.1.7-rc.2';
-export const TOOL_NAMES = Object.freeze([
-  'cellSearch', 'editNotebookCells', 'runNotebookCells', 'submitNotebookDraft',
-]);
-export const OPTIONAL_TOOL_NAMES = Object.freeze([
-  'getKernelPackagesInfo', 'inspectEdsRawWorkbook', 'readEdsRawRows', 'inspectConnectionSchema',
-]);
+export const TOOL_NAMES = NOTEBOOK_TOOL_NAMES;
+export const OPTIONAL_TOOL_NAMES = SOURCE_TOOL_NAMES;
 
 /** The parent advertises only this task's capabilities, not the whole allowlist. */
 export function catalogToolNames(tools, profile = 'notebook') {

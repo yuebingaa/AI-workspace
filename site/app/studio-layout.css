@@ -275,3 +275,8 @@ dialog.ai-api-settings-overlay::backdrop { background: transparent; }
 @media (prefers-reduced-motion: reduce) {
   .compact-studio *, .compact-studio *::before, .compact-studio *::after { scroll-behavior: auto !important; transition-duration: 0s !important; }
 }
+.compact-studio .notebook-live-notice { color: var(--studio-muted, #6b6863); font-size: 13px; line-height: 1.6; padding: 10px 0; }
+.compact-studio .notebook-live-preview .notebook-heading p { font-size: 13px; color: var(--studio-muted, #6b6863); margin: 4px 0 0; }
+.compact-studio .notebook-live-preview .notebook-cell-status.running { color: #625a94; }
+.compact-studio .notebook-live-preview .notebook-cell-status.failure,
+.compact-studio .notebook-live-preview .notebook-cell-status.blocked { color: #a53434; }

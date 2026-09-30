@@ -1,12 +1,17 @@
 import type { NotebookCell } from "./definition";
 import type { NotebookTable } from "./contracts";
+import { notebookChartDataset, notebookChartFields, validateNotebookChartConfig } from "./graphic-walker";
 
 /** Validate and project a presentation cell's input; execution owns effects and receipts. */
 export function projectPresentationTable(
   cell: Extract<NotebookCell, { kind: "table" | "chart" }>,
   upstream: NotebookTable,
 ): NotebookTable {
-  const names = cell.kind === "table" ? cell.columns : [cell.categoryField, ...cell.valueFields];
+  const config = cell.kind === "chart" && cell.graphicWalker
+    ? validateNotebookChartConfig(cell.graphicWalker, notebookChartDataset(cell, upstream)) : undefined;
+  // Retain color, facets, tooltip and filter columns for the browser computation.
+  // This receipt is the chart INPUT, not a claim that client-side aggregates ran on the server.
+  const names = config ? notebookChartFields(config) : cell.kind === "table" ? cell.columns : [cell.categoryField, ...cell.valueFields];
   if (names.some((name) => !upstream.fields.some((field) => field.name === name))) {
     throw new Error("上游字段已变化，请重新选择表格或图表字段");
   }

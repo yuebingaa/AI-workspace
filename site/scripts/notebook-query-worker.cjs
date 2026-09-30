@@ -41,12 +41,15 @@ async function run(input) {
       used.add(unique);
       const sqlType = String(column.column_type).toUpperCase();
       const type = sqlType === 'BOOLEAN' ? 'boolean'
+        : sqlType === 'DATE' ? 'date'
         : /^(TINYINT|SMALLINT|INTEGER|UTINYINT|USMALLINT|UINTEGER|FLOAT|DOUBLE)$/.test(sqlType) ? 'number' : 'string';
       return { name: unique, label, type };
     });
     // BIGINT / DECIMAL / timestamps stay lossless strings rather than being
     // silently rounded to JavaScript doubles or browser-local dates.
-    const projection = fields.map((field) => (field.type === 'string' ? 'CAST(' + quote(field.label) + ' AS VARCHAR)' : quote(field.label)) + ' AS ' + quote(field.name)).join(', ');
+    // DATE retains its semantic metadata for chart date drilling, but stays an
+    // exact string on the wire. Never turn a calendar date into a local Date.
+    const projection = fields.map((field) => (field.type === 'string' || field.type === 'date' ? 'CAST(' + quote(field.label) + ' AS VARCHAR)' : quote(field.label)) + ' AS ' + quote(field.name)).join(', ');
     const output = connection.query('SELECT ' + projection + ' FROM ' + source + ' LIMIT 1001');
     const rows = [];
     let byteCount = Buffer.byteLength(JSON.stringify(fields));

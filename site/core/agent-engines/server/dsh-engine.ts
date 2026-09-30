@@ -97,6 +97,7 @@ export async function runDshEngine(rawRequest: HarnessRequest, options: DshEngin
   const parameterCellIds = request.notebookContext?.document.cells.filter(cell => cell.kind === "parameter").map(cell => cell.id) ?? [];
   const trace: HarnessTraceEvent[] = [];
   let traceSequence = 0;
+  const liveCellTitles = new Map(request.notebookContext?.document.cells.map(cell => [cell.id, cell.title]) ?? []);
   const controller = new AbortController();
   let ended = false;
   let timedOut = false;
@@ -135,7 +136,10 @@ export async function runDshEngine(rawRequest: HarnessRequest, options: DshEngin
     const sequence = ++traceSequence;
     const event: HarnessTraceEvent = { ...details, id: `${task.id}:${sequence}`, sequence, taskId: task.id,
       timestamp: clock.now().toISOString(), type, message: sanitizeHarnessText(message), counters: { ...task.counters } };
-    trace.push(event);
+    // Live code/results are window-local projections, never persisted in task history.
+    const savedEvent = { ...event };
+    delete savedEvent.notebookProgress;
+    trace.push(savedEvent);
     // Retain a bounded UI snapshot, not an execution cap. SSE emits every event.
     if (trace.length > 256) trace.shift();
     try { options.onEvent?.(structuredClone(event)); } catch { /* A UI observer cannot change execution. */ }
@@ -149,7 +153,23 @@ export async function runDshEngine(rawRequest: HarnessRequest, options: DshEngin
       bridge = createNotebookToolBridge({ profile: "notebook", request, dataRuntime: options.dataRuntime,
         notebookRunner: options.notebookRunner, rawWorkbook: options.rawWorkbook, notebookCapabilities,
         pythonRuntimeInfo: options.pythonRuntimeInfo, connectionInspector: options.connectionInspector,
-        signal: controller.signal, authorizeCurrentAccess: check });
+        signal: controller.signal, authorizeCurrentAccess: check,
+        onProgress(progress) {
+          check();
+          const update = progress.update;
+          if (update.kind === "draft") for (const cell of update.document.cells) liveCellTitles.set(cell.id, cell.title);
+          const cellId = update.kind === "cell_started" ? update.cellId : update.kind === "cell_finished" ? update.result.cellId
+            : update.kind === "draft" ? update.changedCellIds[0] : undefined;
+          const status = update.kind === "draft" ? "edited" : update.kind === "run_started" ? "queued"
+            : update.kind === "cell_started" ? "running" : update.kind === "cell_finished" ? update.result.status : update.status;
+          const message = update.kind === "draft" ? `草稿 v${progress.editVersion} 已同步到 Notebook，尚未保存。`
+            : update.kind === "run_started" ? `正在试运行草稿 v${progress.editVersion}，共 ${update.cellIds.length} 个单元。`
+            : update.kind === "run_finished" ? update.status === "success" ? "本次草稿试运行通过，等待任务最终核验。" : "本次试运行存在失败，请查看对应单元。"
+            : `${status === "running" ? "正在运行" : status === "success" ? "已完成" : status === "blocked" ? "上游失败，已阻断" : "执行失败"}：${liveCellTitles.get(cellId!) ?? cellId}`;
+          emit("status_update", message, { notebookProgress: progress, notebookStatus: status,
+            notebookEditVersion: progress.editVersion, ...(cellId ? { notebookCellId: cellId } : {}),
+            ...("runId" in update ? { notebookRunId: update.runId } : {}) });
+        } });
     } catch (error) {
       check();
       toolsUnavailable = conversationMode ? dshConversationCapabilityNotice(error) : undefined;

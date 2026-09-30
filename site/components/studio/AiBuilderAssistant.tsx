@@ -10,6 +10,7 @@ import { ConversationSwitcher, type ConversationSwitcherProps } from "./Conversa
 import { NotebookContextChips, type NotebookContextOption } from "./notebook/NotebookContextSelection";
 import { DshWebFrame } from "./dsh-web/DshWebFrame";
 import { StudioArtwork } from "./StudioArtwork";
+import { dshWebProgress } from "@/core/dsh-web/progress";
 
 export type ChangeSetUiStatus = "pending" | "preview" | "applied";
 export type AiRequestUiStatus = "idle" | "loading" | "success" | "blocked" | "error" | "cancelled" | "timeout";
@@ -42,6 +43,7 @@ interface AiBuilderAssistantProps {
   onImportData?: () => void;
   onOpenWorkspace?: () => void;
   onOpenNotebook?: () => void;
+  onLocateNotebookCell?: (cellId: string) => void;
   notebookAutoRunEnabled?: boolean;
   pageTitle: string;
   changeSet: ChangeSet;
@@ -107,6 +109,7 @@ export function AiBuilderAssistant({
   onImportData,
   onOpenWorkspace,
   onOpenNotebook,
+  onLocateNotebookCell,
   notebookAutoRunEnabled = false,
   pageTitle,
   changeSet,
@@ -202,7 +205,8 @@ export function AiBuilderAssistant({
           draft: instruction, busy: isLoading,
           canSend: !isLoading && !conversationSwitcher?.disabledReason && imageAttachments.length === 0,
           pendingInstruction, statusText: (isLoading ? harnessTask?.trace?.at(-1)?.message ?? "DSH 正在处理" : requestError ?? "").slice(0, 1_000),
-        }} onDraft={onInstructionChange} onCancel={onCancelRequest}
+          progress: dshWebProgress(harnessTask),
+        }} onDraft={onInstructionChange} onCancel={onCancelRequest} onLocateCell={onLocateNotebookCell}
           onSend={onSubmitInstruction} />
         {showDshEmptyWelcome && <div className="dsh-web-empty-welcome" data-agentcanvas-dsh-empty-welcome="true">
           <StudioArtwork className="dsh-web-empty-art" />

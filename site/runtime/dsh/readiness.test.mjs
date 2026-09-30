@@ -12,6 +12,7 @@ test('native carrier revisions reload version policy and installation while reta
   for (const name of ['driver.mjs', 'installation.mjs', 'policy.mjs']) {
     await cp(new URL(name, import.meta.url), join(temporary, name));
   }
+  await cp(new URL('./notebook-plugin/', import.meta.url), join(temporary, 'notebook-plugin'), { recursive: true });
   const moduleUrl = (name, revision) => `${pathToFileURL(join(temporary, name)).href}?carrier=${revision}`;
   const before = await import(moduleUrl('driver.mjs', 'before'));
   const oldInstallation = await import(moduleUrl('installation.mjs', 'before'));

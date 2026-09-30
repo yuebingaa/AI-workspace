@@ -59,6 +59,16 @@ instances or enabled tools. Missing/invalid metadata produces an explicit partia
 result; an unavailable installation is not reported as an empty success. Unknown
 integration status remains unknown. See [inventory verification](../../docs/verification/dsh-plugin-inventory-2026-09-27.md).
 
+## Portable Notebook capability plugin (2026-09-28)
+
+`controlled-plugin.mjs` now mounts the self-contained [Notebook tool plugin](./notebook-plugin/README.md)
+using the official `ctx.plugin()` interface. Its catalog and execution port are
+injected by the host; the directory can be copied without website imports or model
+credentials. Business execution, task authorization, safe broker diagnostics and
+draft confirmation remain in their existing owners. This is an adapter package,
+not a standalone Notebook server or an unrestricted DSH installation. No plugin
+switch, UI, SDK upgrade or new public release is implied.
+
 ## Setup and verification
 
 Use Node 24+. From `site/` run:

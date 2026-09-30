@@ -4,6 +4,7 @@ import { createChatAdapter } from './chat-adapter.mjs';
 import { controlledDisabledRows, assertBrokerAddress, catalogToolNames } from './policy.mjs';
 import { createWireFetch } from './wire-policy.mjs';
 import { notebookToolFailureMessage, toolArgumentFailureMessage } from './tool-diagnostics.mjs';
+import * as notebookPlugin from './notebook-plugin/index.mjs';
 
 export const name = 'agentcanvas-controlled';
 export const inject = ['llm', 'tools', 'loader'];
@@ -60,18 +61,11 @@ export async function apply(ctx) {
       if (!row || row.disabled) throw new Error(`Missing controlled DSH session entry: ${id}`);
     }
   }
-  for (const tool of catalog.tools) {
-    ctx.tools.register({
-      name: tool.name, description: tool.description, parameters: tool.parameters,
-      output: {
-        schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
-      },
-      execute: (args, execution) => request('/execute', {
-        name: tool.name, args, callId: execution.callId,
-      }, execution.signal, tool.parameters),
-    });
-  }
+  const parameters = new Map(catalog.tools.map(tool => [tool.name, tool.parameters]));
+  await ctx.plugin(notebookPlugin, {
+    catalog: catalog.tools,
+    execute: ({ name, args, callId, signal }) => request('/execute', { name, args, callId }, signal, parameters.get(name)),
+  });
   ctx.tools.guard((execution) => allowedTools.includes(execution.name)
     ? undefined : 'Tool is not in the task-owned Notebook allowlist.');
   const activeNames = ctx.tools.schemas().map((tool) => tool.name).sort();

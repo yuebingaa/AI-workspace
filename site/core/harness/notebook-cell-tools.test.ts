@@ -9,6 +9,7 @@ import { buildHarnessContextSelection, estimateHarnessModelInputChars, plannedHa
 import { DeepSeekHarness } from "./deepseek-harness";
 import { StudioValidationError } from "@/core/schemas";
 import { HarnessToolArgumentsError } from "./tool-registry";
+import { notebookChartConfig, notebookChartDataset } from "@/core/notebook/graphic-walker";
 
 function fixture() {
   const { product, source, rows } = semanticFixture();
@@ -30,6 +31,23 @@ function fixture() {
 }
 
 describe("Notebook 单元工具", () => {
+  it("仅相关任务携带完整可视化配置 Schema，已有配置编辑不丢失契约", () => {
+    const { request, chart } = fixture();
+    if (chart.kind !== "chart") throw Error("chart fixture");
+    const graphicWalker = { ...notebookChartConfig(chart, notebookChartDataset(chart, { fields: [], rows: [], truncated: false })), mark: "bar" as const };
+    for (const name of ["createNotebookDraft", "editNotebookCells"] as const) {
+      const catalog = (input: HarnessRequest) => JSON.stringify(harnessToolCatalog({ names: [name], request: input })[0].parameters);
+      expect(catalog(request)).not.toContain('"graphicWalker"');
+      const withChart = structuredClone(request);
+      withChart.notebookContext!.document.cells.push({ ...chart, graphicWalker });
+      const schema = catalog(withChart);
+      expect(schema).toContain('"graphicWalker"');
+      expect(schema).toContain('"dateRange"');
+      expect(schema).toContain('"legendPosition"');
+      expect(catalog({ ...request, instruction: "创建 Graphic Walker 图表" })).toContain('"graphicWalker"');
+      expect(catalog(request)).not.toContain('"graphicWalker"');
+    }
+  });
   it("真实运行已有单元不提示提交，仍拒绝无编辑草稿且保留既有定义", async () => {
     const { context, request, sql } = fixture();
     request.notebookContext!.document.cells.push(sql);

@@ -2,6 +2,9 @@ import type { LocalDataRuntime } from "@/core/models";
 import type { NotebookCell } from "@/core/notebook/definition";
 import { DEFAULT_NOTEBOOK_CAPABILITIES, type NotebookCapabilities } from "@/core/notebook/capabilities";
 import type { NotebookDraftRunner, NotebookRuntimeInfoReader } from "@/core/notebook/execution-contracts";
+import { notebookExecutionProgressSchema, notebookProgressResult, type NotebookLiveProgress } from "@/core/notebook/live-progress";
+import { captureNotebookRunExpectation, parseNotebookRunReceipt } from "@/core/notebook/run-receipt";
+import { sanitizeHarnessText } from "../security";
 import type { ConnectionSchemaInspector } from "@/core/connections/contracts";
 import type { EdsRawWorkbook } from "@/core/eds";
 import { validateSemanticModel } from "@/core/semantic/model";
@@ -13,6 +16,7 @@ import { createHarnessNotebookArtifact } from "../notebook";
 import { executeHarnessTool, harnessToolCatalog, type HarnessToolContext } from "../tool-registry";
 import { shareToolSchemaPatterns, toolInputSchema } from "../tool-schema";
 import { NotebookBridgePreflightError } from "./bridge-preflight";
+import { notebookChartAuthoringGuidance } from "@/core/notebook/chart-authoring";
 
 const requiredToolNames = ["cellSearch", "editNotebookCells", "runNotebookCells", "submitNotebookDraft"] as const;
 const csvCellKinds = ["data", "sql", "table", "chart"] as const;
@@ -31,6 +35,7 @@ export interface NotebookToolBridgeOptions {
   connectionInspector?: ConnectionSchemaInspector;
   signal?: AbortSignal;
   clock?: { now(): number; id(): string };
+  onProgress?(progress: NotebookLiveProgress): void;
 }
 
 export interface NotebookToolBridge {
@@ -77,6 +82,7 @@ function editParameters(cellKinds: ReadonlySet<string>): Record<string, unknown>
 /** The shared Harness catalog includes capabilities outside this bridge's profile. */
 function editDescription(cellKinds: ReadonlySet<string>): string {
   return "按 cellSearch 返回的 editVersion 编辑本任务草稿。同 ID 单元须完整替换，新 ID 新增，其他单元保留。"
+    + notebookChartAuthoringGuidance
     + "afterCellId 指定新增位置（null=开头，省略=末尾）；removeCellIds 仅响应明确删除要求。既有 Data 单元及其 ID、来源必须保留。"
     + "本地 SQL 只读 inputCellIds 对应的 outputName，可同批创建依赖链，数组引用不得重复。"
     + "图表 valueFields 必须引用 number 字段；数据库 bigint/numeric 为保精度可能返回 string，不能仅凭字段名判断。"
@@ -231,6 +237,15 @@ export function createNotebookToolBridge(options: NotebookToolBridgeOptions): No
     try { options.authorizeCurrentAccess(); }
     catch (error) { close(); throw error; }
   };
+  const publish = (update: NotebookLiveProgress["update"]) => {
+    check();
+    try { options.onProgress?.(structuredClone({ baseRevision: notebook.document.revision, editVersion: state.editVersion, update })); }
+    catch { /* Optional UI observer must not change a business outcome. */ }
+  };
+  const publishDraft = (changedCellIds: string[] = [], removedCellIds: string[] = []) => publish({
+    kind: "draft", document: state.document, changedCellIds, removedCellIds,
+  });
+  let observedRunId: string | undefined;
   const context: HarnessToolContext = {
     request, dataRuntime, notebookCellSession: state,
     now: options.clock?.now ?? Date.now,
@@ -240,7 +255,39 @@ export function createNotebookToolBridge(options: NotebookToolBridgeOptions): No
     notebookCapabilities: capabilities,
     pythonRuntimeInfo: options.pythonRuntimeInfo,
     connectionInspector: options.connectionInspector,
-    notebookRunner: options.notebookRunner,
+    notebookRunner: options.onProgress ? async (artifact, execution) => {
+      const version = state.editVersion;
+      const expected = captureNotebookRunExpectation(state.document, "ai");
+      observedRunId = undefined;
+      publishDraft();
+      let observing = true;
+      try { return await options.notebookRunner(artifact, { ...execution, onProgress: (raw) => {
+        if (!observing) return;
+        check();
+        if (state.editVersion !== version) return;
+        const parsed = notebookExecutionProgressSchema.safeParse(raw);
+        if (!parsed.success || parsed.data.revision !== expected.revision) return;
+        const update = parsed.data;
+        if (update.kind === "run_started") {
+          if (observedRunId || JSON.stringify(update.cellIds) !== JSON.stringify(expected.cellIds)) return;
+          observedRunId = update.runId;
+        } else {
+          if (observedRunId !== update.runId) return;
+          const cellId = update.kind === "cell_started" ? update.cellId : update.result.cellId;
+          if (!expected.cellIds.includes(cellId)) return;
+          if (update.kind === "cell_finished") {
+            try {
+              parseNotebookRunReceipt({ runId: update.runId, revision: update.revision, startedAt: new Date().toISOString(),
+                status: update.result.status === "success" ? "success" : "failure", cells: [update.result], dataSignature: "", notice: "" },
+              { ...expected, cellIds: [cellId] });
+            } catch { return; }
+            update.result = notebookProgressResult(update.result);
+            if (update.result.error) update.result.error = sanitizeHarnessText(update.result.error).slice(0, 900);
+          }
+        }
+        publish(update);
+      } }); } finally { observing = false; }
+    } : options.notebookRunner,
   };
 
   return {
@@ -278,6 +325,22 @@ export function createNotebookToolBridge(options: NotebookToolBridgeOptions): No
         check();
         const result = await untilCancelled(executeHarnessTool(name, input, context), controller.signal);
         check(); // Never publish a late or revoked result, including a submitted draft.
+        if (name === "editNotebookCells") {
+          const edit = editNotebookCellsSchema.parse(input);
+          publishDraft([...edit.cells.map(cell => cell.id), ...(edit.charts ?? []).map(chart => chart.id)], edit.removeCellIds);
+        }
+        if (name === "runNotebookCells" && state.run && state.runVersion === state.editVersion) {
+          // Older injected runners may only provide a final receipt. Do not invent running events for them.
+          if (observedRunId !== state.run.runId) {
+            publish({ kind: "run_started", runId: state.run.runId, revision: state.run.revision, cellIds: state.run.cells.map(cell => cell.cellId) });
+            for (const cell of state.run.cells) {
+              const result = notebookProgressResult(cell);
+              if (result.error) result.error = sanitizeHarnessText(result.error).slice(0, 900);
+              publish({ kind: "cell_finished", runId: state.run.runId, revision: state.run.revision, result });
+            }
+          }
+          publish({ kind: "run_finished", runId: state.run.runId, revision: state.run.revision, status: state.run.status });
+        }
         if (name === "submitNotebookDraft" && result.notebookArtifact) {
           verifiedDraft = structuredClone(result.notebookArtifact);
         }

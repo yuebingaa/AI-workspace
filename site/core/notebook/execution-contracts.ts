@@ -5,6 +5,7 @@ import type { NotebookArtifact } from "./definition";
 import type { CatalogReference } from "@/core/metadata/contracts";
 import type { NotebookResultPublisher } from "./result-access";
 import type { NotebookCapabilities } from "./capabilities";
+import type { NotebookProgressObserver } from "./live-progress";
 
 export interface NotebookSource { source: DataSourceDefinition; rows: DataRow[] }
 
@@ -15,6 +16,7 @@ export interface NotebookDraftExecutionContext {
   semanticModels: SemanticModel[];
   taskId: string;
   signal?: AbortSignal;
+  onProgress?: NotebookProgressObserver;
 }
 
 /** A caller validates the receipt and owns whether a successful draft is adopted. */
@@ -61,6 +63,8 @@ export interface NotebookQueryLogEntry {
 
 export interface NotebookExecutionDependencies {
   query: NotebookQueryExecutor;
+  /** Optional composition port for complete upstream chart computation; never browser slices. */
+  visualize?: NotebookQueryExecutor;
   python?: (signal: AbortSignal) => Promise<NotebookPythonSession>;
   /** Runtime gates are checked independently of the persisted Notebook definition. */
   capabilities?: NotebookCapabilities;
@@ -81,4 +85,5 @@ export interface NotebookRunInput {
   taskId?: string;
   connectionQuery?: NotebookConnectionQuery;
   pythonFiles?: NotebookPythonFile[];
+  onProgress?: NotebookProgressObserver;
 }

@@ -1,5 +1,8 @@
 allowBuilds:
   esbuild: true
+  postinstall-postinstall: false
   sharp: true
   unrs-resolver: true
   workerd: true
+patchedDependencies:
+  '@kanaries/graphic-walker@0.5.2': patches/@kanaries__graphic-walker@0.5.2.patch

@@ -26,6 +26,17 @@ function restrictCellKinds(schema: { properties?: Record<string, unknown> }, exc
   cells.items.oneOf = cells.items.oneOf.filter((variant) => !excluded.includes(variant.properties.kind.const));
 }
 
+function omitUnrequestedChartConfig(schema: { properties?: Record<string, unknown> }, withGraphicWalker: boolean) {
+  if (withGraphicWalker) return;
+  delete schema.properties!.charts;
+  const cells = schema.properties!.cells as { items: { oneOf: Array<{ properties: Record<string, unknown> & { kind: { const: string } } }> } };
+  const chart = cells.items.oneOf.find(variant => variant.properties.kind.const === "chart");
+  expect(chart?.properties.graphicWalker).toBeDefined();
+  delete chart!.properties.graphicWalker;
+}
+
+const optionalEditorContracts = [false, true].flatMap(withParameters => [false, true].map(withGraphicWalker => ({ withParameters, withGraphicWalker })));
+
 function cellKinds(schema: unknown): string[] {
   const shape = z.object({ properties: z.object({ cells: z.object({ items: z.object({
     oneOf: z.array(z.object({ properties: z.object({ kind: z.object({ const: z.string() }) }) })),
@@ -148,21 +159,25 @@ describe("compact model tool patterns", () => {
       sourceOffset: { minimum: 0, maximum: 80_000, default: 0 }, query: { maxLength: 160 } } });
   });
 
-  it.each([false, true])("keeps canonical transform variants, including optional parameters=%s", (withParameters) => {
+  it.each(optionalEditorContracts)("keeps canonical transform variants, parameters=$withParameters, Graphic Walker=$withGraphicWalker", ({ withParameters, withGraphicWalker }) => {
     const { request } = fixture();
     if (withParameters) request.instruction += "，使用参数";
+    if (withGraphicWalker) request.instruction += "，使用 Graphic Walker";
     const [tool] = harnessToolCatalog({ names: ["createNotebookDraft"], request });
     const canonical = z.toJSONSchema(notebookDraftSchema, { io: "input" });
     restrictCellKinds(canonical, ["warehouseSql", ...withParameters ? [] : ["parameter"]]);
+    omitUnrequestedChartConfig(canonical, withGraphicWalker);
     expect(expanded(tool.parameters)).toEqual(withoutDialect(canonical));
   });
 
-  it.each([false, true])("keeps edit bounds and defaults while scoping variants, parameters=%s", (withParameters) => {
+  it.each(optionalEditorContracts)("keeps edit bounds and defaults, parameters=$withParameters, Graphic Walker=$withGraphicWalker", ({ withParameters, withGraphicWalker }) => {
     const { request } = fixture();
     if (withParameters) request.instruction += "，使用参数";
+    if (withGraphicWalker) request.instruction += "，使用 Graphic Walker";
     const [tool] = harnessToolCatalog({ names: ["editNotebookCells"], request });
     const canonical = z.toJSONSchema(editNotebookCellsSchema, { io: "input" });
     restrictCellKinds(canonical, ["warehouseSql", "python", ...withParameters ? [] : ["parameter"]]);
+    omitUnrequestedChartConfig(canonical, withGraphicWalker);
     expect(expanded(tool.parameters)).toEqual(withoutDialect(canonical));
     expect(expanded(tool.parameters)).toMatchObject({ properties: { cells: { maxItems: 10 }, removeCellIds: { default: [], maxItems: 10 } } });
   });

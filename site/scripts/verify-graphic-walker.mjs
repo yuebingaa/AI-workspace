@@ -1,0 +1,111 @@
+// Synthetic browser data only. Existing managed 3001; no models/databases/user projects/service changes.
+import assert from 'node:assert/strict';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { chromium } from 'playwright-core';
+
+const directory = resolve('.runtime/graphic-walker-20260929', `browser-${Date.now()}`);
+await mkdir(directory, { recursive: true });
+const report = { passed: false, checks: [], screenshots: [], errors: [], external: [], actual: {} };
+const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN', reducedMotion: 'reduce', serviceWorkers: 'block' });
+const page = await context.newPage();
+page.on('pageerror', error => report.errors.push(error.message));
+await context.route('**/*', route => {
+  const url = new URL(route.request().url());
+  if (url.origin !== 'http://127.0.0.1:3001') { report.external.push({ url: url.href, method: route.request().method() }); return route.abort(); }
+  return route.continue();
+});
+const check = (name, detail) => { report.checks.push({ name, detail }); console.log(`PASS ${name}`); };
+const screenshot = async name => { await page.screenshot({ path: join(directory, `${name}.png`) }); report.screenshots.push({ name, viewed: false }); };
+const ready = async () => { await page.locator('.gw-canvas[data-state="ready"]').waitFor({ timeout: 45000 }); await page.waitForTimeout(250); await page.locator('.gw-plot').getByText('Loading...', { exact: true }).waitFor({ state: 'hidden' }); await page.locator('.gw-plot svg').first().waitFor(); };
+const select = async (label, option) => { await page.getByRole('combobox', { name: label, exact: true }).click(); await page.getByRole('option', { name: option, exact: true }).click(); };
+const table = () => page.locator('.gw-results tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.cells, cell => cell.textContent)));
+const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('datacanvas:chart-editor:v1:synthetic-quarterly-sales-v1')));
+try {
+  let releaseLoading;
+  const loadingGate = new Promise(resolve => { releaseLoading = resolve; });
+  await page.route('**/components/chart-editor/ChartEditor.tsx*', async route => { await loadingGate; await route.continue(); });
+  await page.goto('http://127.0.0.1:3001/charts');
+  await page.getByText('正在加载 Graphic Walker 图表编辑器…', { exact: true }).waitFor();
+  await screenshot('00-loading'); releaseLoading(); await ready(); await page.unroute('**/components/chart-editor/ChartEditor.tsx*');
+  assert.match(await page.locator('.gw-canvas footer').innerText(), /48 行.*24 个/s);
+  const data = await table(); assert.equal(data.length, 24);
+  const amounts = data.map(row => Number(row.at(-1).replaceAll(',', ''))); assert.equal(amounts.reduce((sum, n) => sum + n, 0), 6408000);
+  assert.ok(data.some(row => row.includes('企业客户') && row.at(-1) === '147,000'));
+  assert.ok(data.every(row => !/1,7\d\d,\d\d\d,\d\d\d,\d\d\d/.test(row[0])), 'Dates must be formatted rather than raw epoch values');
+  const labels = await page.locator('.gw-plot svg').first().textContent(); assert.match(labels, /2024 Q1/); assert.match(labels, /2025 Q4/);
+  check('sample-quarter-sum', '48 transactions → 24 groups; sum=6408000; Q1 enterprise=147000');
+  await screenshot('01-stacked-area');
+  const mark = page.locator('.gw-plot path[aria-label]').first();
+  assert.match(await mark.getAttribute('aria-label'), /2024 Q1.*51,000.*个人客户/);
+  await mark.hover({ force: true });
+  await page.waitForTimeout(250); await screenshot('02-tooltip');
+  check('temporal-axis-and-tooltip', await mark.getAttribute('aria-label'));
+  await page.getByRole('button', { name: '保存配置', exact: true }).click(); const initial = await saved();
+  await page.getByRole('button', { name: '移除 Y 轴 成交金额', exact: true }).click();
+  await page.getByText('用字段构建你的图表').waitFor(); await screenshot('03-empty');
+  await page.getByRole('button', { name: '添加字段 客户类型', exact: true }).dragTo(page.getByRole('region', { name: 'Y 轴', exact: true }));
+  await page.getByRole('alert').filter({ hasText: '不支持' }).waitFor(); await screenshot('04-invalid-drop');
+  await page.getByRole('button', { name: '添加字段 成交金额', exact: true }).dragTo(page.getByRole('region', { name: 'Y 轴', exact: true })); await ready();
+  check('field-drag-and-type-guard', 'Invalid text→Y rejected; numeric→Y succeeds');
+  await page.getByRole('textbox', { name: '搜索字段' }).fill('客户'); assert.equal(await page.locator('.gw-available-field').count(), 1);
+  await page.getByRole('textbox', { name: '搜索字段' }).fill('无此字段'); await page.getByText('没有匹配字段。').waitFor();
+  await page.getByRole('textbox', { name: '搜索字段' }).fill('');
+  await page.getByRole('button', { name: '恢复已保存' }).click(); await ready();
+  await select('Y 轴 成交金额 聚合', '平均值'); await ready();
+  assert.ok((await table()).some(row => row.includes('企业客户') && row.at(-1) === '73,500')); check('mean-aggregation', 'Q1 enterprise=73500');
+  await select('Y 轴 成交金额 聚合', '求和'); await ready();
+  await select('X 轴 季度 日期粒度', '年'); await ready(); assert.equal((await table()).length, 6); check('date-grain', 'Year gives six groups');
+  await select('X 轴 季度 日期粒度', '季度'); await ready();
+  await select('筛选字段', '客户类型'); await select('筛选值', '企业客户'); await page.getByRole('button', { name: '添加筛选', exact: true }).click(); await ready();
+  const filtered = await table(); assert.equal(filtered.length, 8); assert.ok(filtered.every(row => row.includes('企业客户'))); await screenshot('05-filtered'); check('categorical-filter', 'Only enterprise: eight quarters');
+  await select('筛选字段', '成交金额'); await page.getByRole('spinbutton', { name: '筛选下限' }).fill('99999999'); await page.getByRole('button', { name: '添加筛选', exact: true }).click();
+  await page.locator('.gw-canvas[data-state="no-results"]').waitFor(); await screenshot('06-no-results');
+  await page.getByRole('button', { name: '移除筛选 2', exact: true }).click(); await ready();
+  await page.getByRole('button', { name: '移除筛选 1', exact: true }).click(); await ready();
+  await select('筛选字段', '季度'); await page.getByLabel('筛选下限', { exact: true }).fill('2024-01-01'); await page.getByLabel('筛选上限', { exact: true }).fill('2024-12-31'); await page.getByRole('button', { name: '添加筛选', exact: true }).click(); await ready();
+  assert.equal((await table()).length, 12); check('date-filter-and-no-results', 'UTC date range gives 12 groups; impossible numeric range gives explicit empty state');
+  await page.getByRole('button', { name: '移除筛选 1', exact: true }).click(); await ready();
+  await select('选择水平分面字段', '客户类型'); await ready(); await screenshot('07-horizontal-facet');
+  assert.ok((await page.locator('.gw-plot svg').first().textContent()).includes('企业客户'));
+  await page.getByRole('button', { name: '移除 水平分面 客户类型' }).click();
+  await select('选择垂直分面字段', '客户类型'); await ready(); await screenshot('08-vertical-facet');
+  await page.getByRole('button', { name: '移除 垂直分面 客户类型' }).click(); await ready(); check('horizontal-and-vertical-facets', 'Official rows/columns facets render');
+  await select('字段添加目标', 'Tooltip 字段'); await page.getByRole('button', { name: '添加字段 成交金额' }).click(); await ready();
+  await select('选择Tooltip 字段字段', '客户类型'); await ready();
+  await page.getByRole('button', { name: '上移 客户类型' }).click();
+  await page.getByRole('button', { name: '保存配置', exact: true }).click(); assert.deepEqual((await saved()).channels.tooltip.map(f => f.field), ['customer', 'amount']);
+  const shelf = page.getByRole('region', { name: 'Tooltip 字段', exact: true });
+  await shelf.locator('.gw-field-chip').first().dragTo(shelf.locator('.gw-field-chip').last());
+  await page.getByRole('button', { name: '保存配置', exact: true }).click(); assert.deepEqual((await saved()).channels.tooltip.map(f => f.field), ['amount', 'customer']);
+  check('tooltip-click-and-reorder', 'Click-add, keyboard buttons and real drag reorder persist');
+  for (const type of ['柱状图', '折线图', '散点图', '面积图']) { await select('图表类型', type); await ready(); assert.ok(await page.locator('.gw-plot svg').count()); }
+  check('chart-switches', 'Area, bar, line, point render');
+  await page.getByRole('tab', { name: 'Style · 样式' }).click(); await page.getByRole('textbox', { name: '图表标题', exact: true }).fill('销售分析 · 样式验收');
+  await select('配色', '湖蓝'); await select('字体', '衬线'); await select('字号', '16 px'); await select('数值格式', '千分位 · 两位小数');
+  await page.getByRole('checkbox', { name: '显示网格线', exact: true }).click(); await ready();
+  await screenshot('09-style');
+  const svg = await page.locator('.gw-plot svg').first().innerHTML(); assert.match(svg, /Georgia/); assert.match(svg, /#315b8c/i);
+  await select('图例位置', '底部'); await ready(); await select('图例位置', '右侧'); await ready();
+  await page.getByRole('checkbox', { name: '显示图例', exact: true }).click(); await ready();
+  assert.equal(await page.locator('.gw-plot [role="graphics-symbol"][aria-roledescription="legend"]').count(), 0);
+  await page.getByRole('checkbox', { name: '显示坐标轴', exact: true }).click(); await ready(); await screenshot('10-hidden-axis-legend');
+  await page.getByRole('checkbox', { name: '显示坐标轴', exact: true }).click(); await page.getByRole('checkbox', { name: '显示图例', exact: true }).click(); await page.getByRole('checkbox', { name: '显示网格线', exact: true }).click();
+  await page.getByRole('button', { name: '保存配置', exact: true }).click(); const customized = await saved();
+  await page.getByRole('tab', { name: 'Data · 数据' }).click(); await page.getByRole('tab', { name: 'Style · 样式' }).click(); assert.equal(await page.getByRole('textbox', { name: '图表标题', exact: true }).inputValue(), customized.title);
+  await page.reload(); await ready(); assert.equal(await page.locator('.gw-canvas h2').innerText(), customized.title); check('styles-tab-and-refresh-restore', 'Theme, title and settings survive tab switch and page reload');
+  const downloadPromise = page.waitForEvent('download'); await page.getByRole('button', { name: '导出配置' }).click(); const download = await downloadPromise; const exported = JSON.parse(await readFile(await download.path(), 'utf8')); assert.deepEqual(exported, customized); assert.equal(exported.rows, undefined);
+  await page.getByLabel('导入图表配置文件').setInputFiles({ name: 'invalid.json', mimeType: 'application/json', buffer: Buffer.from('{bad') }); await page.getByRole('alert').waitFor(); assert.equal(await page.locator('.gw-canvas h2').innerText(), customized.title); await screenshot('11-invalid-import');
+  await page.getByLabel('导入图表配置文件').setInputFiles({ name: 'chart-config.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(initial)) }); await ready(); assert.equal(await page.locator('.gw-canvas h2').innerText(), initial.title);
+  await page.getByRole('button', { name: '恢复已保存' }).click(); await ready(); assert.equal(await page.locator('.gw-canvas h2').innerText(), customized.title); check('export-import-and-revert', 'Actual download; malformed JSON preserves state; valid import and saved restore work');
+  await page.setViewportSize({ width: 1024, height: 850 }); await ready(); await screenshot('12-narrow');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  check('responsive-1024', 'No document horizontal overflow; left controls scroll independently');
+  assert.deepEqual(report.errors, []);
+  // Upstream PureRenderer's ShadowDOM wrapper unconditionally requests this optional map CSS.
+  // Block it throughout testing: the four non-map charts must work without it. No data leaves the browser.
+  assert.ok(report.external.every(request => request.method === 'GET' && request.url === 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'));
+  check('offline-rendering', `Blocked ${report.external.length} upstream optional Leaflet stylesheet requests; no other external requests`); report.passed = true;
+} catch (error) { report.failure = error.stack; await screenshot('failure'); throw error; }
+finally { await writeFile(join(directory, 'report.json'), JSON.stringify(report, null, 2)); console.log(`EVIDENCE ${directory}`); await browser.close(); }

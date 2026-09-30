@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/fields";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { z } from "zod";
 import type { DataSourceDefinition } from "@/core/models";
 import { datasetUploadResponseSchema, type DatasetUploadResponse } from "@/core/datasets/contracts";
@@ -20,6 +20,8 @@ import {
 import { affectedCells, cellDependencies, cellsToRun, notebookDependencyCandidates, updateNotebook } from "@/core/notebook/graph";
 import { adoptNotebookDraft, moveNotebookCell, notebookFingerprint, notebookSemanticModelIssue } from "@/core/notebook/client-state";
 import { NotebookCellEditor } from "./NotebookCellEditor";
+import { NotebookChartWorkspace } from "./NotebookChartWorkspace";
+import { supportsNotebookGraphicWalker } from "@/core/notebook/graphic-walker";
 import { NotebookParameterSummary } from "./NotebookParameterEditor";
 import { NotebookTextResult } from "./NotebookTextResult";
 import { NotebookResult } from "./NotebookResult";
@@ -43,6 +45,8 @@ import { useNotebookCapabilities, type NotebookPythonCapabilitySnapshot } from "
 import { NotebookAiRunScheduler, type AiNotebookRunRequest } from "./ai-run-scheduler";
 import { NotebookCellMenu } from "./NotebookCellMenu";
 import { NotebookOutline } from "./NotebookOutline";
+import { NotebookLivePreview } from "./NotebookLivePreview";
+import type { NotebookLiveState } from "@/core/notebook/live-state";
 
 interface AiNotebookPreview {
   request: AiNotebookRunRequest;
@@ -53,10 +57,11 @@ interface AiNotebookPreview {
 
 const VIEW_KEY = "datacanvas-ai:notebook-view:v1";
 export function NotebookPanel({ document: formalDocument, pageId, sources, models, files = [], draft, canEdit, externalBusy, hidden, instruction, pythonCapability,
-  aiAutoRunEnabled = false, onAiAutoRunChange, aiRunRequest, aiRunScopeKey = "", onAiRunRequestHandled,
+  aiAutoRunEnabled = false, onAiAutoRunChange, aiRunRequest, aiRunScopeKey = "", onAiRunRequestHandled, live,
   onInstructionChange, onBrowseData, onChange, onImport, onAskAi, onSnapshot, onDataset, onInteractionChange }: {
   document: NotebookDocument; pageId: string; sources: DataSourceDefinition[]; models: SemanticModel[];
   files?: File[];
+  live?: NotebookLiveState | null;
   pythonCapability?: NotebookPythonCapabilitySnapshot;
   draft?: NotebookArtifact; canEdit: boolean; externalBusy: boolean; hidden: boolean;
   aiAutoRunEnabled?: boolean; onAiAutoRunChange?: (enabled: boolean) => void;
@@ -69,8 +74,12 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
   onInteractionChange: (busy: boolean) => void;
 }) {
   const [results, setResults] = useState<NotebookResultCache>({});
+  const [formalViewTask, setFormalViewTask] = useState<string | null>(null);
   const [connections, setConnections] = useState<ConnectionDescriptor[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
+  const chartDirtyChanged = useCallback((id: string, dirty: boolean) => {
+    setEditing(current => dirty ? (current ?? id) : current === id ? null : current);
+  }, []);
   const [saveReview, setSaveReview] = useState<NotebookCellSaveReview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [runningCellIds, setRunningCellIds] = useState<string[]>([]);
@@ -140,7 +149,7 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
         autoRun.clearPending();
         setAiPreview({ request, document: candidate, contextKey, previousResults: results });
         setAiPreviewSucceeded(false); setResults({}); setError("");
-        setNotice("AI 分析已完成，正在准备运行草稿预览；确认后才保存 Notebook。");
+        setNotice("AI 草稿已生成；正在重新读取当前数据并复核预览，确认后才保存 Notebook。生成阶段结果不作为正式缓存。");
         return candidate;
       },
       run: () => { void run(undefined, false, false, undefined, true); },
@@ -170,7 +179,11 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
   useEffect(() => { onInteractionChange(Boolean(busy || activeEditing || deleteReview || autoRun.pendingCount || aiPreview || aiRunRequest)); return () => onInteractionChange(false); }, [busy, activeEditing, deleteReview, autoRun.pendingCount, aiPreview, aiRunRequest, onInteractionChange]);
   useEffect(() => {
     if (activeEditing && !hidden) {
-      const editor = cellsRef.current?.querySelector<HTMLFormElement>(".notebook-editor");
+      // Always-open chart controls already own focus. Do not jump to the first
+      // chart (or its search box) when another chart becomes dirty.
+      const article = [...(cellsRef.current?.querySelectorAll<HTMLElement>("article[data-cell-id]") ?? [])].find(item => item.dataset.cellId === activeEditing);
+      if (article?.dataset.cellKind === "chart") return;
+      const editor = article?.querySelector<HTMLFormElement>(".notebook-editor");
       editor?.closest("article")?.scrollIntoView({ block: "start" });
       editor?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
     }
@@ -361,7 +374,11 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
       }
     }
   }
+  const visibleLive = !hidden && live && live.phase !== "ready" && live.scopeKey === aiRunScopeKey
+    && JSON.stringify(live.baseline) === JSON.stringify(formalDocument) ? live : null;
+  if (visibleLive && formalViewTask !== visibleLive.taskId) return <NotebookLivePreview live={visibleLive} onShowFormal={() => setFormalViewTask(visibleLive.taskId)} />;
   return <section className={`notebook-panel notebook-view-${view}${document.cells.length ? " has-cells" : " is-empty"}`} hidden={hidden} aria-label="Notebook 分析文档">
+    {visibleLive && <div className="notebook-live-notice"><span>正在查看正式文档；AI 草稿尚未保存。</span> <Button variant="secondary" onClick={() => setFormalViewTask(null)}>返回实时草稿</Button></div>}
     <header className="notebook-heading">
       <div className="notebook-document-title"><div className="notebook-document-meta"><span>Notebook</span><span>{document.cells.length} 个单元{aiPreview ? " · 草稿预览" : ""}</span></div>
         <NotebookTitle name={document.name} disabled={locked || Boolean(activeEditing)} onRename={(name) => attempt(() => onChange(updateNotebook(document, document.cells, name)))} />
@@ -413,15 +430,16 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
       const outputOpen = resultVisibility[cell.id] ?? cell.kind !== "data";
       const { label, sourceLabel } = notebookCellPresentation[cell.kind];
       const inputFields = cell.kind === "data" ? fieldsFor(cell) : document.cells.filter((item) => dependencies.includes(item.id)).flatMap(fieldsFor);
+      const inlineChart = cell.kind === "chart" && supportsNotebookGraphicWalker(cell);
       return <article className={`notebook-cell${activeEditing === cell.id ? " is-editing" : ""}${activeCellId === cell.id ? " is-selected" : ""}`} data-cell-kind={cell.kind} data-cell-id={cell.id} key={cell.id} tabIndex={-1}
         onFocusCapture={() => setActiveCellId(cell.id)} aria-label={`${label}单元 ${cell.title}`}>
         <header><span className="notebook-cell-number">{String(index + 1).padStart(2, "0")}</span><span className="notebook-kind">{label}</span><h2>{cell.title}</h2>
         {"outputName" in cell && <code className="notebook-output-name" title={`输出表名：${cell.outputName}`}>{cell.outputName}</code>}
         <span className={`notebook-cell-status ${isCellRunning ? "pending" : result?.status ?? ""}`} title={isCellRunning ? "本次请求包含此单元，完成后统一返回结果。" : undefined}>{isCellRunning ? "等待结果" : pythonDefinitionDisabled ? "能力已关闭" : upstreamCapabilityBlocked ? "上游能力阻塞" : result ? result.status === "success" ? `✓ ${result.durationMs} ms` : result.status === "blocked" ? "上游失败" : "执行失败" : cached ? "已失效 · 需重算" : "待运行"}</span>
         <div className="notebook-cell-tools">
-          <Button size="small" variant="ghost" type="button" disabled={locked || Boolean(activeEditing) || pythonDefinitionDisabled}
-            title={pythonDefinitionDisabled ? pythonNotice : undefined}
-            onClick={() => { newCellEditingRef.current = null; setEditing(cell.id); }}>编辑</Button>
+          <Button size="small" variant="ghost" type="button" className={cell.kind === "chart" ? "notebook-chart-edit" : undefined} disabled={locked || Boolean(activeEditing) || pythonDefinitionDisabled}
+            title={pythonDefinitionDisabled ? pythonNotice : inlineChart ? "本单元内的字段和配置已展开，定位到编辑区" : cell.kind === "chart" ? "在本单元内打开图表配置与预览" : undefined}
+            onClick={() => { if (inlineChart) { navigateToCell(cell.id); return; } newCellEditingRef.current = null; setEditing(cell.id); }}>{inlineChart ? "定位配置" : cell.kind === "chart" ? "编辑图表" : "编辑"}</Button>
           {cell.kind !== "text" && <Button size="small" variant="ghost" type="button" aria-expanded={sourceOpen} aria-controls={`notebook-source-${cell.id}`} disabled={activeEditing === cell.id} onClick={() => setSourceVisibility((current) => ({ ...current, [cell.id]: !sourceOpen }))}>{sourceOpen ? "收起" : "查看"}{sourceLabel}</Button>}
           {result?.table && cell.kind === "data" && <Button size="small" variant="ghost" type="button" aria-expanded={outputOpen} aria-controls={`notebook-output-${cell.id}`} onClick={() => setResultVisibility(current => ({ ...current, [cell.id]: !outputOpen }))}>{outputOpen ? "收起结果" : "展开结果"}</Button>}
           <NotebookCellMenu cellId={cell.id} title={cell.title} disabled={locked || Boolean(activeEditing)} first={index === 0} last={index === document.cells.length - 1}
@@ -436,7 +454,13 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
         <div className={`notebook-cell-body${activeEditing === cell.id ? " notebook-workbench" : ""}`}>
         {activeEditing === cell.id && cell.kind !== "text" && cell.kind !== "parameter" && cell.kind !== "chart" && <NotebookFields fields={inputFields} />}
         <div className="notebook-cell-definition">
-        {activeEditing === cell.id ? <><NotebookCellEditor cell={cell} availableInputs={notebookDependencyCandidates(document.cells, cell.id)} sources={sources} models={models} connections={connections}
+        {inlineChart && cell.kind === "chart" ? <>
+          {(sourceVisibility[cell.id] ?? view === "code") && <NotebookSource value={source.value} language={source.language} label={`${cell.title} ${sourceLabel}`} />}
+          <NotebookChartWorkspace cell={cell} availableInputs={notebookDependencyCandidates(document.cells, cell.id)}
+            inputCatalog={Object.fromEntries(notebookDependencyCandidates(document.cells, cell.id).map(input => [input.id, { fields: fieldsFor(input), table: fresh(input.id) ? results[input.id]?.result.table : undefined }]))}
+            disabled={locked || Boolean(saveReview) || Boolean(activeEditing && activeEditing !== cell.id)} onDirtyChange={chartDirtyChanged}
+            onSave={next => { if (locked || hidden || (activeEditing && activeEditing !== cell.id)) throw Error("当前 Notebook 不可编辑。"); saveCell(next); }} />
+        </> : activeEditing === cell.id ? <><NotebookCellEditor cell={cell} availableInputs={notebookDependencyCandidates(document.cells, cell.id)} sources={sources} models={models} connections={connections}
           inputCatalog={Object.fromEntries(notebookDependencyCandidates(document.cells, cell.id).map(input => [input.id, { fields: fieldsFor(input), table: fresh(input.id) ? results[input.id]?.result.table : undefined }]))}
           disabled={locked || Boolean(saveReview)} codeMode={view === "code"} onCancel={() => { setSaveReview(null); newCellEditingRef.current = null; setEditing(null); }} onSave={saveCell} />
           {saveReview?.cellId === cell.id && <NotebookOutputRenameConfirmation renames={saveReview.renames} disabled={locked} stale={staleSaveReview} onConfirm={confirmSaveReview} onBack={closeSaveReview} />}
@@ -454,11 +478,15 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
           {cell.kind !== "text" && <div id={`notebook-source-${cell.id}`} hidden={!sourceOpen}><NotebookSource value={source.value} language={source.language} label={`${cell.title} ${sourceLabel}`} /></div>}
         </>}
         </div>
-        <div className="notebook-cell-output" id={`notebook-output-${cell.id}`} hidden={(activeEditing === cell.id && cell.kind === "chart") || (!outputOpen && activeEditing !== cell.id)}>
-        {activeEditing === cell.id && result?.table && <p className="notebook-output-label">已保存步骤的运行结果</p>}
-        {result?.table && !hidden && <NotebookResult key={cached.identity.runId + ":" + cell.id} cell={cell} table={result.table} availability={availability} />}
-        {activeEditing !== cell.id && !result?.table && !["text", "data", "parameter"].includes(cell.kind) && <p className="notebook-cell-result-pending">{isCellRunning ? "等待本次运行结果…" : result?.error ? "本次运行没有可用结果。" : cached ? "步骤已变更，请重新运行以更新结果。" : "运行后在这里查看结果"}</p>}
-        {activeEditing === cell.id && !result?.table && cell.kind !== "text" && <div className="notebook-output-placeholder"><NotebookIcon kind={cell.kind === "chart" ? "chart" : "table"} /><b>在这里查看分析结果</b><p>保存步骤后点击运行，查看数据与图表。</p></div>}
+        <div className="notebook-cell-output" id={`notebook-output-${cell.id}`} hidden={!inlineChart && ((activeEditing === cell.id && cell.kind === "chart") || (!outputOpen && activeEditing !== cell.id))}>
+        {activeEditing === cell.id && result?.table && !inlineChart && <p className="notebook-output-label">已保存步骤的运行结果</p>}
+        {result?.table && !hidden && (inlineChart ? <details className="notebook-chart-saved-result"><summary>已保存配置的完整运行结果{activeEditing === cell.id ? " · 不含未保存修改" : ""}</summary>
+          <NotebookResult key={cached.identity.runId + ":" + cell.id} cell={cell} table={result.table} availability={availability}
+            visualization={result.visualization} identity={cached.identity} visualizationNotice={result.visualizationNotice} />
+        </details> : <NotebookResult key={cached.identity.runId + ":" + cell.id} cell={cell} table={result.table} availability={availability}
+          visualization={result.visualization} identity={cached.identity} visualizationNotice={result.visualizationNotice} />)}
+        {!inlineChart && activeEditing !== cell.id && !result?.table && !["text", "data", "parameter"].includes(cell.kind) && <p className="notebook-cell-result-pending">{isCellRunning ? "等待本次运行结果…" : result?.error ? "本次运行没有可用结果。" : cached ? "步骤已变更，请重新运行以更新结果。" : "运行后在这里查看结果"}</p>}
+        {!inlineChart && activeEditing === cell.id && !result?.table && cell.kind !== "text" && <div className="notebook-output-placeholder"><NotebookIcon kind={cell.kind === "chart" ? "chart" : "table"} /><b>在这里查看分析结果</b><p>保存步骤后点击运行，查看数据与图表。</p></div>}
         </div>
         </div>
         {deleteReview?.targetId === cell.id && <NotebookCellDeletionReview review={deleteReview} disabled={locked || Boolean(activeEditing)} stale={staleDeleteReview} onConfirm={confirmDeletion} onKeep={closeDeleteReview} />}
@@ -469,8 +497,8 @@ export function NotebookPanel({ document: formalDocument, pageId, sources, model
         </details>}
         {(result?.stdout || result?.stderr) && <details className="notebook-cell-description"><summary>Python 输出与诊断</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.stdout}{result.stderr ? `\n${result.stderr}` : ""}</pre><small>日志最多各保留 2,000 字。</small></details>}
         {result?.table && (outputOpen || activeEditing === cell.id) && <div className="notebook-cell-footer"><small>{result.queryId ? `查询记录 ${result.queryId.slice(-8)}` : "当前运行结果"}</small><div>
-          {onDataset && <Button size="small" variant="ghost" type="button" disabled={locked || Boolean(activeEditing) || !availability?.canSaveDataset} title="重新计算完整结果后保存；受行数与大小限制" onClick={() => void run(cell.id, false, true)}>保存为 Dataset</Button>}
-          <Button size="small" variant="ghost" type="button" disabled={locked || Boolean(activeEditing) || !availability?.canSnapshot} title="重新运行后生成固定快照；完整结果最多 500 行，表格最多 30 列；可先选择列，或保存为数据集；先预览再确认" onClick={() => void run(cell.id, true)}>生成看板预览 ↗</Button></div></div>}
+          {onDataset && <Button size="small" variant="ghost" type="button" disabled={locked || Boolean(activeEditing) || !availability?.canSaveDataset} title="重新计算完整结果后保存；受行数与大小限制" onClick={() => void run(cell.id, false, true)}>{cell.kind === "chart" && cell.graphicWalker ? "保存输入为 Dataset" : "保存为 Dataset"}</Button>}
+          {cell.kind === "chart" && cell.graphicWalker ? <small>此图暂不支持看板快照，可在图中导出图片。</small> : <Button size="small" variant="ghost" type="button" disabled={locked || Boolean(activeEditing) || !availability?.canSnapshot} title="重新运行后生成固定快照；完整结果最多 500 行，表格最多 30 列；可先选择列，或保存为数据集；先预览再确认" onClick={() => void run(cell.id, true)}>生成看板预览 ↗</Button>}</div></div>}
       </article>;
     })}</div>
     <NotebookInsertToolbar disabled={locked || Boolean(activeEditing) || document.cells.length >= 30} availableKinds={availableToolbarKinds} onAdd={(kind) => addCell(kind)} />

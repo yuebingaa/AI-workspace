@@ -1,15 +1,18 @@
 # AgentCanvas Agent 架构
 
-最后更新：2026-09-28。此文档为 Agent 架构的唯一维护入口，随代码变化同步更新。
+最后更新：2026-09-29。此文档为 Agent 架构的唯一维护入口，随代码变化同步更新。
 
-<!-- agent-architecture-source-sha256: 0c296bd8961e448ad132ecd2e222bdd9f57218810baa9ec09620acdf06a4533c -->
+<!-- agent-architecture-source-sha256: 7cca1c35df9dbfc883e5b4ea1d09e528f3685cc9667a01f47c95614064f02afe -->
 
 ## 当前实现与启用状态
 
-发行状态补充（2026-09-28）：下列已实现源码已推送独立功能分支，并以 Windows 预览完整包发布到 GitHub；未合并 main、未发布本机稳定站 3000。DSH 0.1.7-rc.2 的官方聊天 / 设置、Notebook Python / SQL / 图表已做隔离便携验证，详见[本次发行记录](../verification/windows-portable-dsh-2026-09-28.md)。下文各历史批次的“仅源码 / 3001”是当时状态，不再表示本次便携包尚未分发。
+发行状态补充（2026-09-28）：当次验收源码已推送独立功能分支，并以 Windows 预览完整包发布到 GitHub；未合并 main、未发布本机稳定站 3000。DSH 0.1.7-rc.2 的官方聊天 / 设置、Notebook Python / SQL / 图表已做隔离便携验证，详见[本次发行记录](../verification/windows-portable-dsh-2026-09-28.md)。下文各历史批次的“仅源码 / 3001”是当时状态，不再表示该便携包尚未分发；同日后续 Notebook 插件抽取不包含在该已发布包内。
 
 | 项目 | 状态 |
 | --- | --- |
+| 统一可视化 Notebook 桥接（2026-09-29，B2–B5） | B2 / B3 完整计算及分面、B4 官方编辑器和共享作者契约保留。B5 将支持的图改为常驻编辑区，默认复用用户图 3 / 4 的 Data / Style 适配布局，可切换官方原生布局；保存 / 运行不收起左侧。正式与 AI 实时草稿均显示完整编辑外形，草稿仍只读。现有 Cell / ChartConfig 持久化不变；[B5 验收](../verification/notebook-chart-workspace-2026-09-29.md)，未发布 3000 |
+| Notebook 实时草稿与执行进度（2026-09-28） | DSH 的编辑、运行事件经现有 SSE 投影到只读草稿；逐单元结果、失败、失效、取消及官方聊天过程定位已接线。结果只在窗口内，正式采用仍走原核验；源码 / 3001，未发布 3000，见[验收报告](../verification/notebook-live-progress-2026-09-28.md) |
+| Notebook 能力插件试点（2026-09-28） | `runtime/dsh/notebook-plugin` 为可单独复制的 DSH 工具适配插件，当前网站已改为通过它注册既有能力；不包含业务执行器、UI 或凭据。源码变更尚未发布稳定站或新 Release，离线验证结果见下方专节 |
 | DSH 网站执行约束清理（2026-09-28） | 默认移除 24 次工具 / 180 秒整轮 / 35 秒通用工具预算，浏览器支持无任务截止时间；最终回答不再按 1000 / 1600 / 2000 字符裁切。保留取消、授权、实际证据及工具自身保护；源码 / 3001 验收与限制见[本批报告](../verification/dsh-execution-cleanup-2026-09-28.md)，未发布 3000 |
 | 官方 DSH 设置组件复用（2026-09-27） | 设置外壳、导航、插件搜索 / 卡片 / 详情直接加载固定版本官方 Web 模块；删除自绘设置及目录 UI。网站仍拥有 Skill 配置与授权，目录明确是安装 / 配置快照而非 Host 实例。仅源码 / 3001，验证与限制见[本批报告](../verification/dsh-native-settings-2026-09-27.md) |
 | Notebook 默认文档布局（2026-09-27，体验修正） | 默认直接显示 SQL / Python，数据源摘要与图表 / 数据切换减少重复内容；固定标题 / 运行栏、独立大纲与 Radix 单元菜单已实现。等待整次响应的单元显示“等待结果”，不声称逐单元实时调度。源码 / 3001 验收见[本批报告](../verification/notebook-document-2026-09-27.md)，未发布 3000 |
@@ -100,6 +103,29 @@
 `portable/windows/launcher-config.mjs` 在启动前检查平台、必需资源与 DSH 可加载性，并将包内浏览器绝对路径传给 `NOTEBOOK_PYTHON_BROWSER`。网站和 SDK 子进程使用包内 Node，数据写入包内 `data/state`，网站只监听回环地址 3210–3229；不操作受管 3000 / 3001。仅便携启动器设置 `AGENTCANVAS_DEFAULT_ENGINE=dsh`；普通源码部署未配置仍为 harness。`server/selection.ts` 只在进程首次初始化读取这个服务端默认值，设置切换仍为进程内存，HMR 不重置选择与在途租约。默认 DSH 不表示自动调用模型，用户仍需配置自己的密钥；缺能力仍受阻而非静默回退。
 
 既有受控工具、Notebook 能力、授权、取消和人工采用机制不变；不开放 DSH shell 或任意插件。最终受控 ZIP 已在隔离 PATH 和新中文/空格目录实际解压验收：真实 Python / SQL / 图表及一任务收费 DSH（7模型 / 8工具）通过草稿、人工采用、保存重开，6图已查看；不是另一台电脑、Windows 10或具体360验证。已上传 GitHub 预览 Release `v0.1.0-windows-preview.20260924`，远端附件摘要匹配且匿名下载可达。构建、发布状态与限制统一记录在 [完整包交付记录](../verification/windows-portable-dsh-2026-09-24.md)，不以源码支持或 ready 状态代替验收，未发布 3000。
+
+## Notebook 实时草稿与执行进度（2026-09-28）
+
+按 [Hex 录屏差距建议](../research/hex-video-gap-2026-09-27.md) 第一批范围实施，不更换 Agent、Notebook 引擎、数据库或图表组件。DSH 插件与旧 Harness 的现有工具名、参数及正式交付协议保留。
+
+- **计算层**：`core/notebook/live-progress.ts` 定义无 UI 依赖的 `NotebookProgressObserver`、执行 / 草稿事件与结果投影；`server/execution.ts` 在真实拓扑运行的开始、单元开始与实际结果产生后通知。观察者错误不改变计算结果，已取消运行不发送后续结果。`NotebookRunInput` 与 `NotebookDraftExecutionContext` 增加可选 `onProgress`，API 组装入口转发；普通非流式 Notebook API 返回结构不变。
+- **业务适配**：`core/harness/server/notebook-tool-bridge.ts` 的可选 `onProgress` 受任务授权和关闭状态约束，校验基线 revision、editVersion、运行 ID、拓扑单元集合及 AI-mode resultRef。单次 runner 返回后关闭回调；无实时回调的兼容 runner 只能在真实最终回执后补发完成结果，不能伪造运行过程。工具仍通过原 `parseNotebookRunReceipt` 校验整个试运行，并只在成功提交后提供 `getVerifiedDraft()`。展示进度不是采用凭证。
+- **传输与历史**：`dsh-engine.ts` 把观察值映射为现有 `status_update` 的可选 `notebookProgress`，外层仍携带 taskId / sequence；另有小型 cellId / editVersion / runId / status 索引。每表最多 50 行且行 JSON 最多 16,000 字节、文本最多 2,000 字，去掉 stdout / stderr，保留真实结果引用和截断信息。不把全量计算结果、SDK 内部状态送入事件流。最终任务 trace、客户端任务历史及幂等重放缓存均移除大载荷，仅活跃订阅收到；取消 / 授权失效后不发新的结果。
+- **状态所有权**：`core/notebook/live-state.ts` 为纯展示 reducer，拒绝旧序号、旧编辑版本、不符身份的结果及终态后的回执；新编辑清空预览，旧结果标为失效。`StudioWorkspace` 保存窗口内 live state，以项目 / 页面 / 会话 / 数据与正式基线范围隔离，`workspace/assistant.ts` 分发通知而不把它写进 DataProduct。刷新不恢复实时结果，不自动重放历史任务。
+- **界面**：`NotebookLivePreview` 复用 CodeMirror、TanStack 表格、Recharts 与既有大纲，只读显示草稿 / 状态 / 错误；可切回正式文档，不新增保存、编辑或执行入口。原 `NotebookPanel` 在最终草稿完成后继续依据当前权限和数据执行隔离预览，再整稿确认 / 撤销。生成阶段结果不能作为正式缓存复用，重跑阶段明确提示原因。`core/dsh-web/progress.ts` 仅映射真实 trace，官方 DSH `conversation.input.dock` 插槽显示最多 80 条过程和工具详情；定位通过受 origin / iframe / nonce / 当前任务限制的 `locate-cell` 命令，不新增执行权限。
+- **启用与范围**：当前 DSH 对话默认有这些观察事件，无新增模型预算或运行开关；“AI 分析后自动运行 Notebook”开启时首个编辑草稿自动打开 Notebook，关闭时不强制切页。旧 Harness 保留；普通 Notebook 全量 HTTP 运行仍等待整次回执。未实现结果跨运行缓存、逐单元采用或增量调度，未更换运行时。本批验证与截图以[专项报告](../verification/notebook-live-progress-2026-09-28.md)为准，浏览器使用显式 SSE 夹具加真实 XLSX / SQL / 图表，不冒称真实模型端到端。
+
+## Notebook 能力插件试点（2026-09-28）
+
+`runtime/dsh/notebook-plugin/` 是独立 ESM 包 `@agentcanvas/dsh-notebook-tools`，通过官方 `name / inject / apply` 和 `ctx.plugin()` 注册工具。`index.mjs` 只依赖标准语言能力，`index.d.mts` 明确公开 `NotebookToolDescriptor / NotebookToolCall / NotebookPluginConfig`；`package.json` 保持 private，不安装或发布新依赖。[接入说明](../../runtime/dsh/notebook-plugin/README.md)提供另一宿主的组装示例与实际边界。
+
+公开接口只有本次目录 `catalog` 和可信宿主执行端口 `execute({name,args,callId,signal})`。支持原四个 Notebook 工具及四个可选来源工具，仅注册所给子集；固定目录快照、拒绝未知/重复/已有同名工具，使用官方 tools 服务的执行/输出管线与插件生命周期。参数 Schema 用于工具描述，严格业务输入验证仍须由宿主执行，不能假定工具服务会替宿主完成全部校验。错误不伪装为成功，调用 ID 与取消信号保持，取消后不交付迟到成功结果。插件不读取环境变量、网络、项目路径、数据库凭据、模型配置或 UI 状态，也不接管其他插件的工具白名单。
+
+`controlled-plugin.mjs` 仍拥有网站模型适配、Wire Fetch、任务 profile、认证和安全错误转换，通过 `ctx.plugin(notebookPlugin, ...)` 注入现有 broker；`policy.mjs` 从插件公开常量取得名称，继续拥有网站允许的工具组合。broker / Notebook 业务桥仍负责逐次授权、严格业务 Schema、数据隔离、并发/调用账本、试运行、验证草稿与正式采用。没有复制 SQL/Python/数据集执行器，没有迁走旧 Harness 的全部公共契约；本批是**可移植接入层**，不是完整独立分析引擎。将来移植仍须在目标宿主实现授权与业务执行端口。
+
+运行开关、Skill 配置、工具名称/参数/结果、权限与保存确认保持原状；不新增 UI、插件安装开关、终端/文件能力或预算。便携白名单和架构指纹包含独立包，后续构建不会漏装；本批没有重新制作/上传运行 ZIP。目标版本仍为 DSH 0.1.7-rc.2、Cordis 4.0.4、Node 24，不保证其他版本或任意官方 Host 直接安装可用。
+
+本批验证：6 项新增插件测试通过（包含仅复制四文件后在真实 DSH 工具服务加载/调用/卸载）；21 项 SDK 驱动原回归通过。全部 Runtime + 打包 + 架构守卫的 120 项检查中 119 通过，原 Web 资源符号链接测试因 Windows 创建 symlink 返回 EPERM 受阻，单独复测相同，未跳过或修改该保护。`npm test -- --exclude '**/.runtime/**' --maxWorkers=2` 为 3,616 应用 / 26 Node 通过，3 项既有实物工作簿检查因未提供样本跳过；typecheck、定向 ESLint、build、250 文件架构指纹通过，构建保留大 chunk / 插件耗时提示。`node scripts/verify-dsh-embedding.mjs` 经真实 SDK + 原业务桥 + 本地 SQL 得到 East 150 / South 80，草稿、内存采用和取消回收通过，不持久化。没有真实收费模型、实库、外部产品或新界面验收，不以旧截图代替本批证据；3000 / 3001 / 截图服务均保持原进程和健康状态。
 
 ## 官方 DeepSeek Harness 网站嵌入（2026-09-22）
 
@@ -520,6 +546,24 @@ Notebook 单元、草稿与产物定义现在由 `core/notebook/definition.ts` �
 
 本批实际验证：新增 46 项，最终 1,775 项应用与 14 项 Node 测试通过、3 原有跳过；类型、12 文件严格代码检查、构建、架构边界与文档指纹检查通过。只读 AdventureWorks 8 项兼容通过；3001 合成项目 7 组 / 15 图 / 11 次真实 HTTP，通过并逐图查看。AI UI 使用固定模型选择驱动真实工具 / SQL / Python后的明确 SSE 回放，未调用真实模型；稳定站未发布，服务身份和重启数前后不变。
 
+### Notebook 内嵌 Graphic Walker（2026-09-29）
+
+入口补充：正式 Notebook 的图表单元常驻「编辑图表」按钮，权限 / 忙碌禁用仍由原 Panel 判断。旧单指标柱 / 线 / 面积图在用户打开编辑时进入 GW，取消不改变原定义；不自动迁移历史图表，也不将普通明细表替换为图表。本次只调整入口文案与可见性，没有增加执行接口或数据读取；394 项定向测试、类型检查与 3001 旧图打开 / 取消 / 保存重开验证见同报告第四批，仅开发站生效。
+
+在原 chart 单元上增加可选 `graphicWalker` 配置，由 `core/chart-editor/config.ts` 的严格 Schema 校验；与单元 ID / 上游、标题、图表类型和 X / Y 字段一致性在 `definition.ts` 中统一校验。无配置的旧 Notebook 保持原格式、原执行与 Recharts 显示。`core/notebook/graphic-walker.ts` 仅适配当前上游表及字段引用，不加载浏览器渲染器、不请求数据、不包含数据库凭据；共享图表契约已加入架构源码指纹。
+
+`NotebookChartEditor` 对单数值柱 / 线 / 面积图嵌入共用 Graphic Walker 编辑器，Data / Style、分组、筛选、分面、撤销、图片导出均复用既有组件；旧多指标和饼 / 环形图保留 `LegacyNotebookChartEditor`，不静默删减序列。编辑器增加可选 owner 接口，由 Notebook 提供初始配置和保存回调：此路径不读写独立图表 localStorage，保存经过原 `saveCell` / revision / 项目自动保存链路。源数据缺失或失效时只显示定义与等待信息，不拿旧数据预览；配置修改即刻重绘但不写执行回执。取消带确认，切换上游前需保存或恢复本地配置。
+
+执行时 `projectPresentationTable` 校验并保留 X / Y、颜色、分面、Tooltip 和筛选所需输入列，原始标量、行数和截断标记不变；Graphic Walker 仍在浏览器对当前返回的行进行计算。因此服务端 chart 回执、输入数据表和“保存输入为 Dataset”不是浏览器聚合结果或成功绘图证明。画布单独展示聚合结果；非全量输入明确提示先在 SQL 聚合。不自动再请求全量数据，不改变现有执行权限、结果新鲜度、预算与草稿采用。
+
+新配置随 Notebook / 本地项目持久化与同一 Schema 序列化，纯显示恢复仍需运行得到当前数据。此版本的新配置不能承诺更早版本客户端可读。旧看板不能表示分组、筛选与样式，因此 UI 不提供新版图表的看板快照入口，服务端 `notebookDashboardSnapshotIssue` 同步拒绝，避免生成不同含义的旧图。散点图当前留在独立编辑器，Notebook 仍保留既有 chartType 契约。本批不新增 AI 工具或高级图表生成工作流，不作收费模型端到端声明。
+
+全量回归发现新可选配置增加了旧 Harness 普通任务的输入体积。`tools/parameter-projection.ts` 现在只在已有 Notebook 使用 Graphic Walker，或请求明确提到 Graphic Walker 时向模型提供该配置 Schema；普通 SQL / 旧图任务不携带无关的编辑器参数。无请求的通用 Schema 保持完整；实际工具验证和项目读写始终使用完整严格契约，没有提高输入额度或放宽验证。已有新版图的完整替换仍可保留并校验配置；同 ID 全量替换语义不变。
+
+真实 SQL 验收发现原查询 worker 将 DATE 统一标记为 string，导致日期钻取不可选。`scripts/notebook-query-worker.cjs` 现在只为 DuckDB DESCRIBE 确认的 DATE 标记 `date`，仍 CAST VARCHAR 返回原日历日期字符串与 NULL；时间戳 / 高精度数字的无损 string 策略不变，不根据文本内容猜类型。该 worker 纳入架构指纹；原 SQL 执行隔离、只读和超时不变。图表日期字段通过 GW 公开 metadata.offset=0 配合 timezoneDisplayOffset=0，避免纯日期被本机时区偏移到前一季度；验收核对 2024 Q1 至 2025 Q4，未宣称所有混合时区场景通过。
+
+状态：源码 / 3001 已验收，未发布 3000。真实隔离 CSV → SQL → 单元编辑 / 保存 / 重开 / 重跑通过；本批 22 张网页截图和 1 张导出 PNG 已查看。最终全量 3663 项应用与 26 项 Node 工具测试通过、3 项既有跳过；类型、定向代码检查、构建和 259 文件指纹检查通过。联合 Tooltip、旧客户端读取新图配置、窄屏体验及跨浏览器边界见[Graphic Walker 报告第三批](../verification/graphic-walker-editor-2026-09-29.md#第三批notebook-内嵌编辑与显示)。
+
 ### 成熟编辑组件与图表配置预览（2026-09-27）
 
 2026-09-28 基础控件迁移：`components/ui/studio-theme.tsx` 接入固定版本 Radix Themes 3.3.0，按钮、文本 / 多行输入、选择、复选、Tabs、菜单及共用弹窗采用成品组件。`fields.tsx` 的 Select 使用显式 `onValueChange(string)`，对选项字符串统一编码，保持空值与任意字段名可选；复选使用 `onCheckedChange(boolean)`，不伪造原生事件。旧布局 CSS 进入 `studio-legacy` 层，Themes 控件样式与少量布局 / 动效适配独立维护。控件的草稿值、校验、禁用、执行、确认、撤销、项目保存与 Agent 工具权限仍由原业务模块拥有，未新增运行开关、数据副本或接口。
@@ -602,7 +646,9 @@ Harness 整稿编译记录真实文本依赖与已知字段；Analysis Plan 文�
 
 显式输入预算兼容：仅已有 compacted + Notebook 单元工具上下文将模型可见的重复语义路由摘要缩为 mode / source，并缩短已由工具说明覆盖的操作提示；正常上下文、只读检索规则及实际选择器 / Planner 输入不变。工具集合和完整 Schema、权限摘要、工作记忆与执行证据不压缩掉，原 10000 字符的四工具搜索 / 编辑 / 真实运行 / 提交流程仍须通过。没有提高默认或显式预算。
 
-独立 `NotebookTextEditor` 负责模板 / 引用草稿、稳定单元选择、插入和移除占位符；保存只更新定义。`NotebookTextResult` 只显示当前匹配单元的 fresh / success 服务端 text，未运行 / 失效 / 失败 / 取消中不借用旧值，React 按纯文本显示。无模板执行器、新依赖或配置开关；旧文件可读，新可选字段须由当前版本打开，未承诺旧版本认识新绑定。源码 / 3001 与 3000 发布状态及实际检查分开记录在专项报告。
+独立 `NotebookTextEditor` 负责模板 / 引用草稿、稳定单元选择、插入和移除占位符；保存只更新定义。`NotebookTextResult` 只显示当前匹配单元的 fresh / success 服务端 text，未运行 / 失效 / 失败 / 取消中不借用旧值。2026-09-29 阅读升级：无引用静态正文用 `NotebookRichText`；服务端通过 `renderNotebookTextParts` 保留模板 markdown 与 literal 数据边界，同时生成原来的纯文本 text。回执新增可选 `textParts`，仅允许 success / text、不得有 table / resultRef、拼接必须等于 text，片段总长仍不超过 8000。旧回执无片段时继续纯文本，不反向猜测数据与模板边界。
+
+`NotebookRichText` 复用固定版本 `react-markdown@10.1.0` / `remark-gfm@4.0.1`，支持有限标题、列表、代码与表格。解析模板后才将 literal 值替换为文本节点；数据值不能生成 Markdown、HTML、图片、URL 或属性。仅静态模板中的 http(s) / mailto 链接可点击（noopener / noreferrer / no-referrer），无图片、HTML 执行或自动外部内容读取。实时进度在 text 超过既有 2000 字符前缀时移除 textParts 并退回纯文本，保留过程预览不是正式证据的边界。定义、DAG、权限与整稿核验不变，不新增模板执行器或 Agent 工具；无新运行开关，源码 / 3001 生效、未发布 3000。浏览器成功 / 失败 / 取消 / 重开与回归见[统一可视化 A 批验收](../verification/visualization-unification-a-2026-09-29.md)。旧文件可读，未承诺旧版本认识新增回执字段。
 
 本批最终新增 135 项，全量 1996 应用 / 14 Node 通过，保留原 3 项跳过；类型、28 文件严格 ESLint、生产构建与 146 源码指纹通过。新单行 PostgreSQL 汇总 → 文本及原链共 9 项，3001 合成参数 / SQL → 文本 7 组 / 13 图 / 11 次真实 HTTP 通过并逐图查看。原显式预算回归与压缩后错误完整标记均修复 / 补测，无真实模型调用、3000 发布或服务重启；详细边界与日志见[第十三批记录](../verification/hex-text-references-2026-09-17.md)。
 
@@ -1179,7 +1225,105 @@ npm run build
 - 真实模型协作质量、成本与时延：尚未评测。
 - 稳定站发布：尚未执行。
 
+### 统一可视化 V2 计算核心（2026-09-29，B1 初始实现）
+
+`core/visualization/definition.ts` 定义版本 2 的计算 / 编码 / 显示三部分；第一批只接受柱 / 线 / 面积、一个数值指标、X 与可选颜色两个维度。严格验证输出别名与通道引用，不接受原始 SQL；宿主 Cell ID 不进入图表定义。`plan.ts` 在完整 typed DataTable 上检查字段和值，编译白名单 SELECT、聚合前枚举 / 数值范围筛选、纯 DATE 粒度、稳定排序及显式 Top N。原始行模式不聚合 / 不堆叠，用内部 ordinal 保持输入序；Tooltip 不增加分组。旧 `ChartConfig` / Notebook chart Schema 不变。
+
+`server/execute.ts` 接收宿主已经授权的完整表、来源引用、捕获的 runId / revision / accessMode / inputCellId 和查询函数。检查行数、完整性、内容 SHA-256 及本次运行身份后，只调用一次注入查询端口；结构兼容现有 `executeNotebookSql`，不反向依赖 Notebook。没有自己实现聚合、连接凭据、结果仓库、模型调用或 HTTP 路由。宿主接线和当前结果解析仍待下一批；源引用 / SHA-256 是一致性检查，不是授权令牌或防伪签名。
+
+`result.ts` 返回完整图表表格与 `visualResult`（定义 / 表格 hash、输入结果 ID、运行版本、权限模式、输入 / 输出行数、数值模式、显式 limit），恢复时核对外部捕获身份。取消前后检查，截断、类型错配或精度超限不产生成功结果。50,000 输入行 / 16 MiB 和 1,000 输出行 / 2 MiB 是本地有界计算能力范围，不提高既有查询保护；不能把预览切片改标记后作为完整输入。没有新增全局缓存或落盘。
+
+数值边界：安全整数 SUM 在 DuckDB 内转 BIGINT 后求和，最终超出 JS 安全范围拒绝；浮点结果明确 `float64`，不承诺 0.1 + 0.2 的精确十进制语义。decimal / bigint 文本不能作为数值指标自动转换。COUNT(*) 包含 NULL 行，COUNT(field) / distinctCount 排除 NULL。日期仅 YYYY-MM-DD + UTC 的 year / quarter / month / day，不支持 timestamp / DST 分桶。
+
+`adapters/graphic-walker.ts` 使用 0.5.2 公共 normalize、canonical 编码、scales 和主题；`materialized-workflow.ts` 仅允许 raw 投影，拒绝聚合、筛选、变换、排序与再次切片。首批 X 轴只接受非空文本 / 纯日期、离散坐标；空值或数字分类可计算但绘制明确拒绝，不字符串合并 NULL。季度暂显示桶起始日期；不宣称连续时间轴 / 联合 Tooltip / 分面已完成。原始重复分类保持行和值，柱可能重叠，尚非最终产品交互。
+
+上述为 B1 当批范围，实际隔离验证见[专项报告](../verification/visualization-unification-b1-2026-09-29.md)。后续产品桥接、日期兼容和季度标签以下方 B2 为准；V2 首次落盘前仍必须验证格式版本与旧客户端拒写，不能只升级 Schema。
+
+### 正式 Notebook 计算 / 展示桥接（2026-09-29，B2）
+
+`core/notebook/visualization.ts` 是宿主转换边界，将现有单指标柱 / 线 / 面积 Cell 或其 `graphicWalker` 配置转为请求内 V2。旧图用 rows 保留输入顺序与重复行，GW 图用 aggregate；取消 / 查看不会迁移配置，持久化 Schema 与 storageVersion 7 不变。编辑器仍保存 ChartConfig V1，保存后需明确运行。`productEnabled: true` / `productScope` 是源码范围说明，不是运行开关；默认 `server/runtime.ts` 将 `visualize` 端口接到既有 DuckDB，替代宿主须自行注入该可选端口。
+
+`server/execution.ts` 从当前请求的完整 outputs 与同轮上游引用取数，在授权 / 脱敏之后调用独立计算核心；不从浏览器 100 / 1000 行预览取数、不新增结果仓库。单元回执新增可选 `visualization`，原 `table` / resultRef / Dataset 保存仍表示输入投影；chart 本就无 outputName，不能作为其他计算单元的表格输入，本批不改变这一点。旧回执无新字段仍接受。同步回执校验捕获定义的 canonical key、运行身份、上游完整引用和行数；前端正式绘图前再校验定义与结果 hash。校验不是身份授权 / 防伪签名。新数据结果与本轮一起受原缓存失效、取消和输出预算保护；SSE 预览去掉完整 visualization，不冒充正式结果。
+
+`NotebookMaterializedChart` 提供“图表 / 图表数据 / 输入数据”；`MaterializedChartCanvas` 经现有浏览器 lazy 边界加载，复用 GW PureRenderer、主题与图片导出。computation 只允许 raw 投影，不在浏览器再次业务聚合。季度轴显示 YYYY Qn，数据表 / 单系列 Tooltip 保留真实 ISO 日期。编辑区继续用已返回输入快速预览，明确标注不是完整正式计算；切换 Data / Style、保存 / 恢复沿用原路径。
+
+兼容边界：分面、周粒度、百分比堆叠、额外 Tooltip 分组、复杂筛选、多指标、饼 / 环图、数字 / 空 X、超过 1000 行或存在重复分类的原始旧图保留原路径并显示原因；不让新离散轴把旧图独立柱 / 点叠在一起。GW 0.5.2 的 count 映射 COUNT(*) 保持含 NULL 行口径；其他指标有 NULL 时保留 GW 原口径，避免 SQL 改变旧图数值。日期增加导入器标准 `YYYY-MM-DDT00:00:00.000Z` 兼容，哈希仍核对原始表；非午夜时间戳与 DST 不开放。V2 能力和限额未扩展为任意图形 / 任意大小。AI 试运行经过同一执行入口，但本批不更改模型工具 Schema、提示词或宣称已完成真实模型端到端。专项验证状态见 [B2 报告](../verification/visualization-unification-b2-2026-09-29.md)。
+
+### 分面完整计算（2026-09-29，B3）
+
+在 B2 运行时桥接上增加可选 `encoding.facetX / facetY`，维度最多四个（X、颜色、水平 / 垂直分面），结果字段最多五个。严格要求可见维度一一引用，不增加隐藏分组；宿主同时把分面加入分组、稳定排序、Tooltip 与数据定义 key。复用原 DuckDB 编译循环、完整上游引用、权限、取消与回执校验，不新增 API 或查询引擎。持久化仍为 ChartConfig V1 / storageVersion 7，旧无分面定义与计算 key 不变；重复通道字段、NULL / 非文本非纯日期分面、周等不兼容组合保留原路径。
+
+`adapters/graphic-walker.ts` 通过公共 normalize 将分面加到 columns / rows，保持 aggregate:false 与 raw-only workflow 校验。独立 `adapters/facet-layout.ts` 仅计算网格尺寸，不筛行 / 聚合；正式画布复用公共 auto size / Vega view 尺寸，至少 260 × 200 像素单图，在图形区内部滚动。为避免笛卡尔网格撑爆渲染，超过 36 个网格位置时明确停止绘图、禁用导出，完整计算表仍可查看；不偷偷取前 36 组、不回退不完整计算。输入 / 输出行与字节预算不变。空结果不做零除，仍显示空状态。
+
+画布计算就绪使用数据身份，渲染 key 另包含样式与尺寸；晚到的旧数据回调不能覆盖新数据状态，布局重挂载也不把已计算结果永久变回加载。生命周期定向测试与实际刷新 / 窄屏验证见专项。
+
+源码 / 3001 接线，验证见 [B3 分面验收](../verification/visualization-unification-b3-2026-09-29.md)，未发布 3000。本批不新增 AI 图表专用协议、多指标、看板或 V2 落盘。上方 B2 的“分面保留原路径”为该批历史状态，独立受支持分面现按此节执行。
+
+### 图表默认常驻编辑区（2026-09-29，B5）
+
+`NotebookChartWorkspace` 为 Notebook 图表单元的常驻宿主。`NotebookPanel` 不再用 `activeEditing` 在只读图和编辑器间二选一；支持的图在无运行结果、已有结果、保存、运行、重开后都保留字段库和配置。默认复用此前独立 `/charts` 的 `ChartEditor`（用户提供图 3 / 4 的 Data / Style 适配面板，内部使用 GW 计算和绘图），保留切换到 B4 官方 `GraphicWalker` 原生布局的入口，不将前者伪称官方原生 UI。没有新增字段编辑实现；`NotebookChartEditor` 通过 layout / persistent 参数复用两套已有组件，均走同一 ChartConfig / authorNotebookChart 保存契约。
+
+只有未保存修改才占用 Notebook 编辑锁，不是打开常驻面板即阻塞全部运行或 AI。其他单元编辑 / 运行 / 采用仍遵守原锁；dirty 时禁用布局与上游切换，取消确认后重建已保存基线但不移除编辑区。保存、AI 替换定义以单元定义 key 重建，未修改的其他图保持实例；聚焦第二张图不跳回第一张的搜索框。只读权限 / 执行中使用 disabled + inert。无有效上游时提示等待，不取旧结果，运行后载入本轮数据；等待态与筛选空结果分开，失败提示绑定数据快照，避免新上游到达后仍残留旧错误或重置未保存配置。`NotebookLivePreview` 也复用同一外形，但读取当前成功上游投影、禁用修改，不新增保存或执行接口。
+
+编辑画布仍是有限返回数据预览，不能冒充完整计算；原校验后的正式 `NotebookResult` 保留在“已保存配置的完整运行结果”折叠区，明确不含未保存修改。保存与参数 / AI 调度规则不变，没有自动触发额外模型或数据库调用。新 CSS 使用独立 `notebook-inline-chart-workspace` 命名避开旧两栏工作台规则，窄屏内部横向滚动而不是自动隐藏字段库；只有用户点击收起才折叠。旧多指标 / 饼环继续兼容，不改变持久化版本。本批源码 / 3001，具体测试、截图及未覆盖项见 [B5 验收](../verification/notebook-chart-workspace-2026-09-29.md)；B4 官方 Tooltip 补丁仍未获准通过重启开发站补验。
+
+### 官方编辑器 / AI 图表作者入口（2026-09-29，B4）
+
+`NativeChartEditor` 在支持的 Notebook 图表单元内直接挂载 @kanaries/graphic-walker 0.5.2 的 `GraphicWalker`，而不是仿写字段配置 UI；通过公开 `chart` / `storeRef` / `exportCode` 回存配置。`native-adapter.ts` 隔离固定版本源码实际发出的 `edit-graphic-walker` 事件，以 instanceID 隔离实例并在卸载时解除监听，随后从 store 导出而非信任事件载荷；不轮询或读 DOM 保存。这是版本耦合接缝，升级必须跑真实 store 事件 / 撤销回归，不能声称稳定的 onChange prop。外部 MobX reaction 在本包无法观察内置 store，试验后已撤回直接依赖，不修改官方源码。storeRef 接入要等待 ShadowDom 异步挂载，不能只读一次父组件 effect。关闭多图导航、数据导入导航及本批不能持久化的工具栏项，无外部 AI endpoint；默认收起 Auto Viz 留出画布。不能无损回存的操作明确拒绝保存且保留原定义。适配器集中 IChart / ChartConfig 转换；动态浏览器边界避免 SSR 执行。正式完整计算仍复用 B2 / B3 PureRenderer，不重新聚合。
+
+`core/notebook/chart-authoring.ts` 为 AI 与手动编辑共用的作者输入 / 构建模块。`editNotebookCells` 增加可选 `charts` 数组（cells 可省略），包含 id / inputCellId / title / mark / channels / 可选 filters、style；宿主派生版本、datasetId 及旧字段镜像，模型不再猜两套字段的一致性。相同来源修改保留省略的样式与筛选，channels 整体替换；切换来源不继承旧筛选。不能替换非 chart 单元，cells + charts 总量仍最多 10，重复 ID / 删除冲突 / DAG / 授权 / editVersion / 试运行 / 提交继续由原边界校验。桥接将 charts 的变更 ID 发到既有草稿事件流。DSH 目录固定提供此作者入口和说明；旧 Harness 保留紧凑按需投影，普通任务不增加整套配置负担，服务端仍接受 canonical 校验。
+
+没有修改 Notebook storageVersion 7 或直接持久化第三方 IChart；新增和编辑后保存仍为已支持的 Cell / ChartConfig V1。支持单指标柱 / 线 / 面积；其他图保留旧兼容入口，未静默迁移或删掉旧能力。本批为 C 的现有契约桥接，不宣称 V2 原生落盘 / 全部官方配置 / 全部 AI 工作流统一完成。额外 Tooltip 指标或不同聚合仍走已明确标识的兼容预览。
+
+浏览器发现固定版本官方 `multiEncodeEditor` 把后续 Tooltip 的删除 / 聚合索引写死为 0。通过 `patches/@kanaries__graphic-walker@0.5.2.patch` 修正 TS 源码和网站实际消费的 ESM 两个回调索引，pnpm workspace / lock 注册补丁并纳入架构指纹；不直接修改 node_modules、不另造编辑器。未使用的 UMD 分发未修改，不声称补丁覆盖所有第三方使用方式。依赖缓存须按受管规则更新；具体启用状态和实际验收见 [B4 报告](../verification/native-notebook-chart-2026-09-29.md)，未发布 3000。
+
+B4 最终全量回归 303 文件 / 3,795 项及 26 项 Node 工具测试通过，定向 127 项、类型 / 构建 / 架构检查通过。3001 隔离项目验证官方编辑、取消保护、保存重开和 48 行完整均值计算；一次真实模型交付了可采用的图表草稿，但该付费流程末尾保存断言竞态和后续 Tooltip 缺陷没有记为全流程通过。已安装的 Tooltip 补丁仍待用户批准重启开发站后补验；动态宿主样式仅保证保存后正式图生效，官方编辑预览可能保留初始主题。
+
 ## 变更记录
+
+### 2026-09-29 · 图表字段与配置常驻（B5）
+
+按用户再次说明纠正 B4“默认只看图、点编辑才显示配置”的交互：Notebook 与 AI 只读实时草稿均使用常驻图表宿主；默认复用既有 Data / Style 适配布局，保留官方原生布局切换；保存 / 放弃 / 运行 / 重开保留面板。隔离旧 CSS、保留完整结果证据与编辑锁，无持久化 / 模型 / 执行接口变动，未发布 3000。实际验收见 B5 专项报告。
+
+### 2026-09-29 · 官方图表编辑器与 DSH 共用配置（B4）
+
+Notebook 支持的图改用官方 GraphicWalker 编辑组件；增加 charts 作者入口与共享配置构建，保存仍是 ChartConfig V1。补齐异步 store 挂载、真实编辑事件、取消保护和不支持操作拒存；详细模块、校验与实际验收见上方 B4 说明和专项报告；未发布 3000。
+
+### 2026-09-29 · 统一可视化 B3：完整上游分面
+
+扩展运行中维度 / 编码 / 回执字段范围，宿主增加分面分组与只绘图适配；保留持久化格式和原不兼容读路。新增可读分面尺寸、内部滚动与过大网格明确提示，完整表不裁切。当前验收和剩余边界见 B3 专项报告；未发布 3000。
+
+### 2026-09-29 · 统一可视化 B2：Notebook 正式接线
+
+新增纯宿主适配、可选 visualize 端口、同轮完整计算回执与正式只绘图组件。旧定义保存格式不变，旧图不自动聚合；分面和 NULL 等明确兼容，完整数据不进入有限 SSE 预览。同步验证范围及实际截图见 B2 专项报告；仅源码 / 3001，未发布 3000。
+
+### 2026-09-29 · 统一可视化 B1：独立计算与结果核验
+
+新增 `core/visualization` 定义 / 编译 / 查询端口 / 结果身份 / GW 适配，新增真实 DuckDB、边界及隔离浏览器验证。架构指纹与模块边界测试纳入该目录。产品入口、存储版本、旧图、权限和原 Harness 均不变；不将隔离绘图冒称为 Notebook 已接线。实际检查 / 已知限制见 B1 专项报告。
+
+### 2026-09-29 · 统一可视化 A：安全说明阅读与适配门槛
+
+新增 `NotebookRichText` 成熟 Markdown 阅读组件；`text-references.ts` / `execution.ts` 输出可信模板与纯数据片段，`contracts.ts` 校验一致性，`live-progress.ts` 为被截断的过程文本去掉排版片段，旧回执仍纯文本。静态旧大括号、不完整 / 失败 / 失效上游、权限与整稿证据规则不变。增加单元测试、3001 隔离项目实际截图与 GW 无二次聚合 / 排序试验；依赖、验证数字及已知限制见[专项报告](../verification/visualization-unification-a-2026-09-29.md)。同时补架构目录索引、旧图历史标识及统一方案的精度 / 分批门槛；未实现 V2、看板快照或新的 AI 策略，未发布 3000。
+
+### 2026-09-29 · 图表与分析结果统一架构提案（仅规划）
+
+新增 [专项方案](./visualization-unification-proposal-2026-09-29.md)，按现有执行器、请求内完整结果捕获、DSH 工具桥和 Puck / AppSpec 约束，提出统一图表定义、正式计算结果、共享渲染与固定快照的分批演进。无产品源码、协议或运行开关变更；不表示 V2、服务端图表计算或新版看板节点已实现。补充审查边界：旧 Harness 的 createNotebookDraft 关键词投影不能泛化为当前 DSH 编辑工具不可访问 GW 配置，后者仍从 canonical schema 生成目录。
+
+### 2026-09-29 · 图表编辑入口可见性修正
+
+针对用户在 Notebook 找不到新编辑器，图表编辑按钮改为常驻「编辑图表」，保留原操作锁和旧定义。隔离浏览器核对无悬停 / 焦点 / 选中时入口可见，旧图打开内嵌 GW、取消不修改、保存与重开可恢复；未读取或迁移用户项目，未修改 Agent / 执行层，未发布 3000。验证细节及新截图维护于同一 Graphic Walker 报告第四批。
+
+### 2026-09-29 · Notebook 内嵌 Graphic Walker
+
+chart 单元增加受校验的可选图表配置和浏览器编辑 / 显示适配，沿用 Notebook revision / 项目保存 / 执行；保留旧图，多字段输入投影不冒称服务端聚合，阻止不兼容的旧看板转换。SQL DATE 保留语义与原日期字符串，公开 GW 时区配置消除季度偏移；Harness 按相关性投影高级图表参数，运行时仍用完整 Schema。全量 3663 + 26 项通过、3 既有跳过，类型 / 构建及真实浏览器通过；259 文件指纹同步，详见新增正文及同一报告第三批。无新依赖、无模型调用、未发布稳定站。
+
+### 2026-09-28 · 分析过程与 Notebook 实时衔接
+
+新增可选计算观察契约、受授权的草稿 / 单元进度桥、窗口内版本化展示 reducer 和只读实时草稿；官方 DSH 公共插槽接实际过程并可定位单元。保留工具参数、最终成功回执及人工整稿采用，不把实时行数据存入历史 / 幂等重放。兼容 runner 无进度时仅补发真实完成回执；失败、取消、修复、Top10→Top5、撤销与重开等验证详见[专项报告](../verification/notebook-live-progress-2026-09-28.md)。本批未发布 3000 / 新 Release。
+
+### 2026-09-28 · Notebook 能力的独立 DSH 插件试点
+
+从受控插件分离工具注册与调用适配，新增零网站依赖的 `runtime/dsh/notebook-plugin`、公开契约与移植说明；当前网站直接复用它，原业务桥、模型、权限及人工采用不变。便携复制与架构指纹同步，验证与未完成边界见上方专节。既有架构守卫测试夹具缺少后续设置目录/载体文件，本次同步补齐，不弱化指纹断言；不涉及 UI、稳定站发布或 GitHub 推送。
 
 ### 2026-09-28 · 独立分支推送与完整依赖发行
 
@@ -1487,6 +1631,8 @@ Harness 保留失败状态、error 和 terminationCode，聊天正文优先显�
 本轮为文档研究，未安装依赖、连接外部 MCP、运行模型或发布。文档维护检查不能代替新渲染器的运行验收。
 
 ### 其他演进方向
+
+图表专项的近期修改建议见 [图表与分析结果统一架构修改方案（2026-09-29）](./visualization-unification-proposal-2026-09-29.md)。保留已有 GW 渲染、自定义编辑器、Notebook / DSH 执行与 Puck 布局，在完整上游与现有结果捕获边界内逐步统一 Notebook、AI 和看板。**A 阅读、B1 核心、B2 Notebook 运行桥接、B3 支持范围内的完整分面已实现。V2 落盘 / 旧客户端拒写、新 AI 图表契约、多指标及看板仍待实现，未发布 3000。**
 
 依次考虑分析角色、可视化角色、独立读取任务的有限并发、依赖图、跨角色产物引用和变更冲突检查。先通过同任务单 / 多 Agent 评测，再决定默认范围与预算。
 

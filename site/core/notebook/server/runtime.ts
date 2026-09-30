@@ -14,6 +14,7 @@ export function runNotebook(
 ): Promise<NotebookRun> {
   return executeNotebook(input, {
     query: input.query ?? executeNotebookSql,
+    visualize: input.visualize ?? input.query ?? executeNotebookSql,
     python: input.python ?? createNotebookPythonSession,
     capabilities: getNotebookCapabilities(),
     log: input.log ?? recordNotebookQuery,

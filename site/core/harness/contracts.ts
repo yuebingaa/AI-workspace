@@ -8,6 +8,7 @@ import { semanticModelSchema, type SemanticModel } from "@/core/semantic/contrac
 import { harnessMcpToolSummarySchema, type HarnessMcpToolSummary } from "./mcp/contracts";
 import { harnessNotebookArtifactSchema, type HarnessNotebookArtifact } from "./notebook-contracts";
 import { notebookDocumentSchema } from "@/core/notebook/contracts";
+import { notebookLiveProgressSchema } from "@/core/notebook/live-progress";
 import { notebookContextSelectedCellIdsSchema, type NotebookContextSelectionMetadata } from "@/core/notebook/context-selection";
 import { harnessAnalysisPlanArtifactSchema, type HarnessAnalysisPlanArtifact } from "./analysis-plan-contracts";
 import type { HarnessInputInspection } from "./input-inspector";
@@ -469,6 +470,11 @@ export type HarnessTableArtifact = z.infer<typeof harnessTableArtifactSchema>;
 
 // Public execution receipts, not model reasoning or raw tool payloads.
 export const harnessTraceEventSchema = z.object({
+  notebookProgress: notebookLiveProgressSchema.optional(),
+  notebookCellId: z.string().min(1).max(120).optional(),
+  notebookEditVersion: z.number().int().nonnegative().optional(),
+  notebookRunId: z.string().min(1).max(160).optional(),
+  notebookStatus: z.enum(["edited", "queued", "running", "success", "failure", "blocked"]).optional(),
   agent: agentIdentitySchema.optional(),
   id: z.string().min(1).max(200),
   sequence: z.number().int().positive(),

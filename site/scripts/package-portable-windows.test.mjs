@@ -170,9 +170,13 @@ test("浏览器资源拒绝冒用锁定版本及替换后的可执行文件", as
   await assert.rejects(verifyPinnedBrowser(browser, { browserVersion: "151.0.7922.34", revision: "1234" }), /锁定资源不一致/u);
 });
 
-test("生产载体白名单包含所有生产 mjs/cjs，但不包含测试", async () => {
+test("生产载体白名单包含所有生产 mjs/cjs 和独立 Notebook 插件发行文件，但不包含测试", async () => {
   const { readdir } = await import("node:fs/promises");
   const production = (await readdir(join(projectRoot, "runtime/dsh"))).filter((name) => /\.[mc]js$/u.test(name) && !/\.test\.[mc]js$/u.test(name));
+  const manifest = JSON.parse(await readFile(join(projectRoot, "runtime/dsh/notebook-plugin/package.json"), "utf8"));
+  const pluginFiles = ["package.json", ...manifest.files];
+  assert.deepEqual((await readdir(join(projectRoot, "runtime/dsh/notebook-plugin"))).sort(), [...pluginFiles].sort());
+  production.push(...pluginFiles.map(name => `notebook-plugin/${name}`));
   assert.deepEqual([...DSH_CARRIER_FILES].sort(), production.sort());
 });
 

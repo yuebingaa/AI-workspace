@@ -2,14 +2,15 @@ import { z } from "zod";
 import { dataRecipeStepSchema } from "@/core/schemas/data-recipe";
 import { notebookParameterSchema } from "./parameter";
 import { notebookTextReferencesSchema, validateNotebookTextTemplate } from "./text-references";
+import { configSchema } from "@/core/chart-editor/config";
 
 export const MAX_NOTEBOOK_CELLS = 30;
 
-const notebookIdentifierSchema = z.string().trim().min(1).max(120)
+export const notebookIdentifierSchema = z.string().trim().min(1).max(120)
   .regex(/^[A-Za-z][A-Za-z0-9_-]*$/u);
 const notebookOutputNameSchema = z.string().trim().min(1).max(120)
   .regex(/^[A-Za-z][A-Za-z0-9_]*$/u);
-const notebookTitleSchema = z.string().trim().min(1).max(120);
+export const notebookTitleSchema = z.string().trim().min(1).max(120);
 
 export const parameterCellSchema = z.object({
   id: notebookIdentifierSchema,
@@ -83,7 +84,16 @@ const chartCellSchema = z.object({
   chartType: z.enum(["bar", "line", "area", "pie", "donut"]),
   categoryField: notebookOutputNameSchema,
   valueFields: z.array(notebookOutputNameSchema).min(1).max(4).refine((items) => new Set(items).size === items.length, "图表数值字段不能重复"),
-}).strict();
+  graphicWalker: configSchema.extend({ mark: z.enum(["bar", "line", "area"]) }).optional(),
+}).strict().superRefine((cell, context) => {
+  const config = cell.graphicWalker;
+  if (!config) return; // Old projects remain byte-for-byte compatible.
+  if (config.datasetId !== `notebook:${cell.id}:${cell.inputCellId}` || config.mark !== cell.chartType
+    || config.channels.x?.field !== cell.categoryField || cell.valueFields.length !== 1
+    || config.channels.y?.field !== cell.valueFields[0] || config.title !== cell.title) {
+    context.addIssue({ code: "custom", path: ["graphicWalker"], message: "图表配置与 Notebook 单元不一致，请重新保存图表。" });
+  }
+});
 
 const transformCellSchema = z.object({
   id: notebookIdentifierSchema,

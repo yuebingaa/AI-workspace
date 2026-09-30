@@ -73,7 +73,7 @@ export function NotebookTextEditor({ cell, availableInputs, disabled, onSave, on
         </div>)}
         <Button variant="secondary" type="button" disabled={!inputs.length || references.length >= MAX_NOTEBOOK_TEXT_REFERENCES} onClick={addReference}>添加数据引用</Button>
       </div>
-      <small className="notebook-wide">没有数据引用时，说明按原样显示；添加引用后，使用精确占位符 <code>{"{{引用键}}"}</code> 插入纯文本，不执行代码、表达式或 HTML。</small>
+      <small className="notebook-wide">说明支持 Markdown 标题、列表和表格；添加引用后，使用精确占位符 <code>{"{{引用键}}"}</code> 插入纯文本数据，不执行代码、表达式或 HTML，不加载图片。</small>
       <small className="notebook-wide">引用单元必须成功运行、结果完整且恰好一行。参数字段默认为 <code>value</code>；其他单元请填写实际字段名，而非显示标签，可先运行上游查看字段。</small>
       <small className="notebook-wide">保存只修改定义，不会自动运行。更改引用键后请同步修改正文；移除引用会删除对应占位符。NULL 显示为 NULL，说明结果最多 {MAX_NOTEBOOK_TEXT_OUTPUT_CHARS.toLocaleString("en-US")} 字符。</small>
     </fieldset>

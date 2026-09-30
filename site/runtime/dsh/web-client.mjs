@@ -269,11 +269,21 @@ export function createDshWebClientModule() {
       ctx.slots.inject('conversation.chat.node',()=>ctx.slots.register({name:'conversation.chat.node',key:'turn-process',priority:-100},()=>null));
       function RunningStatus(){
         const snapshot=React.useSyncExternalStore(bridge.subscribe,bridge.current,bridge.current);
+        const progress=snapshot?.progress;
+        if(progress?.steps?.length)return React.createElement('details',{'data-agentcanvas-dsh-progress':true,open:snapshot.busy,
+          style:{margin:'4px 12px',fontSize:'13px',lineHeight:'1.6',color:'var(--dsw-alias-label-secondary)'}},
+          React.createElement('summary',null,(snapshot.busy?'正在分析':'本轮过程')+' · '+progress.steps.length+' 条记录'),
+          React.createElement('ol',{style:{maxHeight:'240px',overflowY:'auto',paddingLeft:'20px'}},...progress.steps.map(step=>React.createElement('li',{key:step.id,style:{margin:'8px 0',overflowWrap:'anywhere'}},
+            React.createElement('span',{style:{color:step.state==='failure'?'var(--dsw-alias-red, #b42318)':undefined}},
+              (step.state==='running'?'进行中 · ':step.state==='failure'?'失败 · ':step.state==='stopped'?'已停止 · ':'')+step.message),
+              step.cellId?React.createElement(require('@deepseek-ai/dsh-client-ui-primitives').Button,{type:'button',onClick:()=>bridge.post({type:'locate-cell',taskId:progress.taskId,cellId:step.cellId}),
+              style:{marginLeft:'6px',textDecoration:'underline',fontSize:'12px'}},'定位单元'):null,
+            step.detail?React.createElement('details',null,React.createElement('summary',null,'工具详情'),React.createElement('p',null,step.detail)):null))));
         if(!snapshot?.busy||!snapshot.statusText)return null;
         return React.createElement('div',{role:'status','data-agentcanvas-dsh-running-status':true,title:snapshot.statusText,
           style:{minWidth:0,padding:'0 12px',fontSize:'12px',lineHeight:'20px',color:'var(--dsw-alias-label-tertiary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},snapshot.statusText);
       }
-      // Website-owned status only: no synthesized tool steps, timings or idle hint.
+      // Actual website trace in a public slot; official chat/input remain untouched.
       ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({name:'conversation.input.dock',id:'agentcanvas-running-status'},RunningStatus));
       function Root(props){
         const snapshot=React.useSyncExternalStore(bridge.subscribe,bridge.current,bridge.current);

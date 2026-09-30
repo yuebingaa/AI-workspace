@@ -3,11 +3,17 @@
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { NotebookCell } from "@/core/notebook/definition";
 import type { NotebookTable } from "@/core/notebook/contracts";
+import { ChartCanvasBoundary } from "@/components/chart-editor/ChartEditorBoundary";
+import { notebookChartDataset } from "@/core/notebook/graphic-walker";
+import "./notebook-graphic-walker.css";
+import { useMemo } from "react";
 
 const colors = ["#343431", "#74716b", "#a4a099", "#c6c2bb"];
 
 /** Chart sampling follows execution order, independently of the table's local view. */
 export function NotebookChart({ cell, table }: { cell: Extract<NotebookCell, { kind: "chart" }>; table: NotebookTable }) {
+  const dataset = useMemo(() => cell.graphicWalker ? notebookChartDataset(cell, table) : undefined, [cell, table]);
+  if (cell.graphicWalker && dataset) return <div className="notebook-gw-output"><ChartCanvasBoundary dataset={dataset} config={cell.graphicWalker} /></div>;
   const chartRows = table.rows.slice(0, 100);
   const radial = cell.chartType === "pie" || cell.chartType === "donut";
   const negativePie = radial && cell.valueFields.some((field) => chartRows.some((row) => typeof row[field] === "number" && row[field] < 0));

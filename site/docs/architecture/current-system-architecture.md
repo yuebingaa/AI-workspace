@@ -1,5 +1,7 @@
 # AgentCanvas Harness 与 Agent 系统框图
 
+> **历史快照，非当前架构图。** 本文件及同名 SVG / PNG 依据 2026-09-11 实现，未覆盖后续 DSH、Notebook 与 Graphic Walker 改造。文件名保留以免破坏旧链接；查今天的实现请从[架构目录入口](./README.md)进入主文档。标记于 2026-09-29。
+
 > Agent 角色、上下文、预算和验证机制的最新维护入口：[Agent 架构](./agent-architecture.md)。多 Agent 的实现与启用状态以该文档为准。
 
 > 依据 2026-09-11 的当前源码整理。这里的 Agent 指模型决策层，Harness 指掌握执行权、权限、预算、证据和任务状态的确定性运行时。

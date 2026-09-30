@@ -1984,7 +1984,10 @@ export class HarnessIdempotencyStore {
     const listeners = new Set<(event: HarnessTraceEvent) => void>();
     if (onEvent && !signal?.aborted) listeners.add(onEvent);
     const task = factory((event) => {
-      events.push(event);
+      // Live draft/results are display-only and must not be replayed from an old request.
+      const cachedEvent = { ...event };
+      delete cachedEvent.notebookProgress;
+      events.push(cachedEvent);
       if (events.length > 255) events.shift();
       for (const listener of listeners) { try { listener(event); } catch { /* Observer only. */ } }
     });

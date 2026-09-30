@@ -65,7 +65,10 @@ describe("server composition for optional Python resources", () => {
     expect(JSON.stringify(capabilities)).not.toContain(root); expect(closeSync).not.toHaveBeenCalled();
   });
   it("rejects a file replacement during opening and still closes its descriptor", () => {
-    installMarker(); const replacement = lstatSync(marker()); replacement.ino += 1;
+    installMarker(); const replacement = lstatSync(marker());
+    // Windows inode numbers can exceed JS safe integers; adding 1 may be a no-op.
+    // This fixture needs a definitely different identity, not inode arithmetic.
+    replacement.ino = replacement.ino === 0 ? 1 : 0;
     vi.mocked(fstatSync).mockReturnValueOnce(replacement);
     expect(read()).toMatchObject({ python: { enabled: false, reason: expect.stringContaining("发生变化") } });
     expect(closeSync).toHaveBeenCalledTimes(1);

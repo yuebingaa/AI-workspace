@@ -28,9 +28,17 @@ describe("依赖候选与编辑器展示", () => {
     const chart: NotebookCell = { id: "chart", kind: "chart", title: "图", inputCellId: "query", chartType: "bar", categoryField: "area", valueFields: ["amount"] };
     const html = render(chart, [chart, query, source], false, false, true);
     expect(markupRoot(html).querySelector('[role="combobox"][aria-label="上游输出"]')?.textContent).toContain("totals");
+    expect(html).toContain("notebook-gw-editor");
+    expect(html).toContain("等待上游数据");
+    expect(html).toContain("取消编辑");
+  });
+  it("多数值序列仍用兼容编辑器，保留当前输入和其他依赖选项", () => {
+    const chart: NotebookCell = { id: "chart", kind: "chart", title: "图", inputCellId: "query", chartType: "bar", categoryField: "area", valueFields: ["amount", "cost"] };
+    const html = render(chart, [chart, query, source], false, false, true);
     expect(markupRoot(html).querySelector("select")?.value).toBe(JSON.stringify("query"));
     expect(html).toContain("raw_data");
-    expect(html).toContain("取消编辑");
+    expect(html).toContain("不自动删减序列");
+    expect(html).not.toContain("notebook-gw-editor");
   });
   it("Python同样仅展示无环候选并保留禁用行为", () => {
     const python: NotebookCell = { id: "py", kind: "python", title: "Python", inputCellIds: ["data"], outputName: "result", fileNames: [], code: "result = raw_data" };

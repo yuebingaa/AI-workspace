@@ -41,7 +41,7 @@ async function fixture() {
     notebookRunner: (artifact, context) => runNotebook({
       document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
       sources: context.sources,
-      signal: context.signal, forAi: true, log: () => {},
+      signal: context.signal, onProgress: context.onProgress, forAi: true, log: () => {},
     }),
   };
   return { request, options };
@@ -68,6 +68,37 @@ async function successfulDriver(input: DshDriverInput) {
 }
 
 describe("DSH independent context and verified analysis explanation", () => {
+  it("streams real draft and per-cell results before final delivery; saved trace excludes transient payloads", async () => {
+    const { request, options } = await fixture(), before = structuredClone(request);
+    const live: HarnessTraceEvent[] = [];
+    let finished = false;
+    const signal = new AbortController().signal;
+    const response = createHarnessStreamResponse(signal, (executionSignal, observer) => runDshEngine(request, {
+      ...options, signal: executionSignal, onEvent: event => { live.push(event); observer(event); }, driver: async input => {
+        await call(input, "editNotebookCells", { editVersion: 0, cells: additions });
+        expect(live.some(event => event.notebookProgress?.update.kind === "draft")).toBe(true);
+        await call(input, "runNotebookCells", { editVersion: 1 });
+        const updates = live.flatMap(event => event.notebookProgress ? [event.notebookProgress.update] : []);
+        expect(updates.map(update => update.kind)).toEqual(["draft", "draft", "run_started",
+          "cell_started", "cell_finished", "cell_started", "cell_finished", "cell_started", "cell_finished",
+          "cell_started", "cell_finished", "run_finished"]);
+        const totals = updates.find(update => update.kind === "cell_finished" && update.result.cellId === "totals");
+        expect(totals).toMatchObject({ result: { status: "success", table: { rows: [{ region: "East", revenue: 150 }, { region: "South", revenue: 80 }] }, resultRef: { accessMode: "ai", revision: 7 } } });
+        await call(input, "submitNotebookDraft", { editVersion: 1 });
+        finished = true;
+        return { finalResponse: "本轮合成地区汇总已经试运行通过。" };
+      },
+    }));
+    const streamed: HarnessTraceEvent[] = [];
+    const { task } = await readHarnessStream(response, signal, event => { streamed.push(event); });
+    expect(finished).toBe(true);
+    expect(streamed.filter(event => event.notebookProgress).length).toBe(12);
+    expect(task.state).toBe("awaitingConfirmation");
+    expect(task.trace?.every(event => !event.notebookProgress)).toBe(true);
+    expect(task.trace?.some(event => event.notebookCellId === "totals" && event.notebookStatus === "success")).toBe(true);
+    expect(request).toEqual(before);
+  }, 20_000);
+
   it("keeps full bounded conversation and publishes findings only after real draft verification", async () => {
     const { request, options } = await fixture();
     const priorInstruction = "背景".repeat(300) + "请保留金额单位元";

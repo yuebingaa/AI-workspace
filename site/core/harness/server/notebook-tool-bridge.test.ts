@@ -6,6 +6,7 @@ import { runNotebook } from "@/core/notebook/server/runtime";
 import { adoptNotebookDraft } from "@/core/notebook/client-state";
 import type { NotebookCell } from "@/core/notebook/definition";
 import type { NotebookRun } from "@/core/notebook/contracts";
+import type { NotebookLiveProgress, NotebookProgressObserver } from "@/core/notebook/live-progress";
 import { harnessRequestSchema } from "../contracts";
 import { HarnessToolArgumentsError, harnessToolCatalog } from "../tool-registry";
 import { createNotebookToolBridge, type NotebookToolBridgeOptions } from "./notebook-tool-bridge";
@@ -78,6 +79,66 @@ const transformCell: Extract<NotebookCell, { kind: "transform" }> = { id: "clean
   inputCellId: "data", outputName: "clean_data", steps: [{ id: "select", type: "selectFields", fields: ["region", "amount"] }] };
 
 describe("独立 Notebook 工具桥", () => {
+  it("DSH charts writes the shared official-editor config and publishes exact draft IDs", async () => {
+    const { options, runs } = await notebookFixture(); const events: NotebookLiveProgress[] = [];
+    options.onProgress = event => events.push(event);
+    const bridge = createNotebookToolBridge(options);
+    const schema = JSON.stringify(bridge.catalog().find(tool => tool.name === "editNotebookCells")?.parameters);
+    expect(schema).toContain('"charts"');
+    const args = { id: "native_chart", title: "原生图", inputCellId: "data", mark: "bar",
+      channels: { x: { field: "region" }, y: { field: "amount", aggregate: "sum" } } };
+    await bridge.execute("editNotebookCells", { editVersion: 0, charts: [args] });
+    expect(JSON.stringify(events)).toContain('"native_chart"');
+    await bridge.execute("runNotebookCells", { editVersion: 1 });
+    const submitted = await bridge.execute("submitNotebookDraft", { editVersion: 1 });
+    expect(submitted.notebookArtifact?.cells.find(cell => cell.id === "native_chart")).toMatchObject({ graphicWalker: { datasetId: "notebook:native_chart:data", channels: { y: { aggregate: "sum" } } } });
+    const result = runs[0].cells.find(cell => cell.cellId === "native_chart");
+    expect(result?.visualization?.table.rows.map(row => row.viz_y)).toEqual([150, 80]);
+    const before = structuredClone(bridge.getVerifiedDraft());
+    await expect(bridge.execute("editNotebookCells", { editVersion: 1, charts: [{ ...args, id: "data" }] })).rejects.toThrow(/其他类型/);
+    expect(options.request.notebookContext!.document.cells).toHaveLength(1);
+    expect(before?.cells[0].kind).toBe("data"); bridge.close();
+  }, 15000);
+  it("streams actual failed/blocked cells, then repaired results; does not accept late runner callbacks", async () => {
+    const { options } = await fixture(), events: NotebookLiveProgress[] = [];
+    let late: NotebookProgressObserver | undefined;
+    const bridge = createNotebookToolBridge({ ...options, onProgress: event => events.push(event), notebookRunner: (artifact, context) => {
+      late = context.onProgress;
+      return runNotebook({ document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
+        sources: context.sources, forAi: true, signal: context.signal, onProgress: context.onProgress, log: () => {} });
+    } });
+    try {
+      await bridge.execute("editNotebookCells", { editVersion: 0, cells: [{ ...cells[0], sql: "SELECT missing_column FROM sales_data" }, ...cells.slice(1)] });
+      await bridge.execute("runNotebookCells", { editVersion: 1 });
+      expect(events.some(event => event.update.kind === "cell_finished" && event.update.result.cellId === "totals" && event.update.result.status === "failure")).toBe(true);
+      expect(events.some(event => event.update.kind === "cell_finished" && event.update.result.cellId === "chart" && event.update.result.status === "blocked")).toBe(true);
+      expect(bridge.getVerifiedDraft()).toBeUndefined();
+      const count = events.length;
+      late?.({ kind: "cell_started", runId: "late", revision: 7, cellId: "totals" }); expect(events).toHaveLength(count);
+      await bridge.execute("editNotebookCells", { editVersion: 1, cells });
+      await bridge.execute("runNotebookCells", { editVersion: 2 });
+      expect(events.at(-1)).toMatchObject({ editVersion: 2, update: { kind: "run_finished", status: "success" } });
+      await bridge.execute("submitNotebookDraft", { editVersion: 2 }); expect(bridge.getVerifiedDraft()).toBeDefined();
+    } finally { bridge.close(); }
+  }, 20_000);
+
+  it.each(["cancel", "revoke"])("does not publish live results after %s", async mode => {
+    const { options } = await fixture(), events: NotebookLiveProgress[] = [];
+    let permitted = true;
+    const abort = new AbortController();
+    const bridge = createNotebookToolBridge({ ...options, signal: abort.signal,
+      authorizeCurrentAccess: () => { if (!permitted) throw new Error("revoked"); }, onProgress: event => {
+        events.push(event);
+        if (event.update.kind === "cell_started") { if (mode === "cancel") abort.abort(); else permitted = false; }
+      }, notebookRunner: (artifact, context) => runNotebook({ document: { name: artifact.name, revision: artifact.baseRevision ?? 0, cells: artifact.cells },
+        sources: context.sources, forAi: true, signal: context.signal, onProgress: context.onProgress, log: () => {} }) });
+    try {
+      await expect(bridge.execute("runNotebookCells", { editVersion: 0 })).rejects.toThrow();
+      expect(events.some(event => event.update.kind === "cell_finished")).toBe(false);
+      expect(() => bridge.getVerifiedDraft()).toThrow();
+    } finally { bridge.close(); }
+  });
+
   it.each(["csv", "notebook-python", "notebook-no-python"] as const)("%s 目录说明仅承诺本 profile 能力，公共 Harness 目录不变", async (profile) => {
     const { options } = await fixture();
     if (profile !== "csv") {

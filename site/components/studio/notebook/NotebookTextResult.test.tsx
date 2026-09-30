@@ -12,9 +12,10 @@ function render(result?: NotebookCellRun, stale = false, running = false, cell =
 }
 
 describe("Notebook text receipt presentation", () => {
-  it("preserves static text including template-like syntax without needing execution", () => {
+  it("formats static Markdown while preserving undeclared placeholders and escaping HTML", () => {
     const html = render(undefined, false, false, { id: "static", kind: "text", title: "静态", markdown: "{{amount}} **不解析** <script>" });
-    expect(html).toBe('<p class="notebook-text">{{amount}} **不解析** &lt;script&gt;</p>');
+    expect(html).toContain('{{amount}} <strong>不解析</strong> &lt;script&gt;');
+    expect(html).not.toContain("<script>");
   });
   it("shows the successful server receipt as escaped literal text rather than interpolating local parameters", () => {
     const html = render({ ...success, text: '<script>alert(1)</script> **plain** [link](https://invalid.example)' });

@@ -166,7 +166,7 @@
 .compact-studio .notebook-cell-status.pending::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 5px 1px 0; border-radius: 50%; background: currentColor; }
 .compact-studio .notebook-cell-tools { padding: 0; gap: 2px; flex-wrap: nowrap; }
 .compact-studio .notebook-cell-tools > button { padding: 4px 6px; font-size: 10px; white-space: nowrap; }
-.compact-studio .notebook-cell-tools > button:not(:last-child) { opacity: 0; }
+.compact-studio .notebook-cell-tools > button:not(:last-child):not(.notebook-chart-edit) { opacity: 0; }
 .compact-studio .notebook-cell:is(:hover,:focus-within,.is-editing,.is-selected) .notebook-cell-tools > button { opacity: 1; }
 .compact-studio .notebook-cell-tools > button:focus-visible { opacity: 1; outline: 2px solid var(--studio-border-strong); }
 .compact-studio .notebook-cell-tools .notebook-cell-menu-trigger { font-size: 16px; padding: 0 6px 3px; line-height: 20px; }

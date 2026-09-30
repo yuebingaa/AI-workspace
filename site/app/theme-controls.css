@@ -78,7 +78,7 @@
 .workspace-mode-tabs.rt-TabsList { padding: 0; border: 0; background: transparent; }
 .workspace-mode-tabs .rt-TabsTriggerInner { gap: var(--space-2); }
 .workspace-mode-tabs .rt-TabsTriggerInner svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.25; }
-.notebook-cell-tools > .rt-Button:not(:last-child) { opacity: 0; }
+.notebook-cell-tools > .rt-Button:not(:last-child):not(.notebook-chart-edit) { opacity: 0; }
 .notebook-cell:is(:hover, :focus-within, .is-editing, .is-selected) .notebook-cell-tools > .rt-Button,
 .notebook-cell-tools > .rt-Button:focus-visible { opacity: 1; }
 .notebook-sort-button.rt-Button { display: flex; width: 100%; height: auto; min-height: 34px; padding: var(--space-1) var(--space-2); justify-content: space-between; text-align: left; }

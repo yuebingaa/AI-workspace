@@ -42,9 +42,9 @@ describe("text receipt consistency and bounded Agent observations", () => {
   });
 
   it("allows failures without text and preserves successful empty text", async () => {
-    const actual = await run(); actual.cells[1].text = "";
+    const actual = await run(); actual.cells[1].text = ""; actual.cells[1].textParts = [];
     expect(parseNotebookRunReceipt(actual, captureNotebookRunExpectation(document(), "ai")).cells[1].text).toBe("");
-    delete actual.cells[1].text; actual.cells[1].status = "failure"; actual.status = "failure";
+    delete actual.cells[1].text; delete actual.cells[1].textParts; actual.cells[1].status = "failure"; actual.status = "failure";
     expect(parseNotebookRunReceipt(actual, captureNotebookRunExpectation(document(), "ai")).status).toBe("failure");
     expect(notebookTextResults(actual)).toEqual({});
   });

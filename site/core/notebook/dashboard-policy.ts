@@ -4,6 +4,7 @@ import type { NotebookCell } from "./definition";
 export const NOTEBOOK_DASHBOARD_LIMITS = { rows: 500, tableColumns: 30 } as const;
 
 export const NOTEBOOK_DASHBOARD_MESSAGES = {
+  graphicWalker: "Graphic Walker 图表暂不支持看板快照，请在 Notebook 查看或导出图片；不会丢弃筛选、分组和样式生成旧图。",
   rowLimit: "看板快照最多 500 行，请先筛选或聚合数据",
   columnLimit: "看板表格最多 30 列，请先在表格步骤选择字段或在 SQL 中筛选列；不会静默丢弃字段，仍可保存完整数据集",
   duplicateCategories: "看板图表需要唯一分类，请先聚合，不会自动合并重复分类",
@@ -20,6 +21,7 @@ export function notebookDashboardSizeIssue(kind: NotebookCell["kind"], rowCount:
 
 /** Snapshot representability only: authorization, completeness and emptiness stay with the caller. */
 export function notebookDashboardSnapshotIssue(cell: NotebookCell, table: Pick<DataTable, "fields" | "rows">): NotebookDashboardIssue | null {
+  if (cell.kind === "chart" && cell.graphicWalker) return "graphicWalker";
   const sizeIssue = notebookDashboardSizeIssue(cell.kind, table.rows.length, table.fields.length);
   if (sizeIssue) return sizeIssue;
   if (cell.kind !== "chart") return null;

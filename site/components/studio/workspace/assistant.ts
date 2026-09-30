@@ -18,7 +18,7 @@ import type { NotebookDocument } from "@/core/notebook/contracts";
 import type { StudioRole } from "@/core/permissions";
 import { readableValidationError } from "@/core/schemas";
 import { selectedSemanticModel } from "@/core/semantic/model";
-import type { HarnessPublicRequest } from "@/core/harness/contracts";
+import type { HarnessPublicRequest, HarnessTraceEvent } from "@/core/harness/contracts";
 import type { AiRequestUiStatus } from "../AiBuilderAssistant";
 import type { ImportedWorkbookAttachment } from "../CsvUploadDialog";
 import type { PersistWorkspace, WorkspaceFeedback, WorkspacePreviewBindings } from "./contracts";
@@ -159,6 +159,9 @@ export interface StudioAssistantActionsContext extends WorkspaceFeedback,
   persistExplicitly: PersistWorkspace;
   notebookContext?: HarnessPublicRequest["notebookContext"];
   onNotebookDraftReady?: (task: HarnessTaskSummary, baseline: NotebookDocument) => void;
+  onNotebookTaskStarted?: () => void;
+  onNotebookProgress?: (event: HarnessTraceEvent, baseline: NotebookDocument) => void;
+  onNotebookTaskEnded?: (taskId: string, phase: "ready" | "failed" | "cancelled") => void;
   notebookInteractionBusy?: boolean;
   conversationSwitchBlocked?: boolean;
 }
@@ -276,6 +279,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
     setLastHarnessTaskId(initialTask.id);
     setIsLocalAssistantReply(false);
     setAiRequestStatus("loading");
+    try { context.onNotebookTaskStarted?.(); } catch { /* Display only. */ }
     setAiRequestError(null);
     setHasValidAiPlan(false);
     setValidationError(null);
@@ -285,6 +289,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
 
     let notebookBaseline: NotebookDocument | undefined;
     let notebookDraftReady: HarnessTaskSummary | undefined;
+    let notebookEndPhase: "ready" | "failed" = "failed";
     try {
       const pageConversation = assistantConversation.filter((turn) =>
         (turn.pageId ?? harnessTasks.find((candidate) => candidate.id === turn.taskId)?.pageId) === activePageId);
@@ -332,9 +337,14 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
         stream: true,
         onEvent: (event) => {
           if (controller.signal.aborted || event.taskId !== initialTask.id) return;
+          if (event.notebookProgress && notebookBaseline) {
+            try { context.onNotebookProgress?.(event, notebookBaseline); } catch { /* Display only. */ }
+          }
+          const savedEvent = { ...event };
+          delete savedEvent.notebookProgress;
           progressTask = { ...progressTask, state: event.taskState ?? progressTask.state,
             counters: event.counters ?? progressTask.counters, executionTiming: event.executionTiming ?? progressTask.executionTiming,
-            updatedAt: event.timestamp, trace: [...(progressTask.trace ?? []), event].slice(-256) };
+            updatedAt: event.timestamp, trace: [...(progressTask.trace ?? []), savedEvent].slice(-256) };
           setHarnessTasks((tasks) => appendHarnessTask(tasks, progressTask));
         },
         ...(submittedImages.length ? { imageAttachments: submittedImages } : {}),
@@ -343,6 +353,7 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
           : {}),
       });
       const nextTasks = appendHarnessTask(initialTasks, task);
+      notebookEndPhase = task.state === "completed" || task.state === "awaitingConfirmation" ? "ready" : "failed";
       const [conversationTurn] = assistantConversationFromHarnessTasks([task]);
       const nextConversation = conversationTurn
         ? appendAssistantConversationTurn(assistantConversation, conversationTurn)
@@ -407,6 +418,8 @@ export function createStudioAssistantActions(context: StudioAssistantActionsCont
       persistExplicitly(baseExecution, auditRecords, queryRecords, dataProduct, nextTasks, edsWorkspace, nextConversation,
         updateActiveAssistantSession(requestSessions, { turns: nextConversation }));
     } finally {
+      try { context.onNotebookTaskEnded?.(initialTask.id, controller.signal.aborted ? "cancelled" : notebookEndPhase); }
+      catch { /* Display only. */ }
       if (aiRequestAbortRef.current === controller) aiRequestAbortRef.current = null;
       harnessRequestActiveRef.current = false;
     }

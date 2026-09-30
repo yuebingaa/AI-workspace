@@ -19,6 +19,7 @@ import type {
   DataSourceDefinition,
 } from "@/core/models";
 import { DatasetQualityProfile } from "./datasets/DatasetQualityProfile";
+import { ChartEditorDialog } from "@/components/chart-editor/ChartEditorDialog";
 
 type DataSourceTab = "overview" | "fields" | "preview" | "recipe";
 
@@ -84,6 +85,7 @@ export function DataSourceDetailsPanel({
   onClose,
 }: DataSourceDetailsPanelProps) {
   const [tab, setTab] = useState<DataSourceTab>("overview");
+  const [chartEditorOpen, setChartEditorOpen] = useState(false);
   const [visibleFields, setVisibleFields] = useState(() => source.fields.map((field) => field.name));
   const [activeStepCount, setActiveStepCount] = useState(recipe?.steps.length ?? 0);
   const [bindingError, setBindingError] = useState<string | null>(null);
@@ -154,9 +156,10 @@ export function DataSourceDetailsPanel({
         }}
       >
         <header className="data-source-panel-head">
-          <div><span className="db">◉</span><div><small>数据源工作区</small><h2>{source.name}</h2></div></div>
+          <div><span className="db">◉</span><div><small>数据源工作区</small><h2>{source.name}</h2></div><Button type="button" size="small" onClick={() => setChartEditorOpen(true)}>图表分析</Button></div>
           <div className="data-source-head-actions">{source.sourceType === "csv" && onDelete && <Button variant="danger" type="button" className="danger-link" disabled={datasetActionBusy} onClick={() => { void deleteDataset(); }}>{source.ephemeral ? "删除数据集" : "移入回收站"}</Button>}<Button variant="secondary" type="button" aria-label="关闭数据源详情" disabled={datasetActionBusy} onClick={onClose}>×</Button></div>
         </header>
+        {chartEditorOpen && <ChartEditorDialog source={source} rows={rows} onClose={() => setChartEditorOpen(false)} />}
         <nav className="data-source-tabs" aria-label="数据源详情标签">
           {tabs.map((item) => (
             <Button variant="secondary" key={item.id} type="button" className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>

@@ -124,6 +124,18 @@ describe("Harness SSE transport", () => {
     expect(replay).toEqual(first);
     expect(factory).toHaveBeenCalledTimes(1);
   });
+  it("delivers live draft payloads once but never replays them from the idempotency cache", async () => {
+    const { input, task, event } = fixture(), store = new HarnessIdempotencyStore();
+    const live: HarnessTraceEvent[] = [], replay: HarnessTraceEvent[] = [];
+    const update: HarnessTraceEvent = { ...event(1), notebookProgress: { baseRevision: 0, editVersion: 1,
+      update: { kind: "draft", document: { name: "合成草稿", revision: 0, cells: [] }, changedCellIds: [], removedCellIds: [] } } };
+    const factory = vi.fn(async (emit: (value: HarnessTraceEvent) => void) => { emit(update); return task; });
+    await store.execute(input, factory, "owner", value => live.push(value));
+    await store.execute(input, factory, "owner", value => replay.push(value));
+    expect(live[0].notebookProgress).toEqual(update.notebookProgress);
+    expect(replay[0].notebookProgress).toBeUndefined(); expect(replay[0].sequence).toBe(live[0].sequence);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
   it("cancels owned execution on disconnect and does not retry a truncated stream", async () => {
     let aborted = false;
     const stream = createHarnessStreamResponse(signal(), (abortSignal) => new Promise((_resolve, reject) => {

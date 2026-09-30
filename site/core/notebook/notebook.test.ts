@@ -50,6 +50,13 @@ describe("Notebook dependency and adoption", () => {
   });
 });
 describe("actual isolated DuckDB", () => {
+  it("retains SQL DATE metadata without coercing calendar or timestamp strings", async () => {
+    const result = await executeNotebookSql("SELECT DATE '2024-01-01' AS quarter, NULL::DATE AS absent, TIMESTAMP '2024-01-01 12:34:56.123456' AS precise_time", []);
+    expect(result.fields.map(field => field.type)).toEqual(["date", "date", "string"]);
+    expect(result.rows).toEqual([{ quarter: "2024-01-01", absent: null, precise_time: "2024-01-01 12:34:56.123456" }]);
+    const empty = await executeNotebookSql("SELECT DATE '2024-01-01' AS quarter WHERE false", []);
+    expect(empty.fields[0].type).toBe("date"); expect(empty.rows).toEqual([]);
+  }, 15_000);
   it("runs a multi-table join and GROUP BY on full input, not previews", async () => {
     const field = (name: string, type: "string" | "number") => ({ name, label: name, type });
     const result = await executeNotebookSql('SELECT s.region, COUNT(*) AS orders, SUM(s.amount * r.rate) AS revenue FROM sales s JOIN rates r ON s.region=r.region GROUP BY s.region', [

@@ -37,6 +37,7 @@ import {
 import type { DatasetUploadResponse } from "@/core/datasets/contracts";
 import type { NotebookArtifact, NotebookCell } from "@/core/notebook/definition";
 import type { NotebookDocument } from "@/core/notebook/contracts";
+import { applyNotebookLiveProgress, type NotebookLiveState } from "@/core/notebook/live-state";
 import { notebookDashboardPreview } from "@/core/notebook/dashboard";
 import { createNotebookDashboardReview, notebookSnapshotDefinitionStatus, type NotebookDashboardReview } from "@/core/notebook/dashboard-review";
 import {
@@ -303,6 +304,11 @@ function ValidatedStudioWorkspace({ fixtures, assistantExperience }: { fixtures:
   const notebookRunScopeKey = JSON.stringify({ project: localProject.session?.handle ?? "temporary", instance: localProject.instanceId,
     page: activePageId, session: activeAssistantSession(assistantSessions).contextId, sources: notebookSources, models: semantic.models,
     files: activeOriginalWorkbooks.map(({ file }) => [file.name, file.size, file.lastModified]) });
+  const [liveNotebook, setLiveNotebook] = useState<NotebookLiveState | null>(null);
+  const notebookScopeRef = useRef(notebookRunScopeKey);
+  useEffect(() => { notebookScopeRef.current = notebookRunScopeKey; }, [notebookRunScopeKey]);
+  const currentLiveNotebook = liveNotebook?.scopeKey === notebookRunScopeKey
+    && JSON.stringify(liveNotebook.baseline) === JSON.stringify(notebookDocument) ? liveNotebook : null;
   const handleNotebookRunRequestHandled = useCallback((taskId: string) => {
     setAiNotebookRunRequest((current) => current?.taskId === taskId ? null : current);
   }, []);
@@ -1056,6 +1062,15 @@ function ValidatedStudioWorkspace({ fixtures, assistantExperience }: { fixtures:
       handleWorkspaceModeChange("notebook");
       setSaveLabel("AI 草稿自动运行预览 · 确认后保存 Notebook");
     },
+    onNotebookTaskStarted: () => setLiveNotebook(null),
+    onNotebookProgress: (event, baseline) => {
+      if (!event.notebookProgress || notebookScopeRef.current !== notebookRunScopeKey) return;
+      const progress = event.notebookProgress;
+      setLiveNotebook(current => applyNotebookLiveProgress(current, { taskId: event.taskId, sequence: event.sequence,
+        scopeKey: notebookRunScopeKey, baseline, progress }));
+      if (aiNotebookAutoRun && progress.update.kind === "draft" && progress.update.changedCellIds.length) handleWorkspaceModeChange("notebook");
+    },
+    onNotebookTaskEnded: (taskId, phase) => setLiveNotebook(current => current?.taskId === taskId ? { ...current, phase } : current),
     ...(selectedNotebookContext ? { notebookContext: selectedNotebookContext } : {}),
   });
 
@@ -1249,6 +1264,7 @@ function ValidatedStudioWorkspace({ fixtures, assistantExperience }: { fixtures:
           files={activeOriginalWorkbooks.map((workbook) => workbook.file)}
           onInteractionChange={setNotebookInteractionBusy}
           sources={notebookSources} models={semantic.models} draft={notebookDraft} canEdit={role !== "viewer"} externalBusy={aiRequestStatus === "loading"}
+          live={currentLiveNotebook}
           aiAutoRunEnabled={aiNotebookAutoRun} onAiAutoRunChange={setAiNotebookAutoRun}
           aiRunRequest={aiNotebookRunRequest} aiRunScopeKey={notebookRunScopeKey} onAiRunRequestHandled={handleNotebookRunRequestHandled}
           onChange={handleNotebookChange} onImport={() => setIsCsvUploadOpen(true)} onSnapshot={handleNotebookSnapshot} onDataset={handleNotebookDataset}
@@ -1293,6 +1309,15 @@ function ValidatedStudioWorkspace({ fixtures, assistantExperience }: { fixtures:
             onImportData={() => setIsCsvUploadOpen(true)}
             onOpenWorkspace={() => handleWorkspaceModeChange("agent")}
             onOpenNotebook={() => handleWorkspaceModeChange("notebook")}
+            onLocateNotebookCell={(cellId) => {
+              handleWorkspaceModeChange("notebook");
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                const target = [...document.querySelectorAll<HTMLElement>(".notebook-panel:not([hidden]) article[data-cell-id]")]
+                  .find(element => element.dataset.cellId === cellId);
+                if (target) { target.scrollIntoView({ block: "start" }); target.focus({ preventScroll: true }); }
+                else setSaveLabel("该单元不在当前显示版本中；可返回实时草稿或查看修改对照。");
+              }));
+            }}
             notebookAutoRunEnabled={aiNotebookAutoRun}
             pageTitle={activePage?.title ?? "未选择页面"}
             changeSet={aiChangeSet}

@@ -14,6 +14,10 @@ export const dshWebSnapshotSchema = z.object({
   draft: z.string().max(1_000), busy: z.boolean(), canSend: z.boolean(),
   pendingInstruction: z.string().max(1_000), pendingRequestId: commandId.optional(),
   statusText: z.string().max(1_000),
+  progress: z.object({ taskId: z.string().min(1).max(160), steps: z.array(z.object({
+    id: z.string().min(1).max(200), message: z.string().max(600), state: z.enum(["running", "done", "failure", "stopped"]),
+    detail: z.string().max(1000).optional(), cellId: z.string().min(1).max(120).optional(),
+  }).strict()).max(80) }).strict().optional(),
 }).strict();
 export type DshWebSnapshot = z.infer<typeof dshWebSnapshotSchema>;
 
@@ -21,6 +25,7 @@ export const dshWebCommandSchema = z.discriminatedUnion("type", [
   z.object({ ...envelope, type: z.literal("ready") }).strict(),
   z.object({ ...envelope, type: z.literal("mounted") }).strict(),
   z.object({ ...envelope, type: z.literal("draft"), text: z.string().max(1_000) }).strict(),
+  z.object({ ...envelope, type: z.literal("locate-cell"), taskId: z.string().min(1).max(160), cellId: z.string().min(1).max(120) }).strict(),
   z.object({ ...envelope, type: z.literal("send"), requestId: commandId, text: z.string().trim().min(1).max(1_000) }).strict(),
   z.object({ ...envelope, type: z.literal("cancel"), requestId: commandId }).strict(),
 ]);

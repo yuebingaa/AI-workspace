@@ -3,7 +3,8 @@ import { MAX_NOTEBOOK_CELLS, notebookCellSchema } from "./definition";
 import { semanticModelSchema } from "@/core/semantic/contracts";
 import { catalogReferenceSchema } from "@/core/metadata/contracts";
 import { dataFieldSchema, dataTableSchema, type DataTable } from "@/core/datasets/table-contracts";
-import { MAX_NOTEBOOK_TEXT_OUTPUT_CHARS } from "./text-references";
+import { MAX_NOTEBOOK_TEXT_OUTPUT_CHARS, notebookTextPartsSchema } from "./text-references";
+import { materializedVisualizationSchema } from "@/core/visualization/result";
 
 export const NOTEBOOK_LIMITS = { inputBytes: 16 * 1024 * 1024, outputBytes: 2 * 1024 * 1024,
   rows: 1_000, columns: 30, queryTimeoutMs: 8_000, runTimeoutMs: 30_000, cells: MAX_NOTEBOOK_CELLS } as const;
@@ -48,10 +49,15 @@ export const notebookCellRunSchema = z.object({
   durationMs: z.number().nonnegative(), error: z.string().max(1_000).optional(),
   table: notebookTableSchema.optional(), queryId: z.string().max(160).optional(),
   text: z.string().max(MAX_NOTEBOOK_TEXT_OUTPUT_CHARS).optional(),
+  textParts: notebookTextPartsSchema.optional(),
   resultRef: notebookResultReferenceSchema.optional(),
+  visualization: materializedVisualizationSchema.optional(),
+  visualizationNotice: z.string().max(500).optional(),
   stdout: z.string().max(2_000).optional(), stderr: z.string().max(2_000).optional(),
   timing: notebookCellTimingSchema.optional(),
-}).strict();
+}).strict().refine(result => !result.visualization || (result.status === "success" && !!result.table && !!result.resultRef && !result.text), "图表计算结果必须来自成功的表格运行")
+  .refine(result => !result.textParts || (result.status === "success" && typeof result.text === "string"
+  && !result.table && !result.resultRef && result.textParts.map(part => part.value).join("") === result.text), "说明排版片段与文本回执不一致");
 export type NotebookCellRun = z.infer<typeof notebookCellRunSchema>;
 export const notebookRunSchema = z.object({
   runId: z.string().max(160), revision: z.number().int().nonnegative(),

@@ -12,6 +12,7 @@ import { notebookTextResults } from "./notebook-text-results";
 import { notebookDraftExecutionContext } from "./notebook-runner";
 import { cellSearchSchema, searchNotebookCellSession } from "./notebook-cell-search";
 import { NotebookSubmissionError } from "./notebook-submission-error";
+import { authorNotebookChart, notebookChartAuthoringSchema } from "@/core/notebook/chart-authoring";
 export { cellSearchSchema } from "./notebook-cell-search";
 
 // One instance per Harness task. Never persisted or shared across requests.
@@ -55,7 +56,8 @@ const cellId = z.string().min(1).max(120);
 const version = z.number().int().nonnegative();
 export const editNotebookCellsSchema = z.object({
   editVersion: version,
-  cells: z.array(notebookCellSchema).max(10),
+  cells: z.array(notebookCellSchema).max(10).default([]),
+  charts: z.array(notebookChartAuthoringSchema).max(10).optional(),
   removeCellIds: z.array(cellId).max(10).default([]),
   afterCellId: cellId.nullable().optional(),
 }).strict();
@@ -95,6 +97,9 @@ export function cellSearch(args: z.infer<typeof cellSearchSchema>, context: Harn
 
 export function editNotebookCells(args: z.infer<typeof editNotebookCellsSchema>, context: HarnessToolContext): HarnessToolExecutionResult {
   const state = session(context, args.editVersion);
+  const authored = (args.charts ?? []).map(chart => authorNotebookChart(chart, state.document.cells.find(cell => cell.id === chart.id)));
+  args = { ...args, cells: [...args.cells, ...authored] };
+  if (args.cells.length > 10) fail("一次最多编辑 10 个单元（包括 charts）。");
   if (!args.cells.length && !args.removeCellIds.length) fail("没有提供任何单元修改。");
   const upserts = new Map(args.cells.map((cell) => [cell.id, cell]));
   const removed = new Set(args.removeCellIds);

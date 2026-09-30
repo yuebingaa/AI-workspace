@@ -32,7 +32,9 @@ describe("Notebook run receipt consistency, not identity authorization", () => {
     const doc = document();
     const expected = captureNotebookRunExpectation(doc, "ai");
     const target = captureNotebookRunExpectation(doc, "user", "sql");
-    expect(expected).toEqual({ revision: 4, accessMode: "ai", cellIds: ["data", "sql", "chart", "note"] });
+    expect(expected).toMatchObject({ revision: 4, accessMode: "ai", cellIds: ["data", "sql", "chart", "note"],
+      visualizations: { chart: { inputCellId: "sql", key: expect.any(String) } } });
+    expect(Object.isFrozen(expected.visualizations?.chart)).toBe(true);
     expect(target).toEqual({ revision: 4, accessMode: "user", cellIds: ["data", "sql"] });
     doc.revision = 99; doc.cells[0].id = "runner_mutated"; doc.cells.reverse(); doc.cells.length = 0;
     expect(expected.cellIds).toEqual(["data", "sql", "chart", "note"]);

@@ -6,8 +6,12 @@ import { NOTEBOOK_LIMITS, notebookRunSchema, type NotebookCellRun, type Notebook
 import type { NotebookExecutionDependencies, NotebookRunInput, NotebookSource, NotebookPythonSession } from "../execution-contracts";
 import { executeNotebookTransform } from "../transform";
 import { projectPresentationTable } from "../presentation-table";
+import { notebookVisualization, notebookVisualizationInputIssue } from "../visualization";
+import { executeVisualization } from "@/core/visualization/server/execute";
+import type { MaterializedVisualization } from "@/core/visualization/result";
 import { notebookParameterTable } from "../parameter";
-import { renderNotebookText } from "../text-references";
+import { renderNotebookTextParts, type NotebookTextPart } from "../text-references";
+import { notebookProgressResult, type NotebookExecutionProgress } from "../live-progress";
 import type { CatalogReference } from "@/core/metadata/contracts";
 import {
   DEFAULT_NOTEBOOK_CAPABILITIES,
@@ -46,15 +50,28 @@ export async function executeNotebook(input: NotebookRunInput, dependencies: Not
   let totalBytes = 0;
   let python: NotebookPythonSession | undefined;
   let run: NotebookRun;
+  const progress = (update: NotebookExecutionProgress) => {
+    if (signal.aborted) return;
+    // Display observers cannot change computation or mutate the execution result.
+    try { input.onProgress?.(structuredClone(update)); } catch { /* Presentation is optional. */ }
+  };
   try {
+    progress({ kind: "run_started", runId, revision: input.document.revision, cellIds: cells.map(cell => cell.id) });
     for (const cell of cells) {
       const start = performance.now();
       const cellStartedAt = new Date().toISOString();
       if (cellDependencies(cell).some((id) => results.find((item) => item.cellId === id)?.status !== "success")) {
-        results.push({ cellId: cell.id, status: "blocked", durationMs: 0, error: "上游步骤失败，未使用旧结果继续计算" }); continue;
+        const blocked: NotebookCellRun = { cellId: cell.id, status: "blocked", durationMs: 0, error: "上游步骤失败，未使用旧结果继续计算" };
+        results.push(blocked);
+        progress({ kind: "cell_finished", runId, revision: input.document.revision, result: blocked });
+        continue;
       }
+      progress({ kind: "cell_started", runId, revision: input.document.revision, cellId: cell.id });
       let table: NotebookTable | undefined;
+      let visualization: MaterializedVisualization | undefined;
+      let visualizationNotice: string | undefined;
       let text: string | undefined;
+      let textParts: NotebookTextPart[] | undefined;
       let queryId: string | undefined;
       let error: string | undefined;
       let catalogRef: CatalogReference | undefined;
@@ -126,9 +143,29 @@ export async function executeNotebook(input: NotebookRunInput, dependencies: Not
           table = executeNotebookTransform(cell, outputs.get(cell.inputCellId)!);
         } else if (cell.kind === "table" || cell.kind === "chart") {
           table = projectPresentationTable(cell, outputs.get(cell.inputCellId)!);
+          if (cell.kind === "chart" && dependencies.visualize) {
+            const candidate = notebookVisualization(cell), upstream = outputs.get(cell.inputCellId)!;
+            visualizationNotice = candidate.reason;
+            if (candidate.definition) {
+              const issue = notebookVisualizationInputIssue(cell, candidate.definition, upstream);
+              if (issue) {
+                visualizationNotice = `兼容绘图：${issue}；基于本次返回的输入显示，未使用完整上游计算。`;
+              } else {
+                const reference = results.find(result => result.cellId === cell.inputCellId)?.resultRef;
+                if (!reference?.complete) throw Error("图表需要完整上游结果，请先在上游筛选或汇总。");
+                visualization = await executeVisualization({ definition: candidate.definition, table: upstream,
+                  reference: { ...reference, complete: true },
+                  expected: { runId, revision: input.document.revision, accessMode: input.forAi ? "ai" : "user", inputCellId: cell.inputCellId }, signal,
+                }, dependencies.visualize);
+              }
+            }
+          }
         } else if (cell.kind === "text") {
           // No table/result handle is created; static legacy text remains a no-op.
-          if (cell.references?.length) text = renderNotebookText(cell, outputs);
+          if (cell.references?.length) {
+            textParts = renderNotebookTextParts(cell, outputs);
+            text = textParts.map(part => part.value).join("");
+          }
         } else {
           const unsupported: never = cell;
           throw new Error(`Notebook 单元类型尚未实现：${String(unsupported)}`);
@@ -172,7 +209,8 @@ export async function executeNotebook(input: NotebookRunInput, dependencies: Not
         } } : {}),
         ...(error ? { error } : {}), ...(stdout ? { stdout } : {}), ...(stderr ? { stderr } : {}),
         ...(timing ? { timing } : {}),
-        ...(!error && text !== undefined ? { text } : {}),
+        ...(!error && visualization ? { visualization } : {}), ...(!error && visualizationNotice ? { visualizationNotice } : {}),
+        ...(!error && text !== undefined ? { text, textParts } : {}),
         ...(!error && shownTable ? { table: shownTable } : {}), ...(queryId ? { queryId } : {}) };
       if (cell.kind === "sql" || cell.kind === "warehouseSql") dependencies.log({ id: queryId ?? `query_${randomUUID()}`, taskId: input.taskId ?? runId,
         userId: input.userId ?? "local", connectionId: cell.kind === "warehouseSql" ? cell.connectionId : "local-duckdb", cellId: cell.id, startedAt: cellStartedAt, durationMs: result.durationMs,
@@ -183,6 +221,7 @@ export async function executeNotebook(input: NotebookRunInput, dependencies: Not
       totalBytes += Buffer.byteLength(JSON.stringify(result));
       if (totalBytes > NOTEBOOK_LIMITS.outputBytes) throw new Error("Notebook 总结果超过 2 MiB，请缩小结果范围或分步运行");
       results.push(result);
+      progress({ kind: "cell_finished", runId, revision: input.document.revision, result: notebookProgressResult(result) });
     }
     run = notebookRunSchema.parse({ runId, revision: input.document.revision, startedAt,
       status: results.every((item) => item.status === "success") ? "success" : "failure", cells: results,

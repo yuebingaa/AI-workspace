@@ -10,6 +10,7 @@ interface Props {
   onSend(text: string, onAccepted: () => void): Promise<void>;
   onDraft(text: string): void;
   onCancel(): void;
+  onLocateCell?(cellId: string): void;
 }
 
 /** Official UI is a display/input adapter. The parent owns all execution and persistence. */
@@ -56,6 +57,10 @@ export function DshWebFrame(props: Props) {
       if (command.type === "mounted") { clearTimeout(timer); setMounted(true); setNotice(""); return; }
       if (command.type === "draft") {
         if (!sending && !value.snapshot.busy && value.snapshot.canSend) value.onDraft(command.text);
+        return;
+      }
+      if (command.type === "locate-cell") {
+        if (value.snapshot.progress?.taskId === command.taskId && value.snapshot.progress.steps.some(step => step.cellId === command.cellId)) value.onLocateCell?.(command.cellId);
         return;
       }
       if (seen.has(command.requestId)) { reply(false, "重复的界面命令未执行。"); return; }

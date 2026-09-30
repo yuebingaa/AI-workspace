@@ -1,0 +1,44 @@
+diff --git a/dist/graphic-walker.es.js b/dist/graphic-walker.es.js
+index 7e45960d22b96c38b87ef431ca9f09026ecab356..4e3fb99fdd54c35b23a48faf827fd7c44714e0df 100644
+--- a/dist/graphic-walker.es.js
++++ b/dist/graphic-walker.es.js
+@@ -37054,7 +37054,7 @@ const _ut = (e) => {
+         Z.createElement(
+           "div",
+           { onClick: () => {
+-            r.removeField(t.id, 0);
++            r.removeField(t.id, b);
+           }, className: "grow-0 shrink-0 px-1.5 flex items-center justify-center bg-destructive text-destructive-foreground cursor-pointer" },
+           Z.createElement(sk, { className: "w-4" })
+         ),
+@@ -37073,7 +37073,7 @@ const _ut = (e) => {
+           f.analyticType === "measure" && f.fid !== dn && o.defaultAggregated && f.aggName !== "expr" && Z.createElement(
+             _k,
+             { options: d, onSelect: (x) => {
+-              r.setFieldAggregator(t.id, 0, x);
++              r.setFieldAggregator(t.id, b, x);
+             } },
+             Z.createElement(
+               "span",
+diff --git a/src/fields/encodeFields/multiEncodeEditor.tsx b/src/fields/encodeFields/multiEncodeEditor.tsx
+index ac0f47cec0226288ba9d668265a3d57b6b9cbbdb..a3579b245a3cd3eb0eb48c039976f8d2bd2c19a7 100644
+--- a/src/fields/encodeFields/multiEncodeEditor.tsx
++++ b/src/fields/encodeFields/multiEncodeEditor.tsx
+@@ -68,7 +68,7 @@ const SingleEncodeEditor: React.FC<MultiEncodeEditorProps> = (props) => {
+                                 >
+                                     <div
+                                         onClick={() => {
+-                                            vizStore.removeField(dkey.id, 0);
++                                            vizStore.removeField(dkey.id, index);
+                                         }}
+                                         className="grow-0 shrink-0 px-1.5 flex items-center justify-center bg-destructive text-destructive-foreground cursor-pointer"
+                                     >
+@@ -97,7 +97,7 @@ const SingleEncodeEditor: React.FC<MultiEncodeEditorProps> = (props) => {
+                                                 <DropdownContext
+                                                     options={aggregationOptions}
+                                                     onSelect={(value) => {
+-                                                        vizStore.setFieldAggregator(dkey.id, 0, value as IAggregator);
++                                                        vizStore.setFieldAggregator(dkey.id, index, value as IAggregator);
+                                                     }}
+                                                 >
+                                                     <span className="bg-transparent text-muted-foreground float-right focus:outline-none focus: dark:focus: flex items-center ml-2">

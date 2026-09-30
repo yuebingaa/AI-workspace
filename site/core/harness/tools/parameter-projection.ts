@@ -387,6 +387,10 @@ export function scopedToolParameters(
   if (["cellSearch", "createPythonCell", "getKernelPackagesInfo", "runNotebookCells", "submitNotebookDraft"].includes(tool.name)) return toolInputSchema(tool.schema);
   if (tool.name === "editNotebookCells") {
     const schema = toolInputSchema(tool.schema);
+    // Native DSH uses the full canonical bridge schema. Keep the retained legacy
+    // engine's compact catalog unchanged for ordinary tasks and explicit budgets.
+    if (options.request && !options.request.notebookContext?.document.cells.some(cell => cell.kind === "chart" && cell.graphicWalker)
+      && !/graphic\s*walker/iu.test(options.request.instruction)) delete (schema.properties as Record<string, unknown>).charts;
     const draftSchema = scopedToolParameters(notebookDraftTool, { ...options, analysisPlan: undefined }, notebookDraftTool) as {
       properties: { cells: { items: { oneOf: Array<{ properties: { kind: { const: string } } }> } } }
     };
@@ -423,6 +427,16 @@ export function scopedToolParameters(
     const properties = schema.properties as Record<string, Record<string, unknown>>;
     const cells = properties.cells.items as { oneOf: Array<{ properties: Record<string, Record<string, unknown>> }> };
     cells.oneOf = cells.oneOf.filter((variant) => availableNotebookKind(variant.properties.kind.const));
+    // The full visual editor schema is only relevant when explicitly requested
+    // or already used by this Notebook. Preserve it for round-trip edits, but
+    // do not make ordinary SQL/legacy-chart tasks carry unrelated UI settings.
+    // This only projects model inputs; runtime validation stays canonical.
+    const needsGraphicWalker = !options.request
+      || options.request.notebookContext?.document.cells.some(cell => cell.kind === "chart" && cell.graphicWalker)
+      || /graphic\s*walker/iu.test(options.request.instruction);
+    if (!needsGraphicWalker) for (const variant of cells.oneOf) {
+      if (variant.properties.kind.const === "chart") delete variant.properties.graphicWalker;
+    }
     // A validated plan already fixes the draft's kinds. Keep its canonical
     // variants, not unrelated recipe/code branches. Replanning changes this
     // scope next turn; incremental editing does not inherit an old plan scope.

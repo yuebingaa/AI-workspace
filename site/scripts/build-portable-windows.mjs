@@ -97,6 +97,7 @@ export async function buildPortableWindows(output = defaultOutput, browser) {
   });
   await mkdir(join(outputRoot, "app/runtime/dsh"), { recursive: true });
   for (const name of DSH_CARRIER_FILES) {
+    await mkdir(dirname(join(outputRoot, "app/runtime/dsh", name)), { recursive: true });
     await copyPlainTree(join(projectRoot, "runtime/dsh", name), join(outputRoot, "app/runtime/dsh", name), `AgentCanvas/app/runtime/dsh/${name}`);
   }
   await copyPlainDirectoryContents(templateRoot, outputRoot, "AgentCanvas");

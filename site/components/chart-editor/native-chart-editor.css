@@ -1,0 +1,12 @@
+.native-chart-editor { border: 1px solid var(--gray-a5, #e5e3e8); border-radius: 6px; background: white; min-width: 0; }
+.native-chart-editor > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--gray-a4); }
+.native-chart-editor > header > div { display: flex; align-items: center; gap: 12px; }
+.native-chart-editor > header span, .native-chart-hint { color: var(--gray-11); font-size: 12px; }
+.native-chart-hint { margin: 0; padding: 8px 14px; }
+.native-chart-error { margin: 0; padding: 10px 14px; color: var(--red-11, #b42318); background: var(--red-2, #fff8f7); font-size: 13px; }
+.native-chart-surface { min-width: 0; min-height: 540px; overflow: auto; max-height: 760px; }
+.native-chart-surface > div { min-width: 760px; }
+.native-chart-presentation { padding: 8px 14px; border-bottom: 1px solid var(--gray-a4); font-size: 12px; }
+.native-chart-presentation > div { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 0; align-items: center; }
+.native-chart-presentation label { display: flex; align-items: center; gap: 8px; white-space: nowrap; flex: 0 0 auto; }
+.native-chart-style-note { flex-basis: 100%; margin: 0; color: var(--gray-11); white-space: normal; }
